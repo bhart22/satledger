@@ -565,7 +565,7 @@ function DashboardCharts({ transactions, wallets, btcPrice }) {
       }
 
       const totalBTC = runningBTC;
-      const avgCost = totalBTC>0.00000001 ? totalCost/totalBTC : 0;
+      const avgCost = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : 0;
       const pt = { date:tx.date, btc:+totalBTC.toFixed(8), avgCost:+avgCost.toFixed(2) };
       const last = points[points.length-1];
       if(last && last.date===tx.date) points[points.length-1]=pt;
