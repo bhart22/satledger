@@ -411,11 +411,16 @@
 
     /* Responsive */
     .mobile-only { display:none; }
+    .stats-toggle-btn { display:none; }
     @media(max-width:768px) {
       .main { padding:1rem; }
       .header { padding:.75rem 1rem; }
       .logo-text { display:none; }
       .stats-grid { grid-template-columns:1fr 1fr; }
+      .stats-grid .stat-extra { display:none; }
+      .stats-grid.stats-expanded .stat-extra { display:block; }
+      .stats-toggle-btn { display:flex; align-items:center; justify-content:center; gap:.375rem; width:100%; padding:.5rem; margin-bottom:1.25rem; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:8px; color:var(--text-secondary); font-size:.8125rem; cursor:pointer; transition:all .15s; }
+      .stats-toggle-btn:hover { border-color:var(--border-hover); color:var(--text-primary); }
       .filter-bar { gap:.5rem; }
       .desktop-only { display:none !important; }
       .mobile-only { display:inline !important; }
@@ -781,6 +786,8 @@ function App() {
     return NAV_ITEMS.some(n => n.key === hash) ? hash : 'dashboard';
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('btc-sidebar-collapsed') === 'true');
+  const [moreStats, setMoreStats] = useState(false);
+  const [walletsOpen, setWalletsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -1402,7 +1409,7 @@ function App() {
                 </div>
               );
             })()}
-            <div className="stats-grid">
+            <div className={`stats-grid ${moreStats?'stats-expanded':''}`}>
               <div className="stat-card">
                 <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
                   Holdings
@@ -1423,30 +1430,37 @@ function App() {
                 </div>
                 <div className="stat-sub">{btcPrice&&stats.costBasis>0?`${(stats.unrealized/stats.costBasis*100).toFixed(1)}% return on cost`:'Waiting for price'}</div>
               </div>
-              <div className="stat-card">
+              <div className="stat-card stat-extra">
                 <div className="stat-label">Rewards Earned</div>
                 <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
                 <div className="stat-sub">{btcPrice?fmtUSD(stats.rewardsIncome*btcPrice):''} at current price</div>
               </div>
-              <div className="stat-card">
+              <div className="stat-card stat-extra">
                 <div className="stat-label">Network Fees</div>
                 <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTC(stats.totalFeesBTC)}</div>
                 <div className="stat-sub">BTC in transfer fees</div>
               </div>
-              <div className="stat-card">
+              <div className="stat-card stat-extra">
                 <div className="stat-label">Total Transactions</div>
                 <div className="stat-value" style={{fontSize:'1.875rem'}}>{transactions.length}</div>
                 <div className="stat-sub">{transactions.filter(t=>t.type==='Buy').length} buys · {transactions.filter(t=>t.type==='Reward').length} rewards</div>
               </div>
             </div>
+            <button className="stats-toggle-btn" onClick={()=>setMoreStats(s=>!s)}>
+              {moreStats ? 'Show less' : 'Show more stats'}
+              <span style={{display:'inline-flex',transform:moreStats?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
+            </button>
 
             {/* Wallet summary */}
             <div className="card">
-              <div className="card-header">
-                <div className="card-title">Holdings by Wallet</div>
-                <button className="btn btn-secondary btn-sm" onClick={()=>setTab('wallets')}>Manage Wallets →</button>
+              <div className="card-header" style={{cursor:'pointer'}} onClick={()=>setWalletsOpen(o=>!o)}>
+                <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+                  <span style={{display:'inline-flex',transform:walletsOpen?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
+                  <div className="card-title">Holdings by Wallet</div>
+                </div>
+                <button className="btn btn-secondary btn-sm" onClick={e=>{e.stopPropagation();setTab('wallets');}}>Manage Wallets →</button>
               </div>
-              <div className="card-body">
+              {walletsOpen && <div className="card-body">
                 <div className="wallet-grid">
                   {activeWallets.map(w=>{
                     const amount = walletHoldings[w.name]||0;
@@ -1464,7 +1478,7 @@ function App() {
                     );
                   })}
                 </div>
-              </div>
+              </div>}
             </div>
 
             {/* ── Charts ── */}
