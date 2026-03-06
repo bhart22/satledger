@@ -853,11 +853,11 @@ function App() {
 
   // ─── Google Drive Sync ────────────────────────────────────────────────────
   const handleSignIn = useCallback(async () => {
-    setSyncState('syncing');
     try {
       const ready = await GDriveSync.init();
-      if(!ready) { setSyncState('error'); showToast('Google Sign-In failed to load'); return; }
+      if(!ready) { showToast('Google Sign-In failed to load'); return; }
       await GDriveSync.requestToken(true);
+      setSyncState('syncing');
       // Get user info
       try {
         const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -905,12 +905,12 @@ function App() {
           localStorage.setItem('btc-last-modified', remoteMod);
           showToast(`Synced ${remoteTxCount} transactions from Drive`);
         } else {
-          // Local has more data or same — push up
+          // Local has more data or same — sync up
           const settingsData = JSON.parse(localStorage.getItem('btc-settings')||'{}');
           const mod = new Date().toISOString();
           await GDriveSync.push({ transactions, wallets, settings: settingsData, lastModified: mod });
           localStorage.setItem('btc-last-modified', mod);
-          showToast('Pushed local data to Google Drive');
+          showToast(localTxCount === remoteTxCount ? `Connected — ${localTxCount} transactions synced` : `Backed up ${localTxCount} transactions to Drive`);
         }
       } else if(localTxCount > 0) {
         // No remote file at all, push local data
