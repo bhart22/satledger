@@ -536,6 +536,19 @@ const fillDailyPriceGaps = (priceMap, startDate, endDate) => {
   });
   return next;
 };
+const normalizeDate = value => {
+  if(!value) return '';
+  const raw = String(value).trim();
+  if(/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const slash = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if(slash) {
+    const [, month, day, year] = slash;
+    return `${year}-${month.padStart(2,'0')}-${day.padStart(2,'0')}`;
+  }
+  const parsed = new Date(raw);
+  if(!Number.isNaN(parsed.getTime())) return parsed.toISOString().slice(0,10);
+  return raw;
+};
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 const toBase64 = bytes => btoa(String.fromCharCode(...bytes));
@@ -654,8 +667,11 @@ const NAV_ITEMS = [
 // ─── Dashboard Charts ─────────────────────────────────────────────────────────
 function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, historicalPriceLoading }) {
   const { chartData, holdingsHistory } = React.useMemo(() => {
-    // Use all wallets for full history; excluded transactions skip cost basis only.
-    const sorted = [...transactions].sort((a,b) => a.date.localeCompare(b.date));
+    const sorted = transactions
+      .filter(tx => !tx.excludeStats)
+      .map(tx => ({ ...tx, normalizedDate: normalizeDate(tx.date) }))
+      .filter(tx => tx.normalizedDate)
+      .sort((a,b) => a.normalizedDate.localeCompare(b.normalizedDate));
     const activeWalletSet = new Set(wallets.filter(w => !w.archived).map(w => w.name));
     let totalCost = 0;
     let activeHoldingsBTC = 0;
@@ -680,16 +696,13 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       else if(tx.type==='Transfer') { runningBTC-=fee; }
       else if(tx.type==='Consolidation') { runningBTC-=fee; }
 
-      // Only track cost basis for non-excluded
-      if(!tx.excludeStats) {
-        if(tx.type==='Buy') { runningBTCForCost+=amt; totalCost+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
-        else if(tx.type==='Reward') { runningBTCForCost+=amt; }
-        else if(tx.type==='Sell') {
-          const ratio = amt/Math.max(runningBTCForCost,0.00000001);
-          totalCost-=totalCost*ratio; runningBTCForCost-=amt;
-        } else if(tx.type==='Transfer') { runningBTCForCost-=fee; }
-        else if(tx.type==='Consolidation') { runningBTCForCost-=fee; }
-      }
+      if(tx.type==='Buy') { runningBTCForCost+=amt; totalCost+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
+      else if(tx.type==='Reward') { runningBTCForCost+=amt; }
+      else if(tx.type==='Sell') {
+        const ratio = amt/Math.max(runningBTCForCost,0.00000001);
+        totalCost-=totalCost*ratio; runningBTCForCost-=amt;
+      } else if(tx.type==='Transfer') { runningBTCForCost-=fee; }
+      else if(tx.type==='Consolidation') { runningBTCForCost-=fee; }
 
       // Track active-wallet holdings history for dashboard value charts.
       ensureWallet(w1);
@@ -708,13 +721,13 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
 
       const totalBTC = runningBTC;
       const avgCost = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : null;
-      const pt = { date:tx.date, btc:+totalBTC.toFixed(8), avgCost:avgCost!==null ? +avgCost.toFixed(2) : null };
-      const holdingsPt = { date:tx.date, holdingsBtc:+activeHoldingsBTC.toFixed(8) };
+      const pt = { date:tx.normalizedDate, btc:+totalBTC.toFixed(8), avgCost:avgCost!==null ? +avgCost.toFixed(2) : null };
+      const holdingsPt = { date:tx.normalizedDate, holdingsBtc:+activeHoldingsBTC.toFixed(8) };
       const last = points[points.length-1];
-      if(last && last.date===tx.date) points[points.length-1]=pt;
+      if(last && last.date===tx.normalizedDate) points[points.length-1]=pt;
       else points.push(pt);
       const lastHoldings = holdingsPoints[holdingsPoints.length-1];
-      if(lastHoldings && lastHoldings.date===tx.date) holdingsPoints[holdingsPoints.length-1]=holdingsPt;
+      if(lastHoldings && lastHoldings.date===tx.normalizedDate) holdingsPoints[holdingsPoints.length-1]=holdingsPt;
       else holdingsPoints.push(holdingsPt);
     });
     // Trim leading zero-BTC points
@@ -1023,8 +1036,12 @@ function App() {
   const [showArchived, setShowArchived] = useState(false);
   const [showTypeMapping, setShowTypeMapping] = useState(false);
   const firstTransactionDate = useMemo(() => {
-    if(!transactions.length) return null;
-    return transactions.reduce((min, tx) => !min || tx.date < min ? tx.date : min, null);
+    const chartDates = transactions
+      .filter(tx => !tx.excludeStats)
+      .map(tx => normalizeDate(tx.date))
+      .filter(Boolean);
+    if(!chartDates.length) return null;
+    return chartDates.reduce((min, date) => !min || date < min ? date : min, null);
   }, [transactions]);
 
   // Active wallets (not archived) vs all wallets (for stats)
