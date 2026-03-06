@@ -756,6 +756,23 @@ function App() {
     setSettings(prev => {
       const next = {...prev, ...patch};
       localStorage.setItem('btc-settings', JSON.stringify(next));
+      if(GDriveSync.isSignedIn()) {
+        if(syncDebounce.current) clearTimeout(syncDebounce.current);
+        setSyncState('syncing');
+        syncDebounce.current = setTimeout(async () => {
+          try {
+            const txs = JSON.parse(localStorage.getItem('btc-tx-v2')||'[]');
+            const wals = JSON.parse(localStorage.getItem('btc-wallets')||'[]');
+            const mod = localStorage.getItem('btc-last-modified')||new Date().toISOString();
+            await GDriveSync.push({ transactions: txs, wallets: wals, settings: next, lastModified: mod });
+            setSyncState('synced');
+            setLastSync(new Date());
+          } catch(e) {
+            console.error('Settings sync failed:', e);
+            setSyncState('error');
+          }
+        }, 1500);
+      }
       return next;
     });
   };
