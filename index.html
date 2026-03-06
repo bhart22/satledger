@@ -787,7 +787,7 @@ function App() {
     try {
       const ready = await GDriveSync.init();
       if(!ready) { setSyncState('error'); showToast('Google Sign-In failed to load'); return; }
-      await GDriveSync.requestToken(true); // interactive = true, always show consent
+      await GDriveSync.requestToken(true);
       // Get user info
       try {
         const r = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
@@ -796,37 +796,61 @@ function App() {
         const info = await r.json();
         setSyncUser({ email: info.email, name: info.name });
         localStorage.setItem('btc-sync-user', JSON.stringify({ email: info.email, name: info.name }));
-      } catch(e) { /* user info is optional */ }
+      } catch(e) {}
       localStorage.setItem('btc-sync-enabled', 'true');
       // Pull from Drive
       const remote = await GDriveSync.pull();
+      const localTxCount = transactions.length;
+      const remoteTxCount = remote?.transactions?.length || 0;
+
       if(remote && remote.transactions) {
         const localMod = localStorage.getItem('btc-last-modified') || '0';
         const remoteMod = remote.lastModified || '0';
-        if(remoteMod > localMod || !localStorage.getItem('btc-tx-v2')) {
+        const localIsEmpty = localTxCount === 0;
+        const remoteIsEmpty = remoteTxCount === 0;
+
+        if(localIsEmpty && !remoteIsEmpty) {
+          // Fresh device — always pull remote data down
           setTransactions(remote.transactions);
           setWallets(remote.wallets || []);
-          if(remote.settings) {
-            setSettings(remote.settings);
-            localStorage.setItem('btc-settings', JSON.stringify(remote.settings));
-          }
+          if(remote.settings) { setSettings(remote.settings); localStorage.setItem('btc-settings', JSON.stringify(remote.settings)); }
+          localStorage.setItem('btc-tx-v2', JSON.stringify(remote.transactions));
+          localStorage.setItem('btc-wallets', JSON.stringify(remote.wallets || []));
+          localStorage.setItem('btc-last-modified', remoteMod);
+          showToast(`Synced ${remoteTxCount} transactions from Drive`);
+        } else if(!localIsEmpty && remoteIsEmpty) {
+          // Remote is empty, local has data — push up
+          const settingsData = JSON.parse(localStorage.getItem('btc-settings')||'{}');
+          const mod = new Date().toISOString();
+          await GDriveSync.push({ transactions, wallets, settings: settingsData, lastModified: mod });
+          localStorage.setItem('btc-last-modified', mod);
+          showToast('Data backed up to Google Drive');
+        } else if(remoteMod > localMod) {
+          // Both have data, remote is newer — pull
+          setTransactions(remote.transactions);
+          setWallets(remote.wallets || []);
+          if(remote.settings) { setSettings(remote.settings); localStorage.setItem('btc-settings', JSON.stringify(remote.settings)); }
           localStorage.setItem('btc-tx-v2', JSON.stringify(remote.transactions));
           localStorage.setItem('btc-wallets', JSON.stringify(remote.wallets || []));
           localStorage.setItem('btc-last-modified', remoteMod);
           showToast('Synced from Google Drive');
         } else {
+          // Local is newer — push up
           const settingsData = JSON.parse(localStorage.getItem('btc-settings')||'{}');
           const mod = new Date().toISOString();
           await GDriveSync.push({ transactions, wallets, settings: settingsData, lastModified: mod });
           localStorage.setItem('btc-last-modified', mod);
           showToast('Pushed local data to Google Drive');
         }
-      } else {
+      } else if(localTxCount > 0) {
+        // No remote file at all, push local data
         const settingsData = JSON.parse(localStorage.getItem('btc-settings')||'{}');
         const mod = new Date().toISOString();
         await GDriveSync.push({ transactions, wallets, settings: settingsData, lastModified: mod });
         localStorage.setItem('btc-last-modified', mod);
         showToast('Data backed up to Google Drive');
+      } else {
+        showToast('Connected — no data to sync yet');
       }
       setSyncState('synced');
       setLastSync(new Date());
@@ -1703,7 +1727,7 @@ function App() {
       </main>
 
       <footer style={{textAlign:'center',padding:'.75rem 1rem',fontSize:'.6875rem',color:'var(--text-tertiary)',borderTop:'1px solid var(--border-color)',fontFamily:'JetBrains Mono,monospace'}}>
-        v3.19
+        v3.20
       </footer>
 
       {/* ── Add/Edit Transaction Modal ── */}
