@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Track Bitcoin transactions, wallet holdings, cost basis, and P&L. Export to CoinLedger for tax reporting.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23f7931a'/><text x='50' y='68' text-anchor='middle' font-size='55' font-weight='bold' fill='white'>₿</text></svg>">
   <title>Bitcoin Transaction Tracker</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -451,7 +453,6 @@ const PAGE_SIZE = 50;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const fmtBTC = v => parseFloat(v||0).toFixed(8);
-const fmtBTCShort = v => parseFloat(v||0).toFixed(8);
 const fmtUSD = v => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2}).format(v||0);
 const fmtDate = d => { if(!d) return '—'; const [y,m,dy] = d.split('-'); return `${m}/${dy}/${y}`; };
 
@@ -1057,7 +1058,7 @@ function App() {
   // only emit the Deposit on the receiving side. Configurable in Settings.
   const exportCSV = (yearFilter) => {
     const headers = ['Date (UTC)','Platform (Optional)','Asset Sent','Amount Sent','Asset Received','Amount Received','Fee Currency (Optional)','Fee Amount (Optional)','Type','Description (Optional)','TxHash (Optional)'];
-    const src = yearFilter ? transactions.filter(t=>t.date.startsWith(yearFilter)) : transactions;
+    const src = [...(yearFilter ? transactions.filter(t=>t.date.startsWith(yearFilter)) : transactions)];
     const fmtNum = v => v ? parseFloat(v).toFixed(8).replace(/\.?0+$/,'') : '';
     const rows = [];
 
@@ -1273,13 +1274,13 @@ function App() {
                   Holdings
                   <span title="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." style={{cursor:'help',fontSize:'.75rem',color:'var(--text-tertiary)',border:'1px solid var(--border-color)',borderRadius:'50%',width:16,height:16,display:'inline-flex',alignItems:'center',justifyContent:'center',lineHeight:1,flexShrink:0}}>?</span>
                 </div>
-                <div className="stat-value btc">{fmtBTCShort(trackedHoldings)}</div>
+                <div className="stat-value btc">{fmtBTC(trackedHoldings)}</div>
                 <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(trackedHoldings*(btcPrice||0))}`:''}</div>
               </div>
               <div className="stat-card">
                 <div className="stat-label">Cost Basis</div>
                 <div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
-                <div className="stat-sub">{fmtBTCShort(stats.totalBought)} BTC acquired</div>
+                <div className="stat-sub">{fmtBTC(stats.totalBought)} BTC acquired</div>
               </div>
               <div className="stat-card">
                 <div className="stat-label">Total P&L</div>
@@ -1290,12 +1291,12 @@ function App() {
               </div>
               <div className="stat-card">
                 <div className="stat-label">Rewards Earned</div>
-                <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTCShort(stats.rewardsIncome)}</div>
+                <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
                 <div className="stat-sub">{btcPrice?fmtUSD(stats.rewardsIncome*btcPrice):''} at current price</div>
               </div>
               <div className="stat-card">
                 <div className="stat-label">Network Fees</div>
-                <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTCShort(stats.totalFeesBTC)}</div>
+                <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTC(stats.totalFeesBTC)}</div>
                 <div className="stat-sub">BTC in transfer fees</div>
               </div>
               <div className="stat-card">
@@ -1323,7 +1324,7 @@ function App() {
                           <div className="wallet-name">{w.name}</div>
                           <span className="wallet-type-badge">{w.type}</span>
                         </div>
-                        <div className="wallet-btc">{fmtBTCShort(amount)} BTC</div>
+                        <div className="wallet-btc">{fmtBTC(amount)} BTC</div>
                         {usdVal && <div className="wallet-usd">{fmtUSD(usdVal)}</div>}
                       </div>
                     );
@@ -1472,7 +1473,7 @@ function App() {
                           </div>
                         </div>
                         <span className="wallet-type-badge">{w.type}</span>
-                        <div className="wallet-btc" style={{marginTop:'.625rem'}}>{fmtBTCShort(bal)} BTC</div>
+                        <div className="wallet-btc" style={{marginTop:'.625rem'}}>{fmtBTC(bal)} BTC</div>
                         {usd!==null && <div className="wallet-usd">{fmtUSD(usd)}</div>}
                         {w.address && <div className="wallet-address">{w.address}</div>}
                       </div>
@@ -1726,7 +1727,7 @@ function App() {
               <div className="card-body">
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:'1rem'}}>
                   {[
-                    ['Version','3.0'],
+                    ['Version','3.21'],
                     ['Transactions',transactions.length],
                     ['Wallets',wallets.length],
                     ['Storage','localStorage'],
@@ -2109,11 +2110,13 @@ function TransferWizard({ transactions, wallets, wizardStep, setWizardStep, wiza
     showToast('All transfers saved');
   };
 
-  // Keyboard navigation
+  // Keyboard navigation — use refs to avoid stale closures
+  const handlerRef = React.useRef();
+  handlerRef.current = { isIntro, isSummary, wizardStep, applyAll, saveCurrentAndNext };
   React.useEffect(() => {
     const handler = (e) => {
-      // Don't capture when typing in an input/select
       if(e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      const { isIntro, isSummary, wizardStep, applyAll, saveCurrentAndNext } = handlerRef.current;
       if(e.key === 'ArrowRight' || e.key === 'Enter') {
         e.preventDefault();
         if(isSummary) applyAll();
@@ -2129,7 +2132,7 @@ function TransferWizard({ transactions, wallets, wizardStep, setWizardStep, wiza
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  });
+  }, []);
 
   const doneCount = Object.values(wizardEdits).filter(e=>!e.skip&&e.wallet&&e.wallet2).length;
   const skipCount = Object.values(wizardEdits).filter(e=>e.skip).length;
@@ -2300,7 +2303,7 @@ function TransferWizard({ transactions, wallets, wizardStep, setWizardStep, wiza
   );
 }
 
-ReactDOM.render(<App/>, document.getElementById('root'));
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 </body>
 </html>
