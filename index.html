@@ -530,18 +530,26 @@ function DashboardCharts({ transactions, wallets, btcPrice }) {
     let runningBTC = 0;
     let runningBTCForCost = 0;
     sorted.forEach(tx => {
-      if(tx.excludeStats) return;
       const amt = parseFloat(tx.amount)||0;
       const fee = parseFloat(tx.fee)||0;
       const price = parseFloat(tx.price)||0;
 
-      if(tx.type==='Buy') { runningBTC+=amt; runningBTCForCost+=amt; totalCost+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
-      else if(tx.type==='Reward') { runningBTC+=amt; runningBTCForCost+=amt; }
-      else if(tx.type==='Sell') {
-        const ratio = amt/Math.max(runningBTCForCost,0.00000001);
-        totalCost-=totalCost*ratio; runningBTCForCost-=amt; runningBTC-=amt;
-      } else if(tx.type==='Transfer') { runningBTC-=fee; runningBTCForCost-=fee; }
-      else if(tx.type==='Consolidation') { runningBTC-=fee; runningBTCForCost-=fee; }
+      // Always track BTC balance
+      if(tx.type==='Buy'||tx.type==='Reward') { runningBTC+=amt; }
+      else if(tx.type==='Sell') { runningBTC-=amt; }
+      else if(tx.type==='Transfer') { runningBTC-=fee; }
+      else if(tx.type==='Consolidation') { runningBTC-=fee; }
+
+      // Only track cost basis for non-excluded
+      if(!tx.excludeStats) {
+        if(tx.type==='Buy') { runningBTCForCost+=amt; totalCost+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
+        else if(tx.type==='Reward') { runningBTCForCost+=amt; }
+        else if(tx.type==='Sell') {
+          const ratio = amt/Math.max(runningBTCForCost,0.00000001);
+          totalCost-=totalCost*ratio; runningBTCForCost-=amt;
+        } else if(tx.type==='Transfer') { runningBTCForCost-=fee; }
+        else if(tx.type==='Consolidation') { runningBTCForCost-=fee; }
+      }
 
       const totalBTC = runningBTC;
       const avgCost = totalBTC>0.00000001 ? totalCost/totalBTC : 0;
