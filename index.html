@@ -759,7 +759,10 @@ function App() {
       return next;
     });
   };
-  const [tab, setTab] = useState('dashboard');
+  const [tab, setTab] = useState(() => {
+    const hash = location.hash.slice(1);
+    return NAV_ITEMS.some(n => n.key === hash) ? hash : 'dashboard';
+  });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('btc-sidebar-collapsed') === 'true');
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
@@ -831,6 +834,15 @@ function App() {
   useEffect(() => {
     localStorage.setItem('btc-sidebar-collapsed', sidebarCollapsed);
   }, [sidebarCollapsed]);
+  useEffect(() => { location.hash = tab; }, [tab]);
+  useEffect(() => {
+    const onHash = () => {
+      const hash = location.hash.slice(1);
+      if (NAV_ITEMS.some(n => n.key === hash)) setTab(hash);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
 
   // Apply theme on mount
   useEffect(() => {
