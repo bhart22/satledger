@@ -1730,8 +1730,8 @@ function App() {
                     ['Version','3.21'],
                     ['Transactions',transactions.length],
                     ['Wallets',wallets.length],
-                    ['Storage','localStorage'],
-                    ['Date range', transactions.length ? (() => { const dates = transactions.map(t=>t.date).filter(Boolean); const min = dates.reduce((a,b) => a < b ? a : b); const max = dates.reduce((a,b) => a > b ? a : b); return `${min} → ${max}`; })() : '—'],
+                    ['Storage', syncState === 'synced' ? 'Local + Google Drive' : syncState === 'syncing' ? 'Local + Google Drive (syncing)' : 'Local only'],
+                    ['Date range', transactions.length ? (() => { const dates = transactions.map(t=>t.date).filter(Boolean); const min = dates.reduce((a,b) => a < b ? a : b); const max = dates.reduce((a,b) => a > b ? a : b); return `${fmtDate(min)} → ${fmtDate(max)}`; })() : '—'],
                     ['Last updated', new Date().toLocaleDateString()],
                   ].map(([label,val])=>(
                     <div key={label}>
