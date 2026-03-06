@@ -522,51 +522,27 @@ const NAV_ITEMS = [
 // ─── Dashboard Charts ─────────────────────────────────────────────────────────
 function DashboardCharts({ transactions, wallets, btcPrice }) {
   const chartData = React.useMemo(() => {
-    // Use wallet-based accumulation (same as walletHoldings) to match the Holdings stat.
-    // This correctly handles transfers between wallets without double-counting.
-    const activeWalletSet = new Set(wallets.filter(w => !w.archived).map(w => w.name));
+    // Use all wallets for full history; excluded transactions skip cost basis only.
     const sorted = [...transactions].sort((a,b) => a.date.localeCompare(b.date));
     let totalCost = 0;
     const points = [];
-    // Replay wallet holdings per-date and track cost basis separately
-    totalCost = 0;
-    let runningBTCForCost = 0; // tracks total BTC for cost-basis ratio calculations
-    const walletBals = {};
+    let runningBTC = 0;
+    let runningBTCForCost = 0;
     sorted.forEach(tx => {
+      if(tx.excludeStats) return;
       const amt = parseFloat(tx.amount)||0;
       const fee = parseFloat(tx.fee)||0;
       const price = parseFloat(tx.price)||0;
-      const w1 = tx.wallet;
-      const w2 = tx.wallet2;
 
-      // Update per-wallet balances (same logic as walletHoldings — no excludeStats filter)
-      if(w1) {
-        if(!walletBals[w1]) walletBals[w1] = 0;
-        if(tx.type==='Buy'||tx.type==='Reward') { walletBals[w1]+=amt; }
-        else if(tx.type==='Sell') { walletBals[w1]-=amt; }
-        else if(tx.type==='Transfer') {
-          walletBals[w1]-=(amt+fee);
-          if(w2) { if(!walletBals[w2]) walletBals[w2]=0; walletBals[w2]+=amt; }
-        } else if(tx.type==='Consolidation') {
-          walletBals[w1]-=fee;
-        }
-      }
+      if(tx.type==='Buy') { runningBTC+=amt; runningBTCForCost+=amt; totalCost+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
+      else if(tx.type==='Reward') { runningBTC+=amt; runningBTCForCost+=amt; }
+      else if(tx.type==='Sell') {
+        const ratio = amt/Math.max(runningBTCForCost,0.00000001);
+        totalCost-=totalCost*ratio; runningBTCForCost-=amt; runningBTC-=amt;
+      } else if(tx.type==='Transfer') { runningBTC-=fee; runningBTCForCost-=fee; }
+      else if(tx.type==='Consolidation') { runningBTC-=fee; runningBTCForCost-=fee; }
 
-      // Update cost basis (non-excluded only, ALL wallets count)
-      if(!tx.excludeStats) {
-        if(tx.type==='Buy') { runningBTCForCost+=amt; totalCost+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
-        else if(tx.type==='Reward') { runningBTCForCost+=amt; }
-        else if(tx.type==='Sell') {
-          const ratio = amt/Math.max(runningBTCForCost,0.00000001);
-          totalCost-=totalCost*ratio; runningBTCForCost-=amt;
-        } else if(tx.type==='Transfer') { runningBTCForCost-=fee; }
-        else if(tx.type==='Consolidation') { runningBTCForCost-=fee; }
-      }
-
-      // Sum active wallet balances for the chart point
-      const totalBTC = Object.entries(walletBals)
-        .filter(([name]) => activeWalletSet.has(name))
-        .reduce((sum, [, bal]) => sum + bal, 0);
+      const totalBTC = runningBTC;
       const avgCost = totalBTC>0.00000001 ? totalCost/totalBTC : 0;
       const pt = { date:tx.date, btc:+totalBTC.toFixed(8), avgCost:+avgCost.toFixed(2) };
       const last = points[points.length-1];
@@ -1316,7 +1292,7 @@ function App() {
             </button>
           ))}
         </div>
-        <div className="sidebar-version">v3.22</div>
+        <div className="sidebar-version">v3.23</div>
       </nav>
 
       <div className="app-body">
@@ -1330,7 +1306,7 @@ function App() {
               </button>
             ))}
           </nav>
-          <div className="sidebar-version">v3.22</div>
+          <div className="sidebar-version">v3.23</div>
         </aside>
 
         <main className="main">
@@ -1819,7 +1795,7 @@ function App() {
               <div className="card-body">
                 <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:'1rem'}}>
                   {[
-                    ['Version','3.22'],
+                    ['Version','3.23'],
                     ['Transactions',transactions.length],
                     ['Wallets',wallets.length],
                     ['Storage', syncState === 'synced' ? 'Local + Google Drive' : syncState === 'syncing' ? 'Local + Google Drive (syncing)' : 'Local only'],
