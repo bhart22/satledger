@@ -1702,6 +1702,10 @@ function App() {
         )}
       </main>
 
+      <footer style={{textAlign:'center',padding:'.75rem 1rem',fontSize:'.6875rem',color:'var(--text-tertiary)',borderTop:'1px solid var(--border-color)',fontFamily:'JetBrains Mono,monospace'}}>
+        v3.19
+      </footer>
+
       {/* ── Add/Edit Transaction Modal ── */}
       {showModal && (
         <div className="overlay" onClick={()=>{setShowModal(false);setEditIdx(null);}}>
