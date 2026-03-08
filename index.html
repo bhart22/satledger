@@ -1089,9 +1089,9 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
         formatY={fmtCompactUSD}
         formatTooltip={v => '$'+Math.round(v).toLocaleString()}
         lines={[
-          ...(maChartData.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
-          ...(maChartData.some(d=>d.ma50w!=null) ? [{ dataKey:'ma50w', color:'#8b5cf6', label:'50W MA', dashed:false, formatTooltip:v=>'50W: $'+Math.round(v).toLocaleString() }] : []),
-          ...(maChartData.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#dc2626', label:'200W MA', dashed:true, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
+          ...((settings.maLines?.ma200d!==false) && maChartData.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
+          ...((settings.maLines?.ma50w!==false) && maChartData.some(d=>d.ma50w!=null) ? [{ dataKey:'ma50w', color:'#8b5cf6', label:'50W MA', dashed:false, formatTooltip:v=>'50W: $'+Math.round(v).toLocaleString() }] : []),
+          ...((settings.maLines?.ma200w!==false) && maChartData.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#dc2626', label:'200W MA', dashed:true, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
         ]}
       />}
       {!hc.usdHoldings && historicalPriceLoading && !usdHoldingsData.length && (
@@ -3091,6 +3091,39 @@ function App() {
                         const hc = {...(settings.hiddenCharts||{})};
                         if(e.target.checked) delete hc[chart.key]; else hc[chart.key]=true;
                         updateSettings({hiddenCharts:hc});
+                      }} />
+                      <span className="theme-slider"></span>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Moving Average Lines */}
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Moving Average Lines</div>
+              </div>
+              <div className="card-body">
+                <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',marginBottom:'1rem'}}>Choose which moving averages appear on the BTC Price chart.</div>
+                {[
+                  { key:'ma200d', label:'200-Day MA', desc:'Short-term trend (blue)', color:'#2563eb' },
+                  { key:'ma50w', label:'50-Week MA', desc:'Medium-term trend (purple)', color:'#8b5cf6' },
+                  { key:'ma200w', label:'200-Week MA', desc:'Long-term trend (red, dashed)', color:'#dc2626' },
+                ].map((ma, i) => (
+                  <div key={ma.key} style={{display:'flex',alignItems:'center',justifyContent:'space-between',...(i>0?{borderTop:'1px solid var(--border-color)',marginTop:'.75rem',paddingTop:'.75rem'}:{})}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+                      <span style={{width:10,height:10,borderRadius:'50%',background:ma.color,flexShrink:0}}/>
+                      <div>
+                        <div style={{fontSize:'.9375rem',fontWeight:600}}>{ma.label}</div>
+                        <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>{ma.desc}</div>
+                      </div>
+                    </div>
+                    <label className="theme-switch">
+                      <input type="checkbox" checked={(settings.maLines||{})[ma.key]!==false} onChange={e=>{
+                        const ml = {...(settings.maLines||{})};
+                        if(e.target.checked) delete ml[ma.key]; else ml[ma.key]=false;
+                        updateSettings({maLines:ml});
                       }} />
                       <span className="theme-slider"></span>
                     </label>
