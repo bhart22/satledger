@@ -697,7 +697,7 @@ const NAV_ITEMS = [
 
 // ─── Dashboard Charts ─────────────────────────────────────────────────────────
 function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, historicalPriceLoading, settings, updateSettings }) {
-  const { chartData, holdingsHistory } = React.useMemo(() => {
+  const { chartData, holdingsHistory, dcaData } = React.useMemo(() => {
     const sorted = transactions
       .map(tx => ({ ...tx, normalizedDate: normalizeDate(tx.date) }))
       .filter(tx => tx.normalizedDate)
@@ -705,6 +705,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     let totalCost = 0;
     const walletBalances = {};
     const points = [], holdingsPoints = [];
+    const dcaMap = {};
     let runningBTC = 0;
     let runningBTCForCost = 0;
     const ensureWallet = (name) => {
@@ -733,6 +734,14 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           totalCost-=totalCost*ratio; runningBTCForCost-=amt;
         } else if(tx.type==='Transfer') { runningBTCForCost-=fee; }
         else if(tx.type==='Consolidation') { runningBTCForCost-=fee; }
+      }
+
+      // DCA tracking — Buy transactions only
+      if(tx.type==='Buy' && !tx.excludeStats) {
+        const buyUsd = tx.totalUsd ? parseFloat(tx.totalUsd) : (amt * price);
+        if(buyUsd > 0) {
+          dcaMap[tx.normalizedDate] = (dcaMap[tx.normalizedDate]||0) + buyUsd;
+        }
       }
 
       // Track included-transaction holdings history for dashboard value charts.
@@ -767,13 +776,14 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     while(holdingsPoints.length > 1 && holdingsPoints[0].holdingsBtc < 0.00000001) {
       holdingsPoints.shift();
     }
-    return { chartData: points, holdingsHistory: holdingsPoints };
+    const dcaPts = Object.entries(dcaMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,buyUsd])=>({date,buyUsd:+buyUsd.toFixed(2)}));
+    return { chartData: points, holdingsHistory: holdingsPoints, dcaData: dcaPts };
   }, [transactions, wallets]);
 
   // Time-range filtering
   const rangeFiltered = React.useMemo(() => {
     const range = settings.chartRange || 'All';
-    if(range === 'All') return { chart: chartData, holdings: holdingsHistory };
+    if(range === 'All') return { chart: chartData, holdings: holdingsHistory, dca: dcaData };
     let cutoff;
     if(range === 'Custom') {
       cutoff = settings.chartRangeCustom || '2000-01-01';
@@ -788,8 +798,9 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     return {
       chart: chartData.filter(d => d.date >= cutoff),
       holdings: holdingsHistory.filter(d => d.date >= cutoff),
+      dca: dcaData.filter(d => d.date >= cutoff),
     };
-  }, [chartData, holdingsHistory, settings.chartRange, settings.chartRangeCustom]);
+  }, [chartData, holdingsHistory, dcaData, settings.chartRange, settings.chartRangeCustom]);
 
   const costData = React.useMemo(() => rangeFiltered.chart.filter(d=>d.avgCost!==null), [rangeFiltered.chart]);
   const usdHoldingsData = React.useMemo(() => {
@@ -798,6 +809,19 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       holdingsUsd: historicalPrices[d.date]!==undefined ? +(d.holdingsBtc * historicalPrices[d.date]).toFixed(2) : null,
     })).filter(d => d.holdingsUsd!==null);
   }, [rangeFiltered.holdings, historicalPrices]);
+
+  // Price overlay data for Accumulated BTC chart
+  const priceOverlayData = React.useMemo(() => {
+    if(!historicalPrices || !Object.keys(historicalPrices).length) return [];
+    const chartDates = rangeFiltered.chart;
+    if(!chartDates.length) return [];
+    const minDate = chartDates[0].date;
+    const maxDate = chartDates[chartDates.length-1].date;
+    return Object.entries(historicalPrices)
+      .filter(([d]) => d >= minDate && d <= maxDate)
+      .sort((a,b) => a[0].localeCompare(b[0]))
+      .map(([date, price]) => ({ date, price }));
+  }, [historicalPrices, rangeFiltered.chart]);
 
   if(!chartData.length) return null;
 
@@ -844,6 +868,14 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           return v.toFixed(8)+' BTC'+usd;
         }}
         fillGradient={true}
+        overlay={priceOverlayData.length > 0 ? {
+          data: priceOverlayData,
+          dataKey: 'price',
+          color: '#6b7280',
+          formatY: fmtCompactUSD,
+          formatTooltip: v => '$'+Math.round(v).toLocaleString(),
+          label: 'BTC Price'
+        } : undefined}
       />}
       {costData.length > 1 && <SVGChart
         data={costData}
@@ -866,6 +898,16 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
         formatY={fmtCompactUSD}
         formatTooltip={(v)=>`${fmtUSD(v)} at daily close`}
         fillGradient={true}
+      />}
+      {rangeFiltered.dca.length > 0 && <SVGChart
+        data={rangeFiltered.dca}
+        dataKey="buyUsd"
+        title="DCA Tracker"
+        subtitle={'$'+Math.round(rangeFiltered.dca.reduce((s,d)=>s+d.buyUsd,0)).toLocaleString()+' total invested'}
+        color="#10b981"
+        chartType="bar"
+        formatY={fmtCompactUSD}
+        formatTooltip={v => '$'+Math.round(v).toLocaleString()+' bought'}
       />}
       {historicalPriceLoading && !usdHoldingsData.length && (
         <div className="card">
@@ -941,36 +983,51 @@ function PieChart({ segments, totalBTC, btcPrice }) {
   );
 }
 
-function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatTooltip, fillGradient, refLine, refLineColor, refLineLabel }) {
+function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatTooltip, fillGradient, refLine, refLineColor, refLineLabel, chartType, overlay }) {
   const [tooltip, setTooltip] = React.useState(null);
   const svgRef = React.useRef(null);
-  const W=480, H=180, PL=58, PR=16, PT=8, PB=32;
+  const isBar = chartType === 'bar';
+  const hasOverlay = overlay && overlay.data && overlay.data.length > 0;
+  const W=480, H=180, PL=58, PR=hasOverlay?52:16, PT=8, PB=32;
   const iW=W-PL-PR, iH=H-PT-PB;
 
   const vals = data.map(d=>d[dataKey]);
-  const minV=Math.min(...vals), maxV=Math.max(...vals);
-  const vRange = maxV-minV || 1;
+  const minV = isBar ? 0 : Math.min(...vals);
+  const maxV=Math.max(...vals);
 
   // include refLine in Y scale if present
   const yMin = refLine ? Math.min(minV, refLine*0.97) : minV;
   const yMax = refLine ? Math.max(maxV, refLine*1.03) : maxV;
   const yRange = yMax-yMin || 1;
 
-  // Time-based X scale — evenly distributes dates across the chart width
+  // Time-based X scale
   const timestamps = data.map(d=>new Date(d.date+'T12:00:00').getTime());
   const tMin = timestamps[0], tMax = timestamps[timestamps.length-1];
   const tRange = tMax - tMin || 1;
   const xScale = i => PL + ((timestamps[i]-tMin)/tRange)*iW;
   const yScale = v => PT + iH - ((v-yMin)/yRange)*iH;
 
-  const pathD = data.map((d,i)=>`${i===0?'M':'L'}${xScale(i).toFixed(1)},${yScale(d[dataKey]).toFixed(1)}`).join(' ');
-  const areaD = pathD+` L${xScale(data.length-1).toFixed(1)},${(PT+iH).toFixed(1)} L${xScale(0).toFixed(1)},${(PT+iH).toFixed(1)} Z`;
+  // Overlay scales
+  const oTimestamps = hasOverlay ? overlay.data.map(d=>new Date(d.date+'T12:00:00').getTime()) : [];
+  const oVals = hasOverlay ? overlay.data.map(d=>d[overlay.dataKey]) : [];
+  const oMin = hasOverlay ? Math.min(...oVals) : 0;
+  const oMax = hasOverlay ? Math.max(...oVals) : 1;
+  const oRange = oMax-oMin || 1;
+  const oXScale = i => hasOverlay ? PL + ((oTimestamps[i]-tMin)/tRange)*iW : 0;
+  const oYScale = v => PT + iH - ((v-oMin)/oRange)*iH;
+  const oTicks = hasOverlay ? [0,.25,.5,.75,1].map(t=>oMin+t*oRange) : [];
+
+  const pathD = !isBar ? data.map((d,i)=>`${i===0?'M':'L'}${xScale(i).toFixed(1)},${yScale(d[dataKey]).toFixed(1)}`).join(' ') : '';
+  const areaD = !isBar ? pathD+` L${xScale(data.length-1).toFixed(1)},${(PT+iH).toFixed(1)} L${xScale(0).toFixed(1)},${(PT+iH).toFixed(1)} Z` : '';
+  const oPathD = hasOverlay ? overlay.data.map((d,i)=>`${i===0?'M':'L'}${oXScale(i).toFixed(1)},${oYScale(d[overlay.dataKey]).toFixed(1)}`).join(' ') : '';
+
+  // Bar dimensions
+  const barW = isBar && data.length > 1 ? Math.max(2, Math.min(16, (iW / data.length) * 0.7)) : 12;
 
   // Y axis ticks
   const yTicks = [0,.25,.5,.75,1].map(t=>yMin+t*yRange);
-  // X axis ticks — evenly spaced by time (first, middle, last)
+  // X axis ticks
   const xTickIdxs = [0, 0, data.length-1];
-  // Find data point closest to temporal midpoint
   const midT = tMin + tRange/2;
   let midDist = Infinity;
   for(let i=0;i<timestamps.length;i++) {
@@ -985,7 +1042,6 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
     const rect = svgRef.current.getBoundingClientRect();
     const scaleX = W / rect.width;
     const mx = (e.clientX - rect.left) * scaleX;
-    // Find nearest data point by time-based X position
     const hoverT = tMin + ((mx-PL)/iW)*tRange;
     let closest = 0, closestDist = Infinity;
     for(let i=0;i<timestamps.length;i++) {
@@ -993,7 +1049,17 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
       if(dist<closestDist) { closestDist=dist; closest=i; }
     }
     const d = data[closest];
-    setTooltip({ x: xScale(closest), y: yScale(d[dataKey]), val: d[dataKey], date: d.date });
+    // Find closest overlay point
+    let oVal = null;
+    if(hasOverlay) {
+      let oc=0, od=Infinity;
+      for(let i=0;i<oTimestamps.length;i++) {
+        const dist = Math.abs(oTimestamps[i]-timestamps[closest]);
+        if(dist<od) { od=dist; oc=i; }
+      }
+      oVal = overlay.data[oc]?.[overlay.dataKey] ?? null;
+    }
+    setTooltip({ x: xScale(closest), y: isBar ? yScale(d[dataKey]) : yScale(d[dataKey]), val: d[dataKey], date: d.date, oVal });
   }
 
   const fmtTickDate = d => {
@@ -1029,20 +1095,37 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             <>
               <line x1={PL} x2={PL+iW} y1={yScale(refLine)} y2={yScale(refLine)}
                 stroke={refLineColor} strokeWidth="1.5" strokeDasharray="5 4"/>
-              <text x={PL+iW} y={yScale(refLine)-6} textAnchor="end" fontSize="9" fill={refLineColor}>{refLineLabel}</text>
+              <text x={PL+iW-(!hasOverlay?0:40)} y={yScale(refLine)-6} textAnchor="end" fontSize="9" fill={refLineColor}>{refLineLabel}</text>
             </>
           )}
 
-          {/* Area fill */}
-          {fillGradient && <path d={areaD} fill={`url(#${gradId})`} clipPath={`url(#clip_${gradId})`}/>}
+          {/* Area fill (line mode) */}
+          {fillGradient && !isBar && <path d={areaD} fill={`url(#${gradId})`} clipPath={`url(#clip_${gradId})`}/>}
 
-          {/* Line */}
-          <path d={pathD} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+          {/* Line (line mode) */}
+          {!isBar && <path d={pathD} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>}
 
-          {/* Y axis labels */}
+          {/* Bars (bar mode) */}
+          {isBar && data.map((d,i) => {
+            const x = xScale(i) - barW/2;
+            const barH = ((d[dataKey]-yMin)/yRange)*iH;
+            return <rect key={i} x={x} y={PT+iH-barH} width={barW} height={Math.max(0,barH)} fill={color} rx="1" opacity={tooltip && Math.abs(xScale(i)-tooltip.x)<barW ? 1 : 0.7}/>;
+          })}
+
+          {/* Overlay line */}
+          {hasOverlay && <path d={oPathD} fill="none" stroke={overlay.color} strokeWidth="1.5" strokeDasharray="4 3" strokeLinejoin="round" opacity="0.7"/>}
+
+          {/* Y axis labels (left) */}
           {yTicks.map((v,i)=>(
             <text key={i} x={PL-6} y={yScale(v)+4} textAnchor="end" fontSize="10" fill="var(--text-tertiary)">
               {formatY(v)}
+            </text>
+          ))}
+
+          {/* Overlay Y axis labels (right) */}
+          {hasOverlay && oTicks.map((v,i)=>(
+            <text key={'o'+i} x={PL+iW+6} y={oYScale(v)+4} textAnchor="start" fontSize="9" fill={overlay.color} opacity="0.7">
+              {overlay.formatY(v)}
             </text>
           ))}
 
@@ -1058,10 +1141,18 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             <>
               <line x1={tooltip.x} x2={tooltip.x} y1={PT} y2={PT+iH}
                 stroke="var(--border-color)" strokeWidth="1"/>
-              <circle cx={tooltip.x} cy={tooltip.y} r="4" fill={color} stroke="var(--bg-secondary)" strokeWidth="2"/>
+              {!isBar && <circle cx={tooltip.x} cy={tooltip.y} r="4" fill={color} stroke="var(--bg-secondary)" strokeWidth="2"/>}
             </>
           )}
         </svg>
+
+        {/* Legend for overlay */}
+        {hasOverlay && (
+          <div style={{display:'flex',gap:'1rem',justifyContent:'center',fontSize:'.6875rem',color:'var(--text-tertiary)',marginTop:'.25rem'}}>
+            <span style={{display:'flex',alignItems:'center',gap:'.25rem'}}><span style={{width:12,height:2,background:color,display:'inline-block',borderRadius:1}}/> {title}</span>
+            <span style={{display:'flex',alignItems:'center',gap:'.25rem'}}><span style={{width:12,height:2,background:overlay.color,display:'inline-block',borderRadius:1,borderTop:'1px dashed '+overlay.color}}/> {overlay.label}</span>
+          </div>
+        )}
 
         {/* Tooltip box */}
         {tooltip && (
@@ -1076,7 +1167,10 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             fontSize:'.8125rem',
           }}>
             <div style={{color:'var(--text-secondary)',fontSize:'.75rem',whiteSpace:'nowrap'}}>{fmtDate(tooltip.date)}</div>
-            <div style={{color:color,fontFamily:'JetBrains Mono',fontWeight:600,textAlign:'right'}}>{formatTooltip(tooltip.val)}</div>
+            <div style={{display:'flex',gap:'.75rem',textAlign:'right'}}>
+              <div style={{color:color,fontFamily:'JetBrains Mono',fontWeight:600}}>{formatTooltip(tooltip.val)}</div>
+              {hasOverlay && tooltip.oVal !== null && <div style={{color:overlay.color,fontFamily:'JetBrains Mono',fontWeight:600,fontSize:'.75rem'}}>{overlay.formatTooltip(tooltip.oVal)}</div>}
+            </div>
           </div>
         )}
       </div>
