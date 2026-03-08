@@ -688,6 +688,9 @@ const Icon = {
   Moon: (s)=><svg {...sz} {...s}><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>,
   HelpCircle: (s)=><svg {...sz} {...s}><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>,
   Info: (s)=><svg {...sz} {...s}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>,
+  Heart: (s)=><svg {...sz} {...s}><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>,
+  Zap: (s)=><svg {...sz} {...s}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
+  Copy: (s)=><svg {...sz} {...s}><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
   Eye: (s)=><svg {...sz} {...s}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
   EyeOff: (s)=><svg {...sz} {...s}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
 };
@@ -849,7 +852,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       cutoff = new Date().getFullYear() + '-01-01';
     } else {
       const now = new Date();
-      const months = { '3M':3, '6M':6, '1Y':12 };
+      const months = { '3M':3, '6M':6, '1Y':12, '5Y':60 };
       const d = new Date(now.getFullYear(), now.getMonth() - (months[range]||0), now.getDate());
       cutoff = d.toISOString().slice(0,10);
     }
@@ -942,7 +945,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     else if(range === 'YTD') cutoff = new Date().getFullYear() + '-01-01';
     else {
       const now = new Date();
-      const months = { '3M':3, '6M':6, '1Y':12 };
+      const months = { '3M':3, '6M':6, '1Y':12, '5Y':60 };
       const d = new Date(now.getFullYear(), now.getMonth() - (months[range]||0), now.getDate());
       cutoff = d.toISOString().slice(0,10);
     }
@@ -965,7 +968,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   return (
     <>
     <div style={{display:'flex',gap:'.375rem',marginBottom:'.75rem',alignItems:'center',flexWrap:'wrap'}}>
-      {['3M','6M','1Y','YTD','All','Custom'].map(r => (
+      {['3M','6M','1Y','5Y','YTD','All','Custom'].map(r => (
         <button key={r} onClick={() => updateSettings({ chartRange: r })}
           className={chartRangeVal===r ? 'btn btn-primary' : 'btn btn-secondary'}
           style={{padding:'.25rem .75rem',fontSize:'.75rem'}}>
@@ -1543,6 +1546,7 @@ function App() {
   const [moreStats, setMoreStats] = useState(false);
   const [walletsOpen, setWalletsOpen] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
+  const [showTipJar, setShowTipJar] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -2349,6 +2353,9 @@ function App() {
         <button onClick={()=>{setShowGuide(true);setMobileMenuOpen(false);}} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.5rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%'}}>
           {Icon.HelpCircle({width:16,height:16})} How it works
         </button>
+        <button onClick={()=>{setShowTipJar(true);setMobileMenuOpen(false);}} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.5rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%'}}>
+          {Icon.Heart({width:16,height:16})} Send a tip
+        </button>
         <div className="sidebar-version">v3.25</div>
       </nav>
 
@@ -2371,6 +2378,9 @@ function App() {
           </div>
           <button onClick={()=>setShowGuide(true)} title="How it works" style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.375rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',justifyContent:sidebarCollapsed?'center':'flex-start'}}>
             {Icon.HelpCircle({width:16,height:16})} {!sidebarCollapsed && 'How it works'}
+          </button>
+          <button onClick={()=>setShowTipJar(true)} title="Send a tip" style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.375rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',justifyContent:sidebarCollapsed?'center':'flex-start'}}>
+            {Icon.Heart({width:16,height:16})} {!sidebarCollapsed && 'Send a tip'}
           </button>
           <div className="sidebar-version">v3.25</div>
         </aside>
@@ -3397,6 +3407,50 @@ function App() {
 
               <h4 style={{color:'var(--text-primary)',marginBottom:'.375rem',fontSize:'.9375rem'}}>Export & Backup</h4>
               <p>Use the <strong>Export</strong> tab to download a full JSON backup or generate a CoinLedger-compatible CSV for tax reporting. You can restore from a backup at any time in <strong>Settings</strong>.</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTipJar && (
+        <div className="overlay" onClick={()=>setShowTipJar(false)}>
+          <div className="modal" style={{maxWidth:480}} onClick={e=>e.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title" style={{display:'flex',alignItems:'center',gap:'.5rem'}}>{Icon.Heart({width:20,height:20})} Send a Tip</div>
+              <button className="btn-icon" onClick={()=>setShowTipJar(false)}>{Icon.X()}</button>
+            </div>
+            <div className="modal-body" style={{fontSize:'.9375rem',lineHeight:1.6,color:'var(--text-secondary)'}}>
+              <p style={{marginBottom:'1.25rem'}}>If you find SatLedger useful, consider sending a small Bitcoin tip. Every sat is appreciated!</p>
+
+              {[
+                { label:'Lightning', icon:'Zap', color:'#f7931a', address:'thekidhitman@strike.me', uri:'lightning:thekidhitman@strike.me' },
+                { label:'On-chain', icon:'Link', color:'var(--text-primary)', address:'bc1qm0gqys4dkusan8y96c4j4gf05uep648eykq6a43mcwndg56dwvnsmavm5u', uri:'bitcoin:bc1qm0gqys4dkusan8y96c4j4gf05uep648eykq6a43mcwndg56dwvnsmavm5u' },
+              ].map(t => (
+                <div key={t.label} style={{marginBottom:'1.25rem'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'.375rem',marginBottom:'.5rem',fontWeight:600,color:'var(--text-primary)',fontSize:'.875rem'}}>
+                    {Icon[t.icon]({width:16,height:16,style:{color:t.color}})} {t.label}
+                  </div>
+                  <div style={{display:'flex',gap:'.75rem',alignItems:'flex-start'}}>
+                    <img src={`https://api.qrserver.com/v1/create-qr-code/?size=120x120&data=${encodeURIComponent(t.uri)}`}
+                      alt={`${t.label} QR`} width={120} height={120}
+                      style={{borderRadius:'8px',border:'1px solid var(--border-color)',flexShrink:0,background:'#fff',padding:4}} />
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{
+                        fontFamily:'JetBrains Mono',fontSize:'.75rem',wordBreak:'break-all',
+                        background:'var(--bg-tertiary)',padding:'.625rem',borderRadius:'8px',
+                        border:'1px solid var(--border-color)',color:'var(--text-primary)',lineHeight:1.5,
+                        marginBottom:'.5rem'
+                      }}>{t.address}</div>
+                      <button className="btn btn-secondary btn-sm" onClick={()=>{
+                        navigator.clipboard.writeText(t.address);
+                        showToast(`${t.label} address copied!`);
+                      }} style={{display:'flex',alignItems:'center',gap:'.375rem',fontSize:'.8125rem'}}>
+                        {Icon.Copy({width:14,height:14})} Copy address
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         </div>
