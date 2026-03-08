@@ -206,7 +206,7 @@
       --text-primary: #0a0a0a; --text-secondary: #525252; --text-tertiary: #a3a3a3;
       --border-color: #e5e5e5; --border-hover: #d4d4d4;
       --bitcoin-orange: #f7931a; --bitcoin-light: #fef3e8;
-      --main-surface: #f7efe6; --main-dot-color: rgba(247,147,26,0.2);
+      --main-surface: #f7efe6; --main-dot-color: rgba(247,147,26,1);
       --green: #16a34a; --green-light: #dcfce7; --red: #dc2626; --red-light: #fee2e2;
       --blue: #2563eb; --blue-light: #dbeafe; --purple: #7c3aed; --purple-light: #ede9fe;
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.04); --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
@@ -380,12 +380,9 @@
     .wallet-delta { font-size:.75rem; margin-top:.375rem; }
     .wallet-address { font-size:.6875rem; color:var(--text-tertiary); font-family:'JetBrains Mono',monospace; margin-top:.5rem; word-break:break-all; }
 
-    /* Donut chart */
+    /* Pie chart */
     .donut-chart-container { display:flex; flex-direction:column; align-items:center; gap:1.25rem; padding:1rem 0; }
-    .donut-chart-wrap { position:relative; width:200px; height:200px; }
-    .donut-chart-center { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center; pointer-events:none; }
-    .donut-chart-center .donut-total-btc { font-size:1.125rem; font-weight:700; font-family:'JetBrains Mono',monospace; color:var(--bitcoin-orange); }
-    .donut-chart-center .donut-total-usd { font-size:.75rem; color:var(--text-secondary); font-family:'JetBrains Mono',monospace; margin-top:.125rem; }
+    .donut-chart-wrap { position:relative; }
     .donut-segment { transition:opacity .15s, filter .15s; cursor:pointer; }
     .donut-segment:hover { opacity:.85; filter:brightness(1.1); }
     .donut-legend { display:flex; flex-wrap:wrap; justify-content:center; gap:.5rem .875rem; }
@@ -872,30 +869,36 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   );
 }
 
-function DonutChart({ segments, totalBTC, btcPrice, R, STROKE, C }) {
+function PieChart({ segments, totalBTC, btcPrice }) {
   const [hover, setHover] = React.useState(null);
   const [mouse, setMouse] = React.useState({x:0,y:0});
-  const SIZE = (R + STROKE/2 + 2) * 2;
-  const CENTER = SIZE / 2;
+  const R = 90, SIZE = R * 2 + 4, CENTER = SIZE / 2;
   const handleMove = React.useCallback((e) => setMouse({x:e.clientX,y:e.clientY}), []);
+  // Build pie wedge paths
+  let angle = -Math.PI / 2;
+  const wedges = segments.map((seg, i) => {
+    const sweep = seg.pct * 2 * Math.PI;
+    const x1 = CENTER + R * Math.cos(angle);
+    const y1 = CENTER + R * Math.sin(angle);
+    const x2 = CENTER + R * Math.cos(angle + sweep);
+    const y2 = CENTER + R * Math.sin(angle + sweep);
+    const largeArc = sweep > Math.PI ? 1 : 0;
+    const d = `M${CENTER},${CENTER} L${x1},${y1} A${R},${R} 0 ${largeArc} 1 ${x2},${y2} Z`;
+    angle += sweep;
+    return { ...seg, d, idx: i };
+  });
   return (
     <div className="donut-chart-container" onMouseMove={handleMove}>
       <div className="donut-chart-wrap" style={{width:SIZE,height:SIZE}}>
         <svg viewBox={`0 0 ${SIZE} ${SIZE}`} width={SIZE} height={SIZE}>
-          {segments.map((seg,i) => (
-            <circle key={seg.name} cx={CENTER} cy={CENTER} r={R}
-              fill="none" stroke={seg.color} strokeWidth={STROKE}
-              strokeDasharray={seg.dashArray} strokeDashoffset={seg.dashOffset}
+          {wedges.map((w,i) => (
+            <path key={w.name} d={w.d} fill={w.color}
               className="donut-segment"
-              style={{transform:'rotate(-90deg)',transformOrigin:'center', opacity:hover!==null&&hover!==i?.4:1}}
+              style={{opacity:hover!==null&&hover!==i?.4:1}}
               onMouseEnter={()=>setHover(i)} onMouseLeave={()=>setHover(null)}
             />
           ))}
         </svg>
-        <div className="donut-chart-center">
-          <div className="donut-total-btc">{fmtBTC(totalBTC)}</div>
-          {btcPrice && <div className="donut-total-usd">{fmtUSD(totalBTC*btcPrice)}</div>}
-        </div>
       </div>
       <div className="donut-legend">
         {segments.map((seg,i) => (
@@ -906,6 +909,9 @@ function DonutChart({ segments, totalBTC, btcPrice, R, STROKE, C }) {
             {seg.name}
           </div>
         ))}
+      </div>
+      <div style={{textAlign:'center',fontFamily:'JetBrains Mono,monospace',fontWeight:700,fontSize:'1rem',color:'var(--bitcoin-orange)'}}>
+        {fmtBTC(totalBTC)} BTC
       </div>
       {hover !== null && segments[hover] && ReactDOM.createPortal(
         <div className="donut-tooltip" style={{left:mouse.x+12,top:mouse.y-10}}>
@@ -1105,7 +1111,8 @@ function App() {
           try {
             const txs = JSON.parse(localStorage.getItem('btc-tx-v2')||'[]');
             const wals = JSON.parse(localStorage.getItem('btc-wallets')||'[]');
-            const mod = localStorage.getItem('btc-last-modified')||new Date().toISOString();
+            const mod = new Date().toISOString();
+            localStorage.setItem('btc-last-modified', mod);
             const storedVault = (() => { try { return JSON.parse(localStorage.getItem(VAULT_STORAGE_KEY)||'null'); } catch { return null; } })();
             await GDriveSync.push({ transactions: txs, wallets: wals, settings: next, vault: storedVault, lastModified: mod });
             setSyncState('synced');
@@ -1125,6 +1132,7 @@ function App() {
   });
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('btc-sidebar-collapsed') === 'true');
   const [moreStats, setMoreStats] = useState(false);
+  const [walletsOpen, setWalletsOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
@@ -2012,38 +2020,36 @@ function App() {
               <span style={{display:'inline-flex',transform:moreStats?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
             </button>
 
-            {/* Wallet holdings donut chart */}
+            {/* ── Charts ── */}
+            <DashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={updateSettings} />
+
+            {/* Wallet holdings pie chart */}
             {(() => {
-              const DONUT_COLORS = ['#f7931a','#3b82f6','#10b981','#8b5cf6','#ef4444','#f59e0b','#06b6d4','#ec4899','#84cc16','#6366f1'];
+              const PIE_COLORS = ['#f7931a','#3b82f6','#10b981','#8b5cf6','#ef4444','#f59e0b','#06b6d4','#ec4899','#84cc16','#6366f1'];
               const walletData = activeWallets
                 .map(w => ({ name:w.name, type:w.type, amount:walletHoldings[w.name]||0 }))
                 .filter(d => d.amount > 0.00000001)
                 .sort((a,b) => b.amount - a.amount);
               const totalBTC = walletData.reduce((s,d) => s+d.amount, 0);
               if(!walletData.length) return null;
-              const R = 80, STROKE = 32, C = 2 * Math.PI * R;
-              let offset = 0;
-              const segments = walletData.map((d,i) => {
-                const pct = d.amount / totalBTC;
-                const seg = { ...d, pct, color:DONUT_COLORS[i % DONUT_COLORS.length], dashArray:`${pct*C} ${C}`, dashOffset:-offset };
-                offset += pct * C;
-                return seg;
-              });
+              const segments = walletData.map((d,i) => ({
+                ...d, pct: d.amount / totalBTC, color: PIE_COLORS[i % PIE_COLORS.length]
+              }));
               return (
                 <div className="card">
-                  <div className="card-header">
-                    <div className="card-title">Holdings by Wallet</div>
-                    <button className="btn btn-secondary btn-sm" onClick={()=>setTab('wallets')}>Manage Wallets →</button>
+                  <div className="card-header" style={{cursor:'pointer'}} onClick={()=>setWalletsOpen(o=>!o)}>
+                    <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+                      <span style={{display:'inline-flex',transform:walletsOpen?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
+                      <div className="card-title">Holdings by Wallet</div>
+                    </div>
+                    <button className="btn btn-secondary btn-sm" onClick={e=>{e.stopPropagation();setTab('wallets');}}>Manage Wallets →</button>
                   </div>
-                  <div className="card-body">
-                    <DonutChart segments={segments} totalBTC={totalBTC} btcPrice={btcPrice} R={R} STROKE={STROKE} C={C} />
-                  </div>
+                  {walletsOpen && <div className="card-body">
+                    <PieChart segments={segments} totalBTC={totalBTC} btcPrice={btcPrice} />
+                  </div>}
                 </div>
               );
             })()}
-
-            {/* ── Charts ── */}
-            <DashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={updateSettings} />
           </>
         )}
 
