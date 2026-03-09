@@ -1156,7 +1156,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           data={_movingAvg} dataKey="price" title="BTC Price & Moving Averages"
           subtitle={fmtCompactUSD(_movingAvg[_movingAvg.length-1]?.price||0)+' current'}
           color="#f7931a" formatY={fmtCompactUSD} formatTooltip={v => '$'+Math.round(v).toLocaleString()} publicData
-          overlay={_movingAvg.some(d=>d.rsi14!=null) ? { data: _movingAvg.filter(d=>d.rsi14!=null), dataKey: 'rsi14', color: '#8b5cf6', formatY: v => Math.round(v), formatTooltip: v => 'RSI: '+v.toFixed(1), label: 'RSI (14)' } : undefined}
+          overlay={(settings.maLines?.rsi14!==false) && _movingAvg.some(d=>d.rsi14!=null) ? { data: _movingAvg.filter(d=>d.rsi14!=null), dataKey: 'rsi14', color: '#8b5cf6', formatY: v => Math.round(v), formatTooltip: v => 'RSI: '+v.toFixed(1), label: 'RSI (14)' } : undefined}
           lines={[
             ...((settings.maLines?.ma50d!==false) && _movingAvg.some(d=>d.ma50d!=null) ? [{ dataKey:'ma50d', color:'#10b981', label:'50D MA', dashed:false, formatTooltip:v=>'50D: $'+Math.round(v).toLocaleString() }] : []),
             ...((settings.maLines?.ma200d!==false) && _movingAvg.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
@@ -2396,7 +2396,13 @@ function App() {
 
   // ─── Render ───────────────────────────────────────────────────────────────
   const isSampleMode = transactions.length === 0;
-  const effectiveSettings = settings;
+  const effectiveSettings = isSampleMode
+    ? {
+        ...settings,
+        bgDots: settings.bgDots === undefined ? false : settings.bgDots,
+        showVault: settings.showVault === undefined ? false : settings.showVault,
+      }
+    : settings;
   const effectiveHiddenCharts = isSampleMode && (settings.hiddenCharts||{}).monthly === undefined
     ? { ...(settings.hiddenCharts||{}), monthly: true }
     : (settings.hiddenCharts||{});
@@ -3201,6 +3207,7 @@ function App() {
                 { key:'ma50d', label:'50-Day MA', color:'#10b981' },
                 { key:'ma200d', label:'200-Day MA', color:'#2563eb' },
                 { key:'ma200w', label:'200-Week MA', color:'#dc2626' },
+                { key:'rsi14', label:'RSI (14)', color:'#8b5cf6' },
               ];
               return (
                 <div className="card">
@@ -3315,6 +3322,9 @@ function App() {
                       <div style={{fontSize:'.9375rem',fontWeight:500,fontFamily:typeof val==='number'?'JetBrains Mono':undefined}}>{val}</div>
                     </div>
                   ))}
+                </div>
+                <div style={{marginTop:'1rem',paddingTop:'1rem',borderTop:'1px solid var(--border-color)',fontSize:'.875rem',color:'var(--text-secondary)'}}>
+                  Feedback: <a href="mailto:info@satledger.com" style={{color:'var(--bitcoin-orange)',fontWeight:600,textDecoration:'none'}}>info@satledger.com</a>
                 </div>
               </div>
             </div>
@@ -3527,6 +3537,11 @@ function App() {
 
               <h4 style={{color:'var(--text-primary)',marginBottom:'.375rem',fontSize:'.9375rem'}}>Export & Backup</h4>
               <p>Use the <strong>Export</strong> tab to download a full JSON backup or generate a CoinLedger-compatible CSV for tax reporting. You can restore from a backup at any time in <strong>Settings</strong>.</p>
+
+              <div style={{marginTop:'1rem',paddingTop:'1rem',borderTop:'1px solid var(--border-color)',fontSize:'.875rem'}}>
+                <span style={{color:'var(--text-secondary)'}}>Feedback: </span>
+                <a href="mailto:info@satledger.com" style={{color:'var(--bitcoin-orange)',fontWeight:600,textDecoration:'none'}}>info@satledger.com</a>
+              </div>
             </div>
           </div>
         </div>
