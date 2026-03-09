@@ -363,8 +363,8 @@
     .dashboard-filter-actions { display:flex; gap:.375rem; flex-wrap:wrap; }
     .dashboard-wallet-chips { display:flex; gap:.375rem; flex-wrap:wrap; flex:1; }
     .dashboard-range-row { display:flex; gap:.375rem; margin-bottom:1rem; align-items:center; flex-wrap:wrap; }
-    .dashboard-filter-row .btn { padding:.25rem .75rem; font-size:.75rem; line-height:1.2; }
-    .wallet-chip { display:inline-flex; align-items:center; gap:.35rem; padding:.25rem .75rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-secondary); font-size:.75rem; line-height:1.2; cursor:pointer; transition:all .15s; }
+    .dashboard-filter-row .btn { height:28px; padding:0 .75rem; font-size:.75rem; line-height:1; box-sizing:border-box; }
+    .wallet-chip { display:inline-flex; align-items:center; gap:.35rem; height:28px; padding:0 .75rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-secondary); font-size:.75rem; line-height:1; box-sizing:border-box; cursor:pointer; transition:all .15s; }
     .wallet-chip:hover { border-color:var(--border-hover); color:var(--text-primary); }
     .wallet-chip.active { background:var(--bitcoin-light); color:var(--bitcoin-orange); border-color:rgba(247,147,26,.35); }
     .wallet-chip:disabled { opacity:.6; cursor:default; }
@@ -496,7 +496,8 @@
       .charts-grid { grid-template-columns:1fr !important; }
       .dashboard-filter-row { align-items:stretch; }
       .dashboard-wallet-chips { gap:.3125rem; }
-      .wallet-chip { padding:.25rem .625rem; font-size:.6875rem; line-height:1.2; }
+      .dashboard-filter-row .btn { height:28px; padding:0 .625rem; }
+      .wallet-chip { height:28px; padding:0 .625rem; font-size:.6875rem; line-height:1; }
       .dashboard-range-row { gap:.3125rem; }
       .dashboard-range-row .btn { padding:.25rem .625rem !important; }
     }
