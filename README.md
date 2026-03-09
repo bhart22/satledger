@@ -3,9 +3,7 @@
 Live site: [satledger.com](https://satledger.com)
 
 A personal Bitcoin portfolio tracker that runs entirely in your browser. No server, no backend, no signup — just a single HTML file.
-
 <img width="1892" height="979" alt="screenshot example" src="https://github.com/user-attachments/assets/4a8d0ca5-8efb-4e50-929f-92e25a30bc6a" />
-
 
 ## Features
 
