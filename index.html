@@ -1337,7 +1337,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const linePaths = hasLines ? lines.map(ln => buildLinePath(ln, xScale, yScale)) : [];
 
   // Bar dimensions
-  const barW = isBar && data.length > 1 ? Math.max(2, Math.min(16, (iW / data.length) * 0.7)) : 12;
+  const barW = isBar && data.length > 1 ? Math.max(2, Math.min(12, (iW / data.length) * 0.5)) : 10;
 
   // Y axis ticks
   const yStep = niceStep(yRange, 4);
@@ -1345,14 +1345,19 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const yTicks = [];
   for(let v=yTickStart; v<=yMax+yStep*0.01 && yTicks.length<12; v+=yStep) yTicks.push(+v.toPrecision(10));
   if(!yTicks.length) yTicks.push(yMin, yMax);
-  // X axis ticks
-  const xTickIdxs = [0, 0, data.length-1];
-  const midT = tMin + tRange/2;
-  let midDist = Infinity;
-  for(let i=0;i<timestamps.length;i++) {
-    const d = Math.abs(timestamps[i]-midT);
-    if(d<midDist) { midDist=d; xTickIdxs[1]=i; }
-  }
+  const buildTimeTicks = (count, width, leftPad) => {
+    if(count <= 1 || !isFinite(tRange) || tRange <= 0) {
+      return [{ x:leftPad + width/2, t:tMin }];
+    }
+    return Array.from({ length: count }, (_, idx) => {
+      const pct = idx / (count - 1);
+      return {
+        x: leftPad + pct * width,
+        t: tMin + pct * tRange,
+      };
+    });
+  };
+  const xTicks = buildTimeTicks(isBar ? 4 : 3, iW, PL);
 
   const gradId = 'grad_'+dataKey.replace(/[^a-z]/g,'');
 
@@ -1382,9 +1387,12 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
     setTooltip({ x: xScale(closest), y: yScale(d[dataKey]), val: d[dataKey], date: d.date, oVal, lineVals, isExpanded: false });
   }
 
-  const fmtTickDate = d => {
-    const dt = new Date(d+'T12:00:00');
-    return dt.toLocaleDateString('en-US',{month:'short',year:'2-digit'});
+  const fmtTickDate = input => {
+    const dt = typeof input === 'number' ? new Date(input) : new Date(input+'T12:00:00');
+    const options = tRange < 1000 * 60 * 60 * 24 * 120
+      ? { month:'short', day:'numeric' }
+      : { month:'short', year:'2-digit' };
+    return dt.toLocaleDateString('en-US', options);
   };
 
   // Expanded chart dimensions
@@ -1394,7 +1402,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const eyScale = v => EPT + eIH - ((v-yMin)/yRange)*eIH;
   const eoXScale = i => hasOverlay ? EPL + ((oTimestamps[i]-tMin)/tRange)*eIW : 0;
   const eoYScale = v => EPT + eIH - ((v-oMin)/oRange)*eIH;
-  const eBarW = isBar && data.length > 1 ? Math.max(3, Math.min(24, (eIW / data.length) * 0.7)) : 16;
+  const eBarW = isBar && data.length > 1 ? Math.max(3, Math.min(18, (eIW / data.length) * 0.5)) : 12;
   const ePathD = !isBar ? data.map((d,i)=>`${i===0?'M':'L'}${exScale(i).toFixed(1)},${eyScale(d[dataKey]).toFixed(1)}`).join(' ') : '';
   const eAreaD = !isBar ? ePathD+` L${exScale(data.length-1).toFixed(1)},${(EPT+eIH).toFixed(1)} L${exScale(0).toFixed(1)},${(EPT+eIH).toFixed(1)} Z` : '';
   const eoPathD = hasOverlay ? overlay.data.map((d,i)=>`${i===0?'M':'L'}${eoXScale(i).toFixed(1)},${eoYScale(d[overlay.dataKey]).toFixed(1)}`).join(' ') : '';
@@ -1407,15 +1415,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const eoTickStart = hasOverlay ? Math.ceil(oMin / eoStep) * eoStep : 0;
   const eoTicks = [];
   if(hasOverlay) { for(let v=eoTickStart; v<=oMax+eoStep*0.01 && eoTicks.length<16; v+=eoStep) eoTicks.push(+v.toPrecision(10)); }
-  // More X ticks for expanded
-  const eXTickCount = 5;
-  const eXTickIdxs = [];
-  for(let t=0;t<eXTickCount;t++) {
-    const targetT = tMin + (t/(eXTickCount-1))*tRange;
-    let best=0, bestD=Infinity;
-    for(let i=0;i<timestamps.length;i++) { const dd=Math.abs(timestamps[i]-targetT); if(dd<bestD){bestD=dd;best=i;} }
-    eXTickIdxs.push(best);
-  }
+  const eXTicks = buildTimeTicks(isBar ? 6 : 5, eIW, EPL);
 
   function handleExpandedMouseMove(e) {
     if(!expandedSvgRef.current) return;
@@ -1455,7 +1455,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
     const cLinePaths = isExp?eLinePaths:linePaths;
     const cYTicks = isExp?eyTicks:yTicks;
     const cOTicks = isExp?eoTicks:oTicks;
-    const cXTickIdxs = isExp?eXTickIdxs:xTickIdxs;
+    const cXTicks = isExp?eXTicks:xTicks;
     const cRef = isExp?expandedSvgRef:svgRef;
     const cMouseMove = isExp?handleExpandedMouseMove:handleMouseMove;
     const strokeW = isExp?2.5:2;
@@ -1502,9 +1502,9 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             {overlay.formatY(v)}
           </text>
         ))}
-        {cXTickIdxs.map(i=>(
-          <text key={i} x={cXScale(i)} y={cH-4} textAnchor="middle" fontSize={isExp?'11':'10'} fill="var(--text-tertiary)">
-            {fmtTickDate(data[i].date)}
+        {cXTicks.map((tick,i)=>(
+          <text key={i} x={tick.x} y={cH-4} textAnchor="middle" fontSize={isExp?'11':'10'} fill="var(--text-tertiary)">
+            {fmtTickDate(tick.t)}
           </text>
         ))}
         {tooltip && tooltip.isExpanded===!!isExp && (
@@ -2547,7 +2547,7 @@ function App() {
               <div className="stat-card">
                 <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
                   Holdings
-                  <span title="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." style={{cursor:'help',fontSize:'.75rem',color:'var(--text-tertiary)',border:'1px solid var(--border-color)',borderRadius:'50%',width:16,height:16,display:'inline-flex',alignItems:'center',justifyContent:'center',lineHeight:1,flexShrink:0}}>?</span>
+                  <InfoTip text="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." />
                 </div>
                 <div className="stat-value btc">{fmtBTC(trackedHoldings)}</div>
                 <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(trackedHoldings*(btcPrice||0))}`:''}</div>
