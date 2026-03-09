@@ -1,5 +1,7 @@
 # SatLedger
 
+Live site: [satledger.com](https://satledger.com)
+
 A personal Bitcoin portfolio tracker that runs entirely in your browser. No server, no backend, no signup — just a single HTML file.
 
 ## Features
@@ -60,7 +62,9 @@ Click the **Sign in with Google** button in the header to enable cloud backup. Y
 
 ## Hosting
 
-Since it's a single HTML file, you can host it anywhere:
+SatLedger is currently hosted at [satledger.com](https://satledger.com).
+
+Since it's a single HTML file, you can also host it anywhere:
 - GitHub Pages
 - Any static file host
 - Open locally from your filesystem

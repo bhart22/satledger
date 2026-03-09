@@ -1057,6 +1057,8 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   const chartRangeVal = settings.chartRange || 'All';
   const hc = settings.hiddenCharts || {};
   const effectiveHiddenCharts = isSample && hc.monthly === undefined ? { ...hc, monthly: true } : hc;
+  const ml = settings.maLines || {};
+  const effectiveMaLines = isSample && ml.rsi14 === undefined ? { ...ml, rsi14: false } : ml;
   const _costData = isSample ? sc.chart.filter(d=>d.avgCost!==null) : costData;
   const _usdHoldings = isSample ? sc.holdings : usdHoldingsData;
   const _dca = isSample ? sc.dca : rangeFiltered.dca;
@@ -1156,11 +1158,11 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           data={_movingAvg} dataKey="price" title="BTC Price & Moving Averages"
           subtitle={fmtCompactUSD(_movingAvg[_movingAvg.length-1]?.price||0)+' current'}
           color="#f7931a" formatY={fmtCompactUSD} formatTooltip={v => '$'+Math.round(v).toLocaleString()} publicData
-          overlay={(settings.maLines?.rsi14!==false) && _movingAvg.some(d=>d.rsi14!=null) ? { data: _movingAvg.filter(d=>d.rsi14!=null), dataKey: 'rsi14', color: '#8b5cf6', formatY: v => Math.round(v), formatTooltip: v => 'RSI: '+v.toFixed(1), label: 'RSI (14)' } : undefined}
+          overlay={(effectiveMaLines.rsi14!==false) && _movingAvg.some(d=>d.rsi14!=null) ? { data: _movingAvg.filter(d=>d.rsi14!=null), dataKey: 'rsi14', color: '#8b5cf6', formatY: v => Math.round(v), formatTooltip: v => 'RSI: '+v.toFixed(1), label: 'RSI (14)' } : undefined}
           lines={[
-            ...((settings.maLines?.ma50d!==false) && _movingAvg.some(d=>d.ma50d!=null) ? [{ dataKey:'ma50d', color:'#10b981', label:'50D MA', dashed:false, formatTooltip:v=>'50D: $'+Math.round(v).toLocaleString() }] : []),
-            ...((settings.maLines?.ma200d!==false) && _movingAvg.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
-            ...((settings.maLines?.ma200w!==false) && _movingAvg.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#dc2626', label:'200W MA', dashed:true, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma50d!==false) && _movingAvg.some(d=>d.ma50d!=null) ? [{ dataKey:'ma50d', color:'#10b981', label:'50D MA', dashed:false, formatTooltip:v=>'50D: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma200d!==false) && _movingAvg.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma200w!==false) && _movingAvg.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#dc2626', label:'200W MA', dashed:true, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
           ]}
         /> : null,
       };
@@ -2406,6 +2408,9 @@ function App() {
   const effectiveHiddenCharts = isSampleMode && (settings.hiddenCharts||{}).monthly === undefined
     ? { ...(settings.hiddenCharts||{}), monthly: true }
     : (settings.hiddenCharts||{});
+  const effectiveMaLines = isSampleMode && (settings.maLines||{}).rsi14 === undefined
+    ? { ...(settings.maLines||{}), rsi14: false }
+    : (settings.maLines||{});
 
   return (
     <div className={`app ${effectiveSettings.hideValues?'values-hidden':''}`}>
@@ -3251,7 +3256,7 @@ function App() {
                                   <span style={{fontSize:'.8125rem',fontWeight:500}}>{ma.label}</span>
                                 </div>
                                 <label className="theme-switch" style={{flexShrink:0}}>
-                                  <input type="checkbox" checked={(settings.maLines||{})[ma.key]!==false} onChange={e=>{
+                                  <input type="checkbox" checked={effectiveMaLines[ma.key]!==false} onChange={e=>{
                                     const ml = {...(settings.maLines||{})};
                                     if(e.target.checked) delete ml[ma.key]; else ml[ma.key]=false;
                                     updateSettings({maLines:ml});
