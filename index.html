@@ -328,6 +328,7 @@
     .stat-value.red { color:var(--red); }
     .values-hidden .stat-value, .values-hidden .stat-sub, .values-hidden .wallet-btc, .values-hidden .wallet-usd, .values-hidden .pie-total, .values-hidden .chart-subtitle { filter:blur(8px); user-select:none; pointer-events:none; }
     .values-hidden .public-data .chart-subtitle { filter:none; user-select:auto; pointer-events:auto; }
+    .scope-badge { display:inline-flex; align-items:center; padding:.16rem .45rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-tertiary); color:var(--text-tertiary); font-size:.625rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; white-space:nowrap; }
 
     /* Badges */
     .badge { display:inline-flex; padding:.2rem .5rem; border-radius:5px; font-size:.6875rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; white-space:nowrap; }
@@ -355,6 +356,16 @@
     .filter-select { padding:.5rem .75rem; border:1px solid var(--border-color); border-radius:8px; font-size:.8125rem; background:var(--bg-secondary); color:var(--text-primary); font-family:inherit; cursor:pointer; }
     .filter-select:focus { outline:none; border-color:var(--bitcoin-orange); }
     .filter-count { font-size:.75rem; color:var(--text-tertiary); white-space:nowrap; margin-left:auto; }
+    .dashboard-filter-row { display:flex; gap:.625rem; align-items:flex-start; flex-wrap:wrap; margin-bottom:.75rem; }
+    .dashboard-filter-label { display:flex; flex-direction:column; gap:.125rem; min-width:110px; padding-top:.35rem; }
+    .dashboard-filter-label strong { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-secondary); }
+    .dashboard-filter-label span { font-size:.75rem; color:var(--text-tertiary); }
+    .dashboard-filter-actions { display:flex; gap:.375rem; flex-wrap:wrap; }
+    .dashboard-wallet-chips { display:flex; gap:.375rem; flex-wrap:wrap; flex:1; }
+    .wallet-chip { display:inline-flex; align-items:center; gap:.35rem; padding:.375rem .75rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-secondary); font-size:.75rem; cursor:pointer; transition:all .15s; }
+    .wallet-chip:hover { border-color:var(--border-hover); color:var(--text-primary); }
+    .wallet-chip.active { background:var(--bitcoin-light); color:var(--bitcoin-orange); border-color:rgba(247,147,26,.35); }
+    .wallet-chip:disabled { opacity:.6; cursor:default; }
 
     /* Modal */
     .overlay { position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter:blur(4px); display:flex; align-items:center; justify-content:center; z-index:1000; padding:1rem; animation:fadeIn .2s ease; }
@@ -756,17 +767,25 @@ function buildMovingAverageSeries(allDays) {
 }
 
 // ─── Dashboard Charts ─────────────────────────────────────────────────────────
-function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, historicalPriceLoading, settings, updateSettings }) {
-  const { chartData, holdingsHistory, dcaData, feeBurnData, rewardData, plData, monthlySummary } = React.useMemo(() => {
+function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, historicalPriceLoading, settings, updateSettings, selectedWallets }) {
+  const activeWallets = React.useMemo(() => wallets.filter(w => !w.archived), [wallets]);
+  const selectedWalletSet = React.useMemo(() => new Set(selectedWallets || []), [selectedWallets]);
+  const hasWalletFilter = selectedWalletSet.size > 0;
+  const filteredScopeLabel = hasWalletFilter ? 'Selected wallets' : null;
+  const globalScopeLabel = hasWalletFilter ? 'Portfolio-wide' : null;
+  const { chartData, accumulatedData, holdingsHistory, dcaData, feeBurnData, rewardData, plData, monthlySummary } = React.useMemo(() => {
     const sorted = transactions
       .map(tx => ({ ...tx, normalizedDate: normalizeDate(tx.date) }))
       .filter(tx => tx.normalizedDate)
       .sort((a,b) => a.normalizedDate.localeCompare(b.normalizedDate));
     let totalCost = 0;
     const walletBalances = {};
+    const filteredWalletBalances = {};
     const points = [], holdingsPoints = [];
+    const accumulatedPoints = [];
     const dcaMap = {};
     let runningBTC = 0;
+    let filteredRunningBTC = 0;
     let runningBTCForCost = 0;
     let cumulativeFees = 0;
     let cumulativeRewards = 0;
@@ -777,12 +796,17 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       if(!name) return;
       if(walletBalances[name]===undefined) walletBalances[name]=0;
     };
+    const ensureFilteredWallet = (name) => {
+      if(!name || !selectedWalletSet.has(name)) return;
+      if(filteredWalletBalances[name]===undefined) filteredWalletBalances[name]=0;
+    };
     sorted.forEach(tx => {
       const amt = parseFloat(tx.amount)||0;
       const fee = parseFloat(tx.fee)||0;
       const price = parseFloat(tx.price)||0;
       const w1 = tx.wallet;
       const w2 = tx.wallet2;
+      const matchesSelected = !hasWalletFilter || selectedWalletSet.has(w1) || selectedWalletSet.has(w2);
 
       // Always track BTC balance (all transactions, including excluded)
       if(tx.type==='Buy'||tx.type==='Reward') { runningBTC+=amt; }
@@ -808,7 +832,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       }
 
       // DCA tracking — Buy transactions only
-      if(tx.type==='Buy' && !tx.excludeStats) {
+      if(tx.type==='Buy' && !tx.excludeStats && matchesSelected) {
         const buyUsd = tx.totalUsd ? parseFloat(tx.totalUsd) : (amt * price);
         if(buyUsd > 0) {
           dcaMap[tx.normalizedDate] = (dcaMap[tx.normalizedDate]||0) + buyUsd;
@@ -817,7 +841,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
 
       // Fee burn tracking — only Transfer/Consolidation fees (actual BTC lost to network)
       // Buy/Sell fees are USD-denominated exchange fees, not BTC burn
-      if(fee > 0 && !tx.excludeStats && (tx.type==='Transfer'||tx.type==='Consolidation')) {
+      if(fee > 0 && !tx.excludeStats && matchesSelected && (tx.type==='Transfer'||tx.type==='Consolidation')) {
         cumulativeFees += fee;
         const lastFee = feePoints[feePoints.length-1];
         if(lastFee && lastFee.date===tx.normalizedDate) feePoints[feePoints.length-1] = { date:tx.normalizedDate, fees:+cumulativeFees.toFixed(8) };
@@ -825,7 +849,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       }
 
       // Reward income tracking
-      if(tx.type==='Reward' && !tx.excludeStats) {
+      if(tx.type==='Reward' && !tx.excludeStats && matchesSelected) {
         cumulativeRewards += amt;
         const lastRew = rewardPoints[rewardPoints.length-1];
         if(lastRew && lastRew.date===tx.normalizedDate) rewardPoints[rewardPoints.length-1] = { date:tx.normalizedDate, rewards:+cumulativeRewards.toFixed(8) };
@@ -841,7 +865,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       }
 
       // Monthly summary
-      if(!tx.excludeStats) {
+      if(!tx.excludeStats && matchesSelected) {
         const month = tx.normalizedDate.slice(0,7); // YYYY-MM
         if(!monthlyMap[month]) monthlyMap[month] = { buys:0, sells:0, rewards:0, fees:0 };
         const buyUsd = tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price);
@@ -854,6 +878,8 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       // Track included-transaction holdings history for dashboard value charts.
       ensureWallet(w1);
       ensureWallet(w2);
+      ensureFilteredWallet(w1);
+      ensureFilteredWallet(w2);
       if(tx.type==='Buy'||tx.type==='Reward') { if(w1) walletBalances[w1]+=amt; }
       else if(tx.type==='Sell') { if(w1) walletBalances[w1]-=amt; }
       else if(tx.type==='Transfer') {
@@ -865,13 +891,50 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       const includedHoldingsBTC = Object.values(walletBalances)
         .reduce((sum, bal) => sum + bal, 0);
 
+      if(matchesSelected) {
+        if(tx.type==='Buy'||tx.type==='Reward') {
+          if(selectedWalletSet.has(w1)) {
+            filteredRunningBTC += amt;
+            filteredWalletBalances[w1] += amt;
+          }
+        } else if(tx.type==='Sell') {
+          if(selectedWalletSet.has(w1)) {
+            filteredRunningBTC -= amt;
+            filteredWalletBalances[w1] -= amt;
+          }
+        } else if(tx.type==='Transfer') {
+          const fromSelected = selectedWalletSet.has(w1);
+          const toSelected = selectedWalletSet.has(w2);
+          if(fromSelected) {
+            filteredRunningBTC -= (amt + fee);
+            filteredWalletBalances[w1] -= (amt + fee);
+          }
+          if(toSelected) {
+            filteredRunningBTC += amt;
+            filteredWalletBalances[w2] += amt;
+          }
+        } else if(tx.type==='Consolidation') {
+          if(selectedWalletSet.has(w1)) {
+            filteredRunningBTC -= fee;
+            filteredWalletBalances[w1] -= fee;
+          }
+        }
+      }
+      const filteredHoldingsBTC = hasWalletFilter
+        ? Object.values(filteredWalletBalances).reduce((sum, bal) => sum + bal, 0)
+        : includedHoldingsBTC;
+
       const totalBTC = runningBTC;
       const avgCost = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : null;
       const pt = { date:tx.normalizedDate, btc:+totalBTC.toFixed(8), avgCost:avgCost!==null ? +avgCost.toFixed(2) : null };
-      const holdingsPt = { date:tx.normalizedDate, holdingsBtc:+includedHoldingsBTC.toFixed(8) };
+      const accumulatedPt = { date:tx.normalizedDate, btc:+(hasWalletFilter ? filteredRunningBTC : totalBTC).toFixed(8) };
+      const holdingsPt = { date:tx.normalizedDate, holdingsBtc:+filteredHoldingsBTC.toFixed(8) };
       const last = points[points.length-1];
       if(last && last.date===tx.normalizedDate) points[points.length-1]=pt;
       else points.push(pt);
+      const lastAccumulated = accumulatedPoints[accumulatedPoints.length-1];
+      if(lastAccumulated && lastAccumulated.date===tx.normalizedDate) accumulatedPoints[accumulatedPoints.length-1]=accumulatedPt;
+      else accumulatedPoints.push(accumulatedPt);
       const lastHoldings = holdingsPoints[holdingsPoints.length-1];
       if(lastHoldings && lastHoldings.date===tx.normalizedDate) holdingsPoints[holdingsPoints.length-1]=holdingsPt;
       else holdingsPoints.push(holdingsPt);
@@ -883,17 +946,20 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     while(holdingsPoints.length > 1 && holdingsPoints[0].holdingsBtc < 0.00000001) {
       holdingsPoints.shift();
     }
+    while(accumulatedPoints.length > 1 && accumulatedPoints[0].btc < 0.00000001) {
+      accumulatedPoints.shift();
+    }
     const dcaPts = Object.entries(dcaMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,buyUsd])=>({date,buyUsd:+buyUsd.toFixed(2)}));
     const monthlyPts = Object.entries(monthlyMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([month, d])=>({
       date: month+'-15', month, buys:+d.buys.toFixed(2), sells:+d.sells.toFixed(2), rewards:+d.rewards.toFixed(8), fees:+d.fees.toFixed(8)
     }));
-    return { chartData: points, holdingsHistory: holdingsPoints, dcaData: dcaPts, feeBurnData: feePoints, rewardData: rewardPoints, plData: plPoints, monthlySummary: monthlyPts };
-  }, [transactions, wallets]);
+    return { chartData: points, accumulatedData: accumulatedPoints, holdingsHistory: holdingsPoints, dcaData: dcaPts, feeBurnData: feePoints, rewardData: rewardPoints, plData: plPoints, monthlySummary: monthlyPts };
+  }, [transactions, wallets, hasWalletFilter, selectedWalletSet]);
 
   // Time-range filtering
   const rangeFiltered = React.useMemo(() => {
     const range = settings.chartRange || 'All';
-    if(range === 'All') return { chart: chartData, holdings: holdingsHistory, dca: dcaData, fees: feeBurnData, rewards: rewardData, pl: plData, monthly: monthlySummary };
+    if(range === 'All') return { chart: chartData, accumulated: accumulatedData, holdings: holdingsHistory, dca: dcaData, fees: feeBurnData, rewards: rewardData, pl: plData, monthly: monthlySummary };
     let cutoff;
     if(range === 'Custom') {
       cutoff = settings.chartRangeCustom || '2000-01-01';
@@ -907,6 +973,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     }
     return {
       chart: chartData.filter(d => d.date >= cutoff),
+      accumulated: accumulatedData.filter(d => d.date >= cutoff),
       holdings: holdingsHistory.filter(d => d.date >= cutoff),
       dca: dcaData.filter(d => d.date >= cutoff),
       fees: feeBurnData.filter(d => d.date >= cutoff),
@@ -914,7 +981,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       pl: plData.filter(d => d.date >= cutoff),
       monthly: monthlySummary.filter(d => d.date >= cutoff),
     };
-  }, [chartData, holdingsHistory, dcaData, feeBurnData, rewardData, plData, monthlySummary, settings.chartRange, settings.chartRangeCustom]);
+  }, [chartData, accumulatedData, holdingsHistory, dcaData, feeBurnData, rewardData, plData, monthlySummary, settings.chartRange, settings.chartRangeCustom]);
 
   const costData = React.useMemo(() => rangeFiltered.chart.filter(d=>d.avgCost!==null), [rangeFiltered.chart]);
   const usdHoldingsData = React.useMemo(() => {
@@ -947,7 +1014,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   // Price overlay data for Accumulated BTC chart
   const priceOverlayData = React.useMemo(() => {
     if(!historicalPrices || !Object.keys(historicalPrices).length) return [];
-    const chartDates = rangeFiltered.chart;
+    const chartDates = rangeFiltered.accumulated;
     if(!chartDates.length) return [];
     const minDate = chartDates[0].date;
     const maxDate = chartDates[chartDates.length-1].date;
@@ -955,7 +1022,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       .filter(([d]) => d >= minDate && d <= maxDate)
       .sort((a,b) => a[0].localeCompare(b[0]))
       .map(([date, price]) => ({ date, price }));
-  }, [historicalPrices, rangeFiltered.chart]);
+  }, [historicalPrices, rangeFiltered.accumulated]);
 
   // BTC Price with 200D & 200W Moving Averages
   const maChartData = React.useMemo(() => {
@@ -1053,7 +1120,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     return '$'+Math.round(v);
   };
 
-  const visibleChart = isSample ? sc.chart : rangeFiltered.chart;
+  const visibleChart = isSample ? sc.chart : rangeFiltered.accumulated;
   const chartRangeVal = settings.chartRange || 'All';
   const hc = settings.hiddenCharts || {};
   const effectiveHiddenCharts = isSample && hc.monthly === undefined ? { ...hc, monthly: true } : hc;
@@ -1069,7 +1136,28 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   const _priceOverlay = isSample ? sc.priceOverlay : priceOverlayData;
   const hasLiveMovingAvg = maChartData.length > 0;
   const _movingAvg = hasLiveMovingAvg ? maChartData : (isSample ? sc.movingAvg : maChartData);
+  const walletFilterSelection = (settings.dashboardWalletFilter || []).filter(name => activeWallets.some(w => w.name === name));
+  const noFilteredData = hasWalletFilter && !visibleChart.length && !_usdHoldings.length && !_dca.length && !_fees.length && !_rewards.length && !_monthly.length;
   const S = isSample || undefined; // sampleData prop
+  const toggleWalletFilter = (name) => {
+    const current = new Set(walletFilterSelection);
+    if(current.has(name)) current.delete(name);
+    else current.add(name);
+    updateSettings({ dashboardWalletFilter: [...current] });
+  };
+  const renderFilteredEmptyCard = (title) => (
+    <div className="card">
+      <div className="card-header" style={{alignItems:'center'}}>
+        <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
+          <div className="card-title">{title}</div>
+          <span className="scope-badge">Selected wallets</span>
+        </div>
+      </div>
+      <div className="card-body" style={{color:'var(--text-secondary)',fontSize:'.875rem'}}>
+        No activity for the selected wallets in this time range.
+      </div>
+    </div>
+  );
 
   return (
     <>
@@ -1082,37 +1170,68 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
         </div>
       </div>
     )}
-    {!isSample && <div style={{display:'flex',gap:'.375rem',marginBottom:'.75rem',alignItems:'center',flexWrap:'wrap'}}>
-      {['3M','6M','1Y','5Y','YTD','All','Custom'].map(r => (
-        <button key={r} onClick={() => updateSettings({ chartRange: r })}
-          className={chartRangeVal===r ? 'btn btn-primary' : 'btn btn-secondary'}
-          style={{padding:'.25rem .75rem',fontSize:'.75rem'}}>
-          {r}
-        </button>
-      ))}
-      {chartRangeVal === 'Custom' && (
-        <input type="date"
-          value={settings.chartRangeCustom || ''}
-          onChange={e => updateSettings({ chartRangeCustom: e.target.value })}
-          style={{padding:'.25rem .5rem',fontSize:'.75rem',borderRadius:'8px',
-            border:'1px solid var(--border-color)',background:'var(--bg-secondary)',
-            color:'var(--text-primary)',fontFamily:'inherit'}}
-        />
+    {!isSample && <>
+      <div className="dashboard-filter-row">
+        <div className="dashboard-filter-label">
+          <strong>Dashboard Wallets</strong>
+          <span>{hasWalletFilter ? `${walletFilterSelection.length} selected` : 'All active wallets'}</span>
+        </div>
+        <div className="dashboard-filter-actions">
+          <button className={hasWalletFilter ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'} onClick={() => updateSettings({ dashboardWalletFilter: [] })}>All</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => updateSettings({ dashboardWalletFilter: [] })} disabled={!hasWalletFilter}>Clear</button>
+        </div>
+        <div className="dashboard-wallet-chips">
+          {activeWallets.map(wallet => (
+            <button
+              key={wallet.id}
+              className={`wallet-chip ${walletFilterSelection.includes(wallet.name) ? 'active' : ''}`}
+              onClick={() => toggleWalletFilter(wallet.name)}
+            >
+              <span>{wallet.name}</span>
+              <span style={{color:'var(--text-tertiary)'}}>{wallet.type}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div style={{display:'flex',gap:'.375rem',marginBottom:'1rem',alignItems:'center',flexWrap:'wrap'}}>
+        {['3M','6M','1Y','5Y','YTD','All','Custom'].map(r => (
+          <button key={r} onClick={() => updateSettings({ chartRange: r })}
+            className={chartRangeVal===r ? 'btn btn-primary' : 'btn btn-secondary'}
+            style={{padding:'.25rem .75rem',fontSize:'.75rem'}}>
+            {r}
+          </button>
+        ))}
+        {chartRangeVal === 'Custom' && (
+          <input type="date"
+            value={settings.chartRangeCustom || ''}
+            onChange={e => updateSettings({ chartRangeCustom: e.target.value })}
+            style={{padding:'.25rem .5rem',fontSize:'.75rem',borderRadius:'8px',
+              border:'1px solid var(--border-color)',background:'var(--bg-secondary)',
+              color:'var(--text-primary)',fontFamily:'inherit'}}
+          />
+        )}
+      </div>
+      {noFilteredData && (
+        <div style={{background:'var(--bg-secondary)',border:'1px solid var(--border-color)',borderRadius:12,padding:'1rem 1.25rem',marginBottom:'1rem',fontSize:'.8125rem',color:'var(--text-secondary)'}}>
+          No dashboard activity for the selected wallets in this date range.
+        </div>
       )}
-    </div>}
+    </>}
     {(() => {
       const chartRenderers = {
         accumulatedBtc: () => visibleChart.length > 0 ? <SVGChart sampleData={S}
           data={visibleChart} dataKey="btc" title="Accumulated BTC"
           subtitle={visibleChart[visibleChart.length-1]?.btc.toFixed(8)+' BTC total'}
+          scopeLabel={filteredScopeLabel}
           color="#f7931a" formatY={v=>v.toFixed(2)}
           formatTooltip={(v)=>{ const usd = btcPrice ? ' · $'+Math.round(v*btcPrice).toLocaleString() : ''; return v.toFixed(8)+' BTC'+usd; }}
           fillGradient={true}
           overlay={_priceOverlay.length > 0 ? { data: _priceOverlay, dataKey: 'price', color: '#6b7280', formatY: fmtCompactUSD, formatTooltip: v => '$'+Math.round(v).toLocaleString(), label: 'BTC Price' } : undefined}
-        /> : null,
+        /> : (hasWalletFilter ? renderFilteredEmptyCard('Accumulated BTC') : null),
         costBasis: () => _costData.length > 1 ? <SVGChart sampleData={S}
           data={_costData} dataKey="avgCost" title="Average Cost Basis"
           subtitle={'$'+Math.round(_costData[_costData.length-1]?.avgCost||0).toLocaleString()+' / BTC'}
+          scopeLabel={globalScopeLabel}
           color="#2563eb" formatY={v=>'$'+Math.round(v/1000)+'k'}
           formatTooltip={(v)=>'$'+Math.round(v).toLocaleString()+' avg cost'}
           refLine={isSample?undefined:btcPrice} refLineColor="#16a34a" refLineLabel={isSample?undefined:'Now $'+Math.round(btcPrice||0).toLocaleString()}
@@ -1120,43 +1239,50 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
         usdHoldings: () => _usdHoldings.length > 0 ? <SVGChart sampleData={S}
           data={_usdHoldings} dataKey="holdingsUsd" title="USD Holdings Value"
           subtitle={isSample?'Portfolio value over time':`${fmtUSD(_usdHoldings[_usdHoldings.length-1]?.holdingsUsd||0)} using daily BTC closes`}
+          scopeLabel={filteredScopeLabel}
           color="#f59e0b" formatY={fmtCompactUSD} formatTooltip={(v)=>`${fmtUSD(v)} at daily close`} fillGradient={true}
-        /> : (historicalPriceLoading ? <div className="card"><div className="card-header"><div className="card-title">USD Holdings Value</div><div style={{fontSize:'.8125rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>Loading daily BTC closes…</div></div><div className="card-body" style={{color:'var(--text-secondary)'}}>Building historical USD values from Coinbase daily BTC-USD candles.</div></div> : null),
+        /> : (historicalPriceLoading ? <div className="card"><div className="card-header"><div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}><div className="card-title">USD Holdings Value</div>{filteredScopeLabel && <span className="scope-badge">{filteredScopeLabel}</span>}</div><div style={{fontSize:'.8125rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>Loading daily BTC closes…</div></div><div className="card-body" style={{color:'var(--text-secondary)'}}>Building historical USD values from Coinbase daily BTC-USD candles.</div></div> : (hasWalletFilter ? renderFilteredEmptyCard('USD Holdings Value') : null)),
         dca: () => _dca.length > 0 ? <SVGChart sampleData={S}
           data={_dca} dataKey="buyUsd" title="DCA Tracker"
           subtitle={'$'+Math.round(_dca.reduce((s,d)=>s+d.buyUsd,0)).toLocaleString()+' total invested'}
+          scopeLabel={filteredScopeLabel}
           color="#10b981" chartType="bar" formatY={fmtCompactUSD}
           formatTooltip={v => '$'+Math.round(v).toLocaleString()+' bought'}
-        /> : null,
+        /> : (hasWalletFilter ? renderFilteredEmptyCard('DCA Tracker') : null),
         pl: () => _pl.length > 1 ? <SVGChart sampleData={S}
           data={_pl} dataKey="totalPL" title="Realized vs Unrealized P&L"
           subtitle={(_pl[_pl.length-1]?.totalPL>=0?'+':'')+fmtCompactUSD(_pl[_pl.length-1]?.totalPL||0)+' total P&L'}
+          scopeLabel={globalScopeLabel}
           color={_pl[_pl.length-1]?.totalPL>=0 ? '#16a34a' : '#dc2626'}
           formatY={v => { const sign=v>0?'+':v<0?'-':''; const abs=Math.abs(v); if(abs>=1000000) return sign+'$'+(abs/1000000).toFixed(1).replace(/\.0$/,'')+'M'; if(abs>=1000) return sign+'$'+Math.round(abs/1000)+'k'; if(abs>=1) return sign+'$'+Math.round(abs); return '$0'; }}
           formatTooltip={v => (v>=0?'+':'-')+'$'+Math.round(Math.abs(v)).toLocaleString()}
           refLine={0} refLineColor="var(--text-tertiary)" refLineLabel="Break even"
         /> : null,
-        feeBurn: () => _fees.length > 1 ? <SVGChart sampleData={S}
+        feeBurn: () => _fees.length > 0 ? <SVGChart sampleData={S}
           data={_fees} dataKey="fees" title="Cumulative Fee Burn"
           subtitle={_fees[_fees.length-1]?.fees.toFixed(8)+' BTC in fees'}
+          scopeLabel={filteredScopeLabel}
           color="#ef4444" formatY={v=>v.toFixed(4)} formatTooltip={v => v.toFixed(8)+' BTC lost to fees'} fillGradient={true}
-        /> : null,
-        rewards: () => _rewards.length > 1 ? <SVGChart sampleData={S}
+        /> : (hasWalletFilter ? renderFilteredEmptyCard('Cumulative Fee Burn') : null),
+        rewards: () => _rewards.length > 0 ? <SVGChart sampleData={S}
           data={_rewards} dataKey="rewards" title="Reward Income"
           subtitle={_rewards[_rewards.length-1]?.rewards.toFixed(8)+' BTC earned'}
+          scopeLabel={filteredScopeLabel}
           color="#8b5cf6" formatY={v=>v.toFixed(4)}
           formatTooltip={v => { const usd = btcPrice ? ' · $'+Math.round(v*btcPrice).toLocaleString() : ''; return v.toFixed(8)+' BTC'+usd; }}
           fillGradient={true}
-        /> : null,
-        monthly: () => _monthly.length > 1 ? <SVGChart sampleData={S}
+        /> : (hasWalletFilter ? renderFilteredEmptyCard('Reward Income') : null),
+        monthly: () => _monthly.length > 0 ? <SVGChart sampleData={S}
           data={_monthly} dataKey="buys" title="Monthly Summary"
           subtitle={_monthly.length+' months of activity'}
+          scopeLabel={filteredScopeLabel}
           color="#0ea5e9" chartType="bar" formatY={fmtCompactUSD}
           formatTooltip={v => '$'+Math.round(v).toLocaleString()+' bought'}
-        /> : null,
+        /> : (hasWalletFilter ? renderFilteredEmptyCard('Monthly Summary') : null),
         movingAvg: () => _movingAvg.length > 0 ? <SVGChart sampleData={isSample && !hasLiveMovingAvg ? S : undefined}
           data={_movingAvg} dataKey="price" title="BTC Price & Moving Averages"
           subtitle={fmtCompactUSD(_movingAvg[_movingAvg.length-1]?.price||0)+' current'}
+          scopeLabel={globalScopeLabel}
           color="#f7931a" formatY={fmtCompactUSD} formatTooltip={v => '$'+Math.round(v).toLocaleString()} publicData
           overlay={(effectiveMaLines.rsi14!==false) && _movingAvg.some(d=>d.rsi14!=null) ? { data: _movingAvg.filter(d=>d.rsi14!=null), dataKey: 'rsi14', color: '#8b5cf6', formatY: v => Math.round(v), formatTooltip: v => 'RSI: '+v.toFixed(1), label: 'RSI (14)' } : undefined}
           lines={[
@@ -1263,7 +1389,7 @@ function InfoTip({ text }) {
   );
 }
 
-function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatTooltip, fillGradient, refLine, refLineColor, refLineLabel, chartType, overlay, lines, publicData, sampleData }) {
+function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatTooltip, fillGradient, refLine, refLineColor, refLineLabel, chartType, overlay, lines, publicData, sampleData, scopeLabel }) {
   const [tooltip, setTooltip] = React.useState(null);
   const [expanded, setExpanded] = React.useState(false);
   const svgRef = React.useRef(null);
@@ -1558,6 +1684,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             <div className="card-title">{title}</div>
             <div className="chart-subtitle" style={{fontSize:'.8125rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{subtitle}</div>
           </div>
+          {scopeLabel && <span className="scope-badge">{scopeLabel}</span>}
           {sampleData && <span style={{fontSize:'.625rem',fontWeight:700,letterSpacing:'.05em',textTransform:'uppercase',background:'var(--bg-tertiary)',color:'var(--text-tertiary)',border:'1px solid var(--border-color)',borderRadius:'4px',padding:'.125rem .375rem',whiteSpace:'nowrap'}}>Sample</span>}
         </div>
         {!sampleData && <button onClick={()=>{setTooltip(null);setExpanded(true);}} title="Expand chart"
@@ -1578,7 +1705,10 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
           <div style={{background:'var(--bg-primary)',borderRadius:'16px',width:'calc(100vw - 2rem)',maxWidth:'960px',maxHeight:'calc(100vh - 2rem)',overflow:'auto',boxShadow:'0 25px 50px rgba(0,0,0,.25)'}}>
             <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',padding:'1.25rem 1.5rem .5rem'}}>
               <div>
-                <div style={{fontSize:'1.125rem',fontWeight:700,color:'var(--text-primary)'}}>{title}</div>
+                <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
+                  <div style={{fontSize:'1.125rem',fontWeight:700,color:'var(--text-primary)'}}>{title}</div>
+                  {scopeLabel && <span className="scope-badge">{scopeLabel}</span>}
+                </div>
                 <div className="chart-subtitle" style={{fontSize:'.875rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{subtitle}</div>
               </div>
               <button onClick={()=>{setExpanded(false);setTooltip(null);}} title="Close"
@@ -1714,6 +1844,13 @@ function App() {
 
   // Active wallets (not archived) vs all wallets (for stats)
   const activeWallets = useMemo(() => wallets.filter(w => !w.archived), [wallets]);
+  const activeWalletNameSet = useMemo(() => new Set(activeWallets.map(w => w.name)), [activeWallets]);
+  const selectedDashboardWallets = useMemo(() => {
+    const saved = Array.isArray(settings.dashboardWalletFilter) ? settings.dashboardWalletFilter : [];
+    return saved.filter(name => activeWalletNameSet.has(name));
+  }, [settings.dashboardWalletFilter, activeWalletNameSet]);
+  const selectedDashboardWalletSet = useMemo(() => new Set(selectedDashboardWallets), [selectedDashboardWallets]);
+  const hasDashboardWalletFilter = selectedDashboardWallets.length > 0;
 
   function emptyForm() {
     return { date: new Date().toISOString().split('T')[0], type:settings.defaultTxType||'Buy', wallet:'', wallet2:'', amount:'', price:'', fee:'', totalUsd:'', notes:'', txhash:'', excludeStats:false };
@@ -2129,6 +2266,12 @@ function App() {
       .filter(([name]) => walletSet.has(name))
       .reduce((sum, [, bal]) => sum + bal, 0);
   }, [walletHoldings, activeWallets]);
+  const dashboardTrackedHoldings = useMemo(() => {
+    if(!hasDashboardWalletFilter) return trackedHoldings;
+    return Object.entries(walletHoldings)
+      .filter(([name]) => selectedDashboardWalletSet.has(name))
+      .reduce((sum, [, bal]) => sum + bal, 0);
+  }, [walletHoldings, trackedHoldings, hasDashboardWalletFilter, selectedDashboardWalletSet]);
 
   // ─── Stats (ALL transactions, not filtered by registered wallets) ────────
   const stats = useMemo(() => {
@@ -2281,7 +2424,7 @@ function App() {
   // ─── Export Full Backup JSON ──────────────────────────────────────────────
   const exportNativeCSV = () => {
     const payload = {
-      version: '3.24',
+      version: '3.26',
       exportedAt: new Date().toISOString(),
       transactions,
       wallets,
@@ -2487,7 +2630,7 @@ function App() {
         <button onClick={()=>{setShowTipJar(true);setMobileMenuOpen(false);}} style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.5rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%'}}>
           {Icon.Heart({width:16,height:16})} Send a tip
         </button>
-        <div className="sidebar-version">v3.25</div>
+        <div className="sidebar-version">v3.26</div>
       </nav>
 
       <div className="app-body">
@@ -2513,7 +2656,7 @@ function App() {
           <button onClick={()=>setShowTipJar(true)} title="Send a tip" style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.375rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',justifyContent:sidebarCollapsed?'center':'flex-start'}}>
             {Icon.Heart({width:16,height:16})} {!sidebarCollapsed && 'Send a tip'}
           </button>
-          <div className="sidebar-version">v3.25</div>
+          <div className="sidebar-version">v3.26</div>
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
@@ -2547,35 +2690,36 @@ function App() {
               <div className="stat-card">
                 <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
                   Holdings
+                  {hasDashboardWalletFilter && <span className="scope-badge">Selected wallets</span>}
                   <InfoTip text="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." />
                 </div>
-                <div className="stat-value btc">{fmtBTC(trackedHoldings)}</div>
-                <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(trackedHoldings*(btcPrice||0))}`:''}</div>
+                <div className="stat-value btc">{fmtBTC(dashboardTrackedHoldings)}</div>
+                <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(dashboardTrackedHoldings*(btcPrice||0))}`:''}</div>
               </div>
               <div className="stat-card">
-                <div className="stat-label">Cost Basis</div>
+                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Cost Basis{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                 <div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
                 <div className="stat-sub">{fmtBTC(stats.totalBought)} BTC acquired</div>
               </div>
               <div className="stat-card">
-                <div className="stat-label">Total P&L</div>
+                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total P&L{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                 <div className={`stat-value ${btcPrice?(stats.unrealized>=0?'green':'red'):''}`} style={{fontSize:'1.375rem'}}>
                   {btcPrice?fmtUSD(stats.unrealized):'—'}
                 </div>
                 <div className="stat-sub">{btcPrice&&stats.costBasis>0?`${(stats.unrealized/stats.costBasis*100).toFixed(1)}% return on cost`:'Waiting for price'}</div>
               </div>
               <div className="stat-card stat-extra">
-                <div className="stat-label">Rewards Earned</div>
+                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Rewards Earned{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                 <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
                 <div className="stat-sub">{btcPrice?fmtUSD(stats.rewardsIncome*btcPrice):''} at current price</div>
               </div>
               <div className="stat-card stat-extra">
-                <div className="stat-label">Network Fees</div>
+                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Network Fees{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                 <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTC(stats.totalFeesBTC)}</div>
                 <div className="stat-sub">BTC in transfer fees</div>
               </div>
               <div className="stat-card stat-extra">
-                <div className="stat-label">Total Transactions</div>
+                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total Transactions{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                 <div className="stat-value" style={{fontSize:'1.875rem'}}>{transactions.length}</div>
                 <div className="stat-sub">{transactions.filter(t=>t.type==='Buy').length} buys · {transactions.filter(t=>t.type==='Reward').length} rewards</div>
               </div>
@@ -2586,26 +2730,42 @@ function App() {
             </button>
 
             {/* ── Charts ── */}
-            <DashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={updateSettings} />
+            <DashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={updateSettings} selectedWallets={selectedDashboardWallets} />
 
             {/* Wallet holdings pie chart */}
             {(() => {
               const PIE_COLORS = ['#f7931a','#3b82f6','#10b981','#8b5cf6','#ef4444','#f59e0b','#06b6d4','#ec4899','#84cc16','#6366f1'];
               const walletData = activeWallets
+                .filter(w => !hasDashboardWalletFilter || selectedDashboardWalletSet.has(w.name))
                 .map(w => ({ name:w.name, type:w.type, amount:walletHoldings[w.name]||0 }))
                 .filter(d => d.amount > 0.00000001)
                 .sort((a,b) => b.amount - a.amount);
               const totalBTC = walletData.reduce((s,d) => s+d.amount, 0);
-              if(!walletData.length) return null;
+              if(!walletData.length) {
+                if(!hasDashboardWalletFilter) return null;
+                return (
+                  <div className="card">
+                    <div className="card-header">
+                      <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
+                        <div className="card-title">Holdings by Wallet</div>
+                        <span className="scope-badge">Selected wallets</span>
+                      </div>
+                      <button className="btn btn-secondary btn-sm" onClick={()=>setTab('wallets')}>Manage Wallets →</button>
+                    </div>
+                    <div className="card-body" style={{color:'var(--text-secondary)',fontSize:'.875rem'}}>No wallet holdings for the selected dashboard filter.</div>
+                  </div>
+                );
+              }
               const segments = walletData.map((d,i) => ({
                 ...d, pct: d.amount / totalBTC, color: PIE_COLORS[i % PIE_COLORS.length]
               }));
               return (
                 <div className="card">
                   <div className="card-header" style={{cursor:'pointer'}} onClick={()=>setWalletsOpen(o=>!o)}>
-                    <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
                       <span style={{display:'inline-flex',transform:walletsOpen?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
                       <div className="card-title">Holdings by Wallet</div>
+                      {hasDashboardWalletFilter && <span className="scope-badge">Selected wallets</span>}
                     </div>
                     <button className="btn btn-secondary btn-sm" onClick={e=>{e.stopPropagation();setTab('wallets');}}>Manage Wallets →</button>
                   </div>
