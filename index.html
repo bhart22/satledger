@@ -752,6 +752,55 @@ const LEGAL_NAV_ITEMS = NAV_ITEMS.filter(item => item.legal);
 const LEGAL_LAST_UPDATED = 'March 10, 2026';
 
 const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','costBasis','usdHoldings','dca','pl','feeBurn','rewards','monthly'];
+const DEFAULT_RSI_THRESHOLDS = { overbought: 70, oversold: 30 };
+const RSI_ZONE_COLORS = {
+  neutral: '#8b5cf6',
+  overbought: '#dc2626',
+  oversold: '#16a34a',
+};
+
+function normalizeRsiThresholds(thresholds) {
+  const rawOverbought = Number(thresholds?.overbought);
+  const rawOversold = Number(thresholds?.oversold);
+  const overbought = Number.isFinite(rawOverbought) && rawOverbought >= 0 && rawOverbought <= 100
+    ? rawOverbought
+    : DEFAULT_RSI_THRESHOLDS.overbought;
+  const oversold = Number.isFinite(rawOversold) && rawOversold >= 0 && rawOversold <= 100
+    ? rawOversold
+    : DEFAULT_RSI_THRESHOLDS.oversold;
+  if(oversold >= overbought) return { ...DEFAULT_RSI_THRESHOLDS };
+  return { overbought, oversold };
+}
+
+function normalizeSettings(nextSettings) {
+  const base = nextSettings && typeof nextSettings === 'object' ? nextSettings : {};
+  return {
+    defaultTxType: 'Buy',
+    ...base,
+    rsiThresholds: normalizeRsiThresholds(base.rsiThresholds),
+  };
+}
+
+function getRsiState(value, thresholds = DEFAULT_RSI_THRESHOLDS) {
+  if(value == null || !Number.isFinite(Number(value))) return 'neutral';
+  if(value >= thresholds.overbought) return 'overbought';
+  if(value <= thresholds.oversold) return 'oversold';
+  return 'neutral';
+}
+
+function getRsiColor(value, thresholds = DEFAULT_RSI_THRESHOLDS) {
+  return RSI_ZONE_COLORS[getRsiState(value, thresholds)] || RSI_ZONE_COLORS.neutral;
+}
+
+function validateRsiThresholdDraft(draft) {
+  const overbought = Number(draft.overbought);
+  const oversold = Number(draft.oversold);
+  if(draft.overbought === '' || draft.oversold === '') return { error: 'Enter both RSI threshold values.' };
+  if(!Number.isFinite(overbought) || !Number.isFinite(oversold)) return { error: 'RSI thresholds must be numeric values.' };
+  if(overbought < 0 || overbought > 100 || oversold < 0 || oversold > 100) return { error: 'RSI thresholds must stay between 0 and 100.' };
+  if(oversold >= overbought) return { error: 'Oversold must be lower than overbought.' };
+  return { overbought, oversold, error: '' };
+}
 
 function LegalPage({ title, summary, points, children, onBack }) {
   return (
@@ -1186,6 +1235,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   const effectiveHiddenCharts = isSample && hc.monthly === undefined ? { ...hc, monthly: true } : hc;
   const ml = settings.maLines || {};
   const effectiveMaLines = isSample && ml.rsi14 === undefined ? { ...ml, rsi14: false } : ml;
+  const rsiThresholds = normalizeRsiThresholds(settings.rsiThresholds);
   const _costData = isSample ? sc.chart.filter(d=>d.avgCost!==null) : costData;
   const _usdHoldings = isSample ? sc.holdings : usdHoldingsData;
   const _dca = isSample ? sc.dca : rangeFiltered.dca;
@@ -1344,11 +1394,29 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           subtitle={fmtCompactUSD(_movingAvg[_movingAvg.length-1]?.price||0)+' current'}
           scopeLabel={globalScopeLabel}
           color="#f7931a" formatY={fmtCompactUSD} formatTooltip={v => '$'+Math.round(v).toLocaleString()} publicData
-          overlay={(effectiveMaLines.rsi14!==false) && _movingAvg.some(d=>d.rsi14!=null) ? { data: _movingAvg.filter(d=>d.rsi14!=null), dataKey: 'rsi14', color: '#8b5cf6', formatY: v => Math.round(v), formatTooltip: v => 'RSI: '+v.toFixed(1), label: 'RSI (14)' } : undefined}
+          overlay={(() => {
+            if((effectiveMaLines.rsi14===false) || !_movingAvg.some(d=>d.rsi14!=null)) return undefined;
+            const rsiData = _movingAvg.filter(d=>d.rsi14!=null);
+            const latestRsi = rsiData[rsiData.length-1]?.rsi14 ?? null;
+            return {
+              data: rsiData,
+              dataKey: 'rsi14',
+              color: getRsiColor(latestRsi, rsiThresholds),
+              formatY: v => Math.round(v),
+              formatTooltip: v => 'RSI: '+v.toFixed(1),
+              label: 'RSI (14)',
+              getValueColor: v => getRsiColor(v, rsiThresholds),
+              getLegendColor: () => getRsiColor(latestRsi, rsiThresholds),
+              refLines: [
+                { value: rsiThresholds.overbought, color: RSI_ZONE_COLORS.overbought, label: 'RSI Overbought' },
+                { value: rsiThresholds.oversold, color: RSI_ZONE_COLORS.oversold, label: 'RSI Oversold' },
+              ],
+            };
+          })()}
           lines={[
             ...((effectiveMaLines.ma50d!==false) && _movingAvg.some(d=>d.ma50d!=null) ? [{ dataKey:'ma50d', color:'#10b981', label:'50D MA', dashed:false, formatTooltip:v=>'50D: $'+Math.round(v).toLocaleString() }] : []),
             ...((effectiveMaLines.ma200d!==false) && _movingAvg.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
-            ...((effectiveMaLines.ma200w!==false) && _movingAvg.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#dc2626', label:'200W MA', dashed:true, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma200w!==false) && _movingAvg.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#6495ed', label:'200W MA', dashed:false, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
           ]}
         /> : null,
       };
@@ -1456,6 +1524,12 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const expandedSvgRef = React.useRef(null);
   const isBar = chartType === 'bar';
   const hasOverlay = overlay && overlay.data && overlay.data.length > 0;
+  const overlayGetValueColor = hasOverlay && typeof overlay.getValueColor === 'function'
+    ? overlay.getValueColor
+    : () => overlay?.color;
+  const overlayLegendColor = hasOverlay && typeof overlay.getLegendColor === 'function'
+    ? overlay.getLegendColor()
+    : overlay?.color;
   const W=480, H=180, PL=58, PR=hasOverlay?52:16, PT=8, PB=32;
   const iW=W-PL-PR, iH=H-PT-PB;
 
@@ -1496,8 +1570,10 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   // Overlay scales
   const oTimestamps = hasOverlay ? overlay.data.map(d=>new Date(d.date+'T12:00:00').getTime()) : [];
   const oVals = hasOverlay ? overlay.data.map(d=>d[overlay.dataKey]) : [];
-  const oMin = hasOverlay ? Math.min(...oVals) : 0;
-  const oMax = hasOverlay ? Math.max(...oVals) : 1;
+  const overlayRefLines = hasOverlay && Array.isArray(overlay.refLines) ? overlay.refLines : [];
+  const overlayRefVals = overlayRefLines.map(ln => ln.value).filter(v => Number.isFinite(v));
+  const oMin = hasOverlay ? Math.min(...oVals, ...overlayRefVals) : 0;
+  const oMax = hasOverlay ? Math.max(...oVals, ...overlayRefVals) : 1;
   const oRange = oMax-oMin || 1;
   const oXScale = i => hasOverlay ? PL + ((oTimestamps[i]-tMin)/tRange)*iW : 0;
   const oYScale = v => PT + iH - ((v-oMin)/oRange)*iH;
@@ -1509,6 +1585,21 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const pathD = !isBar ? data.map((d,i)=>`${i===0?'M':'L'}${xScale(i).toFixed(1)},${yScale(d[dataKey]).toFixed(1)}`).join(' ') : '';
   const areaD = !isBar ? pathD+` L${xScale(data.length-1).toFixed(1)},${(PT+iH).toFixed(1)} L${xScale(0).toFixed(1)},${(PT+iH).toFixed(1)} Z` : '';
   const oPathD = hasOverlay ? overlay.data.map((d,i)=>`${i===0?'M':'L'}${oXScale(i).toFixed(1)},${oYScale(d[overlay.dataKey]).toFixed(1)}`).join(' ') : '';
+  const buildOverlaySegments = (xsFn, ysFn) => {
+    if(!hasOverlay || typeof overlay.getValueColor !== 'function' || overlay.data.length < 2) return [];
+    const segments = [];
+    for(let i=1;i<overlay.data.length;i++) {
+      const prevVal = overlay.data[i-1]?.[overlay.dataKey];
+      const currVal = overlay.data[i]?.[overlay.dataKey];
+      if(prevVal == null || currVal == null) continue;
+      segments.push({
+        d: `M${xsFn(i-1).toFixed(1)},${ysFn(prevVal).toFixed(1)} L${xsFn(i).toFixed(1)},${ysFn(currVal).toFixed(1)}`,
+        color: overlayGetValueColor(currVal) || overlay.color,
+      });
+    }
+    return segments;
+  };
+  const oSegments = buildOverlaySegments(oXScale, oYScale);
 
   // Additional same-scale lines
   const buildLinePath = (ln, xsFn, ysFn) => {
@@ -1602,6 +1693,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const eoTicks = [];
   if(hasOverlay) { for(let v=eoTickStart; v<=oMax+eoStep*0.01 && eoTicks.length<16; v+=eoStep) eoTicks.push(+v.toPrecision(10)); }
   const eXTicks = buildTimeTicks(isBar ? 6 : 5, eIW, EPL);
+  const eoSegments = buildOverlaySegments(eoXScale, eoYScale);
 
   function handleExpandedMouseMove(e) {
     if(!expandedSvgRef.current) return;
@@ -1642,6 +1734,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
     const cYTicks = isExp?eyTicks:yTicks;
     const cOTicks = isExp?eoTicks:oTicks;
     const cXTicks = isExp?eXTicks:xTicks;
+    const cOSegments = isExp?eoSegments:oSegments;
     const cRef = isExp?expandedSvgRef:svgRef;
     const cMouseMove = isExp?handleExpandedMouseMove:handleMouseMove;
     const strokeW = isExp?2.5:2;
@@ -1666,6 +1759,15 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             <text x={cPL+cIW-(!hasOverlay?0:40)} y={cYScale(refLine)-6} textAnchor="end" fontSize={isExp?'11':'9'} fill={refLineColor}>{refLineLabel}</text>
           </>
         )}
+        {hasOverlay && overlayRefLines.map((ln, i) => (
+          <React.Fragment key={`overlay-ref-${i}`}>
+            <line x1={cPL} x2={cPL+cIW} y1={cOYScale(ln.value)} y2={cOYScale(ln.value)}
+              stroke={ln.color || overlay.color} strokeWidth="1" strokeDasharray="5 4" opacity="0.8"/>
+            <text x={cPL+cIW-4} y={cOYScale(ln.value)-6} textAnchor="end" fontSize={isExp?'10':'9'} fill={ln.color || overlay.color}>
+              {ln.label}
+            </text>
+          </React.Fragment>
+        ))}
         {fillGradient && !isBar && <path d={cAreaD} fill={`url(#${cGradId})`} clipPath={`url(#clip_${cGradId})`}/>}
         {!isBar && <path d={cPathD} fill="none" stroke={color} strokeWidth={strokeW} strokeLinejoin="round" strokeLinecap="round"/>}
         {isBar && data.map((d,i) => {
@@ -1673,7 +1775,12 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
           const barH = ((d[dataKey]-yMin)/yRange)*cIH;
           return <rect key={i} x={x} y={cPT+cIH-barH} width={cBarW} height={Math.max(0,barH)} fill={color} rx="1" opacity={tooltip && tooltip.isExpanded===!!isExp && Math.abs(cXScale(i)-tooltip.x)<cBarW ? 1 : 0.7}/>;
         })}
-        {hasOverlay && <path d={cOPathD} fill="none" stroke={overlay.color} strokeWidth={isExp?2:1.5} strokeDasharray="4 3" strokeLinejoin="round" opacity="0.7"/>}
+        {hasOverlay && (!cOSegments.length
+          ? <path d={cOPathD} fill="none" stroke={overlay.color} strokeWidth={isExp?2:1.5} strokeDasharray="4 3" strokeLinejoin="round" opacity="0.7"/>
+          : cOSegments.map((seg, i) => (
+            <path key={`overlay-seg-${i}`} d={seg.d} fill="none" stroke={seg.color} strokeWidth={isExp?2:1.5} strokeDasharray="4 3" strokeLinejoin="round" opacity="0.85"/>
+          ))
+        )}
         {hasLines && lines.map((ln,li) => (
           <path key={'ln'+li} d={cLinePaths[li]} fill="none" stroke={ln.color} strokeWidth={isExp?2:1.5}
             strokeDasharray={ln.dashed?"6 4":undefined} strokeLinejoin="round" opacity="0.8"/>
@@ -1684,7 +1791,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
           </text>
         ))}
         {hasOverlay && cOTicks.map((v,i)=>(
-          <text key={'o'+i} x={cPL+cIW+6} y={cOYScale(v)+4} textAnchor="start" fontSize={isExp?'10':'9'} fill={overlay.color} opacity="0.7">
+          <text key={'o'+i} x={cPL+cIW+6} y={cOYScale(v)+4} textAnchor="start" fontSize={isExp?'10':'9'} fill={overlayLegendColor || overlay.color} opacity="0.7">
             {overlay.formatY(v)}
           </text>
         ))}
@@ -1718,7 +1825,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
       <div style={{color:'var(--text-secondary)',fontSize:'.75rem',whiteSpace:'nowrap'}}>{fmtDate(tooltip.date)}</div>
       <div style={{display:'flex',gap:'.75rem',textAlign:'right',flexWrap:'wrap',justifyContent:'flex-end'}}>
         <div style={{color:color,fontFamily:'JetBrains Mono',fontWeight:600}}>{formatTooltip(tooltip.val)}</div>
-        {hasOverlay && tooltip.oVal !== null && <div style={{color:overlay.color,fontFamily:'JetBrains Mono',fontWeight:600,fontSize:'.75rem'}}>{overlay.formatTooltip(tooltip.oVal)}</div>}
+        {hasOverlay && tooltip.oVal !== null && <div style={{color:overlayGetValueColor(tooltip.oVal) || overlay.color,fontFamily:'JetBrains Mono',fontWeight:600,fontSize:'.75rem'}}>{overlay.formatTooltip(tooltip.oVal)}</div>}
         {hasLines && tooltip.lineVals && tooltip.lineVals.map((v,i) => v!=null ? (
           <div key={i} style={{color:lines[i].color,fontFamily:'JetBrains Mono',fontWeight:600,fontSize:'.75rem'}}>{lines[i].formatTooltip?lines[i].formatTooltip(v):formatTooltip(v)}</div>
         ) : null)}
@@ -1729,7 +1836,7 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const renderLegend = () => (hasOverlay || hasLines) ? (
     <div style={{display:'flex',gap:'1rem',justifyContent:'center',fontSize:'.6875rem',color:'var(--text-tertiary)',marginTop:'.25rem',flexWrap:'wrap'}}>
       <span style={{display:'flex',alignItems:'center',gap:'.25rem'}}><span style={{width:12,height:2,background:color,display:'inline-block',borderRadius:1}}/> {title}</span>
-      {hasOverlay && <span style={{display:'flex',alignItems:'center',gap:'.25rem'}}><span style={{width:12,height:2,background:overlay.color,display:'inline-block',borderRadius:1,borderTop:'1px dashed '+overlay.color}}/> {overlay.label}</span>}
+      {hasOverlay && <span style={{display:'flex',alignItems:'center',gap:'.25rem',color:overlayLegendColor || 'var(--text-tertiary)'}}><span style={{width:12,height:2,background:overlayLegendColor || overlay.color,display:'inline-block',borderRadius:1,borderTop:'1px dashed '+(overlayLegendColor || overlay.color)}}/> {overlay.label}</span>}
       {hasLines && lines.map((ln,i) => (
         <span key={i} style={{display:'flex',alignItems:'center',gap:'.25rem'}}><span style={{width:12,height:2,background:ln.color,display:'inline-block',borderRadius:1,...(ln.dashed?{borderTop:'1px dashed '+ln.color,background:'transparent'}:{})}}/> {ln.label}</span>
       ))}
@@ -1818,12 +1925,26 @@ function App() {
   const vaultPassphraseRef = useRef('');
   const [theme, setTheme] = useState(() => localStorage.getItem('btc-theme')||'light');
   const [settings, setSettings] = useState(() => {
-    try { const s=localStorage.getItem('btc-settings'); return s ? JSON.parse(s) : { defaultTxType:'Buy' }; }
-    catch { return { defaultTxType:'Buy' }; }
+    try {
+      const s = localStorage.getItem('btc-settings');
+      return normalizeSettings(s ? JSON.parse(s) : { defaultTxType:'Buy' });
+    } catch {
+      return normalizeSettings({ defaultTxType:'Buy' });
+    }
   });
+  const [rsiThresholdDraft, setRsiThresholdDraft] = useState(() => {
+    const thresholds = normalizeRsiThresholds(settings.rsiThresholds);
+    return { overbought: String(thresholds.overbought), oversold: String(thresholds.oversold) };
+  });
+  const [rsiThresholdError, setRsiThresholdError] = useState('');
+  useEffect(() => {
+    const thresholds = normalizeRsiThresholds(settings.rsiThresholds);
+    setRsiThresholdDraft({ overbought: String(thresholds.overbought), oversold: String(thresholds.oversold) });
+    setRsiThresholdError('');
+  }, [settings.rsiThresholds?.overbought, settings.rsiThresholds?.oversold]);
   const updateSettings = (patch) => {
     setSettings(prev => {
-      const next = {...prev, ...patch};
+      const next = normalizeSettings({...prev, ...patch});
       localStorage.setItem('btc-settings', JSON.stringify(next));
       if(GDriveSync.isSignedIn()) {
         if(syncDebounce.current) clearTimeout(syncDebounce.current);
@@ -1846,6 +1967,16 @@ function App() {
       }
       return next;
     });
+  };
+  const handleRsiThresholdDraftChange = (key, value) => {
+    const nextDraft = { ...rsiThresholdDraft, [key]: value };
+    setRsiThresholdDraft(nextDraft);
+    const validation = validateRsiThresholdDraft(nextDraft);
+    setRsiThresholdError(validation.error);
+    if(validation.error) return;
+    const current = normalizeRsiThresholds(settings.rsiThresholds);
+    if(current.overbought === validation.overbought && current.oversold === validation.oversold) return;
+    updateSettings({ rsiThresholds: { overbought: validation.overbought, oversold: validation.oversold } });
   };
   const [tab, setTab] = useState(() => {
     const hash = location.hash.slice(1);
@@ -2076,7 +2207,11 @@ function App() {
             if(remote.vault) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(remote.vault));
             else localStorage.removeItem(VAULT_STORAGE_KEY);
           }
-          if(remote.settings) { setSettings(remote.settings); localStorage.setItem('btc-settings', JSON.stringify(remote.settings)); }
+          if(remote.settings) {
+            const normalized = normalizeSettings(remote.settings);
+            setSettings(normalized);
+            localStorage.setItem('btc-settings', JSON.stringify(normalized));
+          }
           localStorage.setItem('btc-tx-v2', JSON.stringify(remote.transactions));
           localStorage.setItem('btc-wallets', JSON.stringify(remote.wallets || []));
           localStorage.setItem('btc-last-modified', remoteMod);
@@ -2097,7 +2232,11 @@ function App() {
             if(remote.vault) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(remote.vault));
             else localStorage.removeItem(VAULT_STORAGE_KEY);
           }
-          if(remote.settings) { setSettings(remote.settings); localStorage.setItem('btc-settings', JSON.stringify(remote.settings)); }
+          if(remote.settings) {
+            const normalized = normalizeSettings(remote.settings);
+            setSettings(normalized);
+            localStorage.setItem('btc-settings', JSON.stringify(normalized));
+          }
           localStorage.setItem('btc-tx-v2', JSON.stringify(remote.transactions));
           localStorage.setItem('btc-wallets', JSON.stringify(remote.wallets || []));
           localStorage.setItem('btc-last-modified', remoteMod);
@@ -2168,8 +2307,9 @@ function App() {
                   else localStorage.removeItem(VAULT_STORAGE_KEY);
                 }
                 if(remote.settings) {
-                  setSettings(remote.settings);
-                  localStorage.setItem('btc-settings', JSON.stringify(remote.settings));
+                  const normalized = normalizeSettings(remote.settings);
+                  setSettings(normalized);
+                  localStorage.setItem('btc-settings', JSON.stringify(normalized));
                 }
                 localStorage.setItem('btc-tx-v2', JSON.stringify(remote.transactions));
                 localStorage.setItem('btc-wallets', JSON.stringify(remote.wallets || []));
@@ -2484,7 +2624,7 @@ function App() {
   // ─── Export Full Backup JSON ──────────────────────────────────────────────
   const exportNativeCSV = () => {
     const payload = {
-      version: '3.27',
+      version: '3.28',
       exportedAt: new Date().toISOString(),
       transactions,
       wallets,
@@ -2514,8 +2654,9 @@ function App() {
             setTransactions(importedTransactions);
             setWallets(importedWallets);
             if(parsed.settings) {
-              setSettings(parsed.settings);
-              localStorage.setItem('btc-settings', JSON.stringify(parsed.settings));
+              const normalized = normalizeSettings(parsed.settings);
+              setSettings(normalized);
+              localStorage.setItem('btc-settings', JSON.stringify(normalized));
             }
             const importedVault = parsed.vault || null;
             setVault(importedVault);
@@ -2606,8 +2747,9 @@ function App() {
         ...settings,
         bgDots: settings.bgDots === undefined ? false : settings.bgDots,
         showVault: settings.showVault === undefined ? false : settings.showVault,
+        rsiThresholds: normalizeRsiThresholds(settings.rsiThresholds),
       }
-    : settings;
+    : normalizeSettings(settings);
   const effectiveHiddenCharts = isSampleMode && (settings.hiddenCharts||{}).monthly === undefined
     ? { ...(settings.hiddenCharts||{}), monthly: true }
     : (settings.hiddenCharts||{});
@@ -2697,7 +2839,7 @@ function App() {
             </button>
           ))}
         </div>
-        <div className="sidebar-version">v3.27</div>
+        <div className="sidebar-version">v3.28</div>
       </nav>
 
       <div className="app-body">
@@ -2730,7 +2872,7 @@ function App() {
               </button>
             ))}
           </div>
-          <div className="sidebar-version">v3.27</div>
+          <div className="sidebar-version">v3.28</div>
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
@@ -3363,7 +3505,11 @@ function App() {
                               else localStorage.removeItem(VAULT_STORAGE_KEY);
                               lockVault();
                             }
-                            if(remote.settings) { setSettings(remote.settings); localStorage.setItem('btc-settings', JSON.stringify(remote.settings)); }
+                            if(remote.settings) {
+                              const normalized = normalizeSettings(remote.settings);
+                              setSettings(normalized);
+                              localStorage.setItem('btc-settings', JSON.stringify(normalized));
+                            }
                             localStorage.setItem('btc-tx-v2', JSON.stringify(remote.transactions));
                             localStorage.setItem('btc-wallets', JSON.stringify(remote.wallets||[]));
                             localStorage.setItem('btc-last-modified', remote.lastModified||'');
@@ -3450,7 +3596,7 @@ function App() {
               const maLineDefs = [
                 { key:'ma50d', label:'50-Day MA', color:'#10b981' },
                 { key:'ma200d', label:'200-Day MA', color:'#2563eb' },
-                { key:'ma200w', label:'200-Week MA', color:'#dc2626' },
+                { key:'ma200w', label:'200-Week MA', color:'#6495ed' },
                 { key:'rsi14', label:'RSI (14)', color:'#8b5cf6' },
               ];
               return (
@@ -3489,19 +3635,63 @@ function App() {
                         {chart.key === 'movingAvg' && !effectiveHiddenCharts.movingAvg && (
                           <div style={{marginLeft:'1.25rem',paddingLeft:'.75rem',borderLeft:'2px solid var(--border-color)',marginTop:'.5rem'}}>
                             {maLineDefs.map((ma, mi) => (
-                              <div key={ma.key} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.5rem',...(mi>0?{borderTop:'1px solid var(--border-color)',marginTop:'.5rem',paddingTop:'.5rem'}:{})}}>
-                                <div style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
-                                  <span style={{width:8,height:8,borderRadius:'50%',background:ma.color,flexShrink:0}}/>
-                                  <span style={{fontSize:'.8125rem',fontWeight:500}}>{ma.label}</span>
+                              <div key={ma.key} style={{...(mi>0?{borderTop:'1px solid var(--border-color)',marginTop:'.5rem',paddingTop:'.5rem'}:{})}}>
+                                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.5rem'}}>
+                                  <div style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
+                                    <span style={{width:8,height:8,borderRadius:'50%',background:ma.color,flexShrink:0}}/>
+                                    <span style={{fontSize:'.8125rem',fontWeight:500}}>{ma.label}</span>
+                                  </div>
+                                  <label className="theme-switch" style={{flexShrink:0}}>
+                                    <input type="checkbox" checked={effectiveMaLines[ma.key]!==false} onChange={e=>{
+                                      const ml = {...(settings.maLines||{})};
+                                      ml[ma.key] = e.target.checked ? true : false;
+                                      updateSettings({maLines:ml});
+                                    }} />
+                                    <span className="theme-slider"></span>
+                                  </label>
                                 </div>
-                                <label className="theme-switch" style={{flexShrink:0}}>
-                                  <input type="checkbox" checked={effectiveMaLines[ma.key]!==false} onChange={e=>{
-                                    const ml = {...(settings.maLines||{})};
-                                    ml[ma.key] = e.target.checked ? true : false;
-                                    updateSettings({maLines:ml});
-                                  }} />
-                                  <span className="theme-slider"></span>
-                                </label>
+                                {ma.key === 'rsi14' && (
+                                  <div style={{marginTop:'.625rem',padding:'.75rem',border:'1px solid var(--border-color)',borderRadius:'10px',background:'var(--bg-tertiary)'}}>
+                                    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:'.75rem'}}>
+                                      <label style={{display:'flex',flexDirection:'column',gap:'.375rem'}}>
+                                        <span style={{fontSize:'.75rem',fontWeight:600,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'.04em'}}>Overbought</span>
+                                        <input
+                                          className="form-input"
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="1"
+                                          value={rsiThresholdDraft.overbought}
+                                          onChange={e=>handleRsiThresholdDraftChange('overbought', e.target.value)}
+                                          aria-label="RSI overbought threshold"
+                                          style={rsiThresholdError ? {borderColor:'var(--red)'} : undefined}
+                                        />
+                                      </label>
+                                      <label style={{display:'flex',flexDirection:'column',gap:'.375rem'}}>
+                                        <span style={{fontSize:'.75rem',fontWeight:600,color:'var(--text-secondary)',textTransform:'uppercase',letterSpacing:'.04em'}}>Oversold</span>
+                                        <input
+                                          className="form-input"
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="1"
+                                          value={rsiThresholdDraft.oversold}
+                                          onChange={e=>handleRsiThresholdDraftChange('oversold', e.target.value)}
+                                          aria-label="RSI oversold threshold"
+                                          style={rsiThresholdError ? {borderColor:'var(--red)'} : undefined}
+                                        />
+                                      </label>
+                                    </div>
+                                    <div style={{fontSize:'.75rem',color:'var(--text-secondary)',marginTop:'.625rem'}}>
+                                      Values above <strong>{rsiThresholdDraft.overbought || DEFAULT_RSI_THRESHOLDS.overbought}</strong> are overbought, and values below <strong>{rsiThresholdDraft.oversold || DEFAULT_RSI_THRESHOLDS.oversold}</strong> are oversold.
+                                    </div>
+                                    {rsiThresholdError && (
+                                      <div style={{fontSize:'.75rem',color:'var(--red)',marginTop:'.5rem',fontWeight:600}}>
+                                        {rsiThresholdError}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
