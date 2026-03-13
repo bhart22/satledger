@@ -315,7 +315,7 @@
     .card-header { padding:1.125rem 1.5rem; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center; gap:1rem; }
     .card-title { font-size:1rem; font-weight:600; letter-spacing:-.01em; }
     .card-body { padding:1.25rem 1.5rem; }
-    .legal-shell { max-width:960px; margin:0 auto; }
+    .legal-shell { max-width:960px; margin:0 auto 1rem; }
     .legal-hero { background:linear-gradient(135deg,var(--bg-secondary),var(--bitcoin-light)); border:1px solid var(--border-color); border-radius:16px; box-shadow:var(--shadow-sm); padding:1.5rem; margin-bottom:1.25rem; }
     .legal-kicker { display:inline-flex; align-items:center; gap:.4rem; padding:.2rem .55rem; border-radius:999px; background:var(--bg-tertiary); border:1px solid var(--border-color); color:var(--text-secondary); font-size:.6875rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; }
     .legal-title { font-size:1.75rem; line-height:1.15; font-weight:700; letter-spacing:-.03em; margin:.9rem 0 .5rem; }
@@ -572,19 +572,14 @@
 <body>
 <div id="root"></div>
 
-<!-- Static, crawlable links for verification -->
-<footer style="padding:12px 1rem;background:#ffffff;border-top:1px solid #e5e5e5;text-align:center;">
-  <a href="#privacy" style="color:#2563eb;font-weight:600;text-decoration:none;margin-right:12px;">Privacy Policy</a>
-  <a href="#terms" style="color:#2563eb;font-weight:600;text-decoration:none;">Terms</a>
+<!-- Static, crawlable links for verification (uses site styles for light/dark themes) -->
+<footer class="card" style="margin:1rem 0 0;width:100%;max-width:none;border-left:none;border-right:none;border-bottom:none;border-radius:0;">
+  <div class="card-body" style="display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;padding:.625rem 1rem;">
+    <a class="legal-link" href="privacy.html">Privacy Policy</a>
+    <a class="legal-link" href="terms.html">Terms</a>
+  </div>
+  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.28</div>
 </footer>
-
-<!-- Crawlable privacy section so https://satledger.com/#privacy resolves without JavaScript -->
-<section id="privacy" style="max-width:900px;margin:1.5rem auto;padding:1rem;border:1px solid #e5e5e5;border-radius:8px;background:#fff;">
-  <h2 style="margin-bottom:.5rem;">Privacy Policy</h2>
-  <p style="color:#424242;font-size:.95rem;">SatLedger ("we", "us") does not collect personal data from users of the local web application unless you explicitly opt-in to synchronization. If you enable Google Drive sync, we request only the minimal OAuth scope required to store and restore your app data (appdata). We do not sell or share your personal data. Data stored in Google Drive is your responsibility and subject to Google's terms.</p>
-  <p style="color:#424242;font-size:.95rem;">For details about what data the app stores and how to disable sync, see the in-app <a href="#privacy">Privacy Policy</a> and the Settings page. Contact: support@satledger.com</p>
-  <p style="font-size:.85rem;color:#666;margin-top:.5rem;">Last updated: March 10, 2026</p>
-</section>
 
 <script type="text/babel">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
