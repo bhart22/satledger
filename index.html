@@ -754,12 +754,11 @@ const NAV_ITEMS = [
   { key:'vault', label:'Vault', icon:'Lock' },
   { key:'export', label:'Export', icon:'Download' },
   { key:'settings', label:'Settings', icon:'Settings' },
-  { key:'privacy', label:'Privacy Policy', icon:'FileText', legal:true },
-  { key:'terms', label:'Terms of Service', icon:'FileText', legal:true },
+  { key:'privacy', label:'Privacy Policy', icon:'FileText', legal:true, href:'privacy.html' },
+  { key:'terms', label:'Terms of Service', icon:'FileText', legal:true, href:'terms.html' },
 ];
 const PRIMARY_NAV_ITEMS = NAV_ITEMS.filter(item => !item.legal);
 const LEGAL_NAV_ITEMS = NAV_ITEMS.filter(item => item.legal);
-const LEGAL_LAST_UPDATED = 'March 10, 2026';
 
 const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','costBasis','usdHoldings','dca','pl','feeBurn','rewards','monthly'];
 const DEFAULT_RSI_THRESHOLDS = { overbought: 70, oversold: 30 };
@@ -2868,9 +2867,9 @@ function App() {
           </button>
           <div className="legal-link-row" style={{paddingTop:'.75rem',justifyContent:'center'}}>
             {LEGAL_NAV_ITEMS.map(item => (
-              <button key={item.key} className="legal-link" onClick={()=>{setTab(item.key);setMobileMenuOpen(false);}}>
+              <a key={item.key} className="legal-link" href={item.href} onClick={()=>setMobileMenuOpen(false)}>
                 {Icon[item.icon]({width:12,height:12})} {item.label}
-              </button>
+              </a>
             ))}
           </div>
         </div>
@@ -2903,9 +2902,9 @@ function App() {
             </button>
             <div className="legal-link-row" style={{justifyContent:'center'}}>
               {LEGAL_NAV_ITEMS.map(item => (
-                <button key={item.key} className="legal-link" onClick={()=>setTab(item.key)} title={sidebarCollapsed?item.label:undefined}>
+                <a key={item.key} className="legal-link" href={item.href} title={sidebarCollapsed?item.label:undefined}>
                   {Icon[item.icon]({width:12,height:12})} {!sidebarCollapsed && item.label}
-                </button>
+                </a>
               ))}
             </div>
           </div>
@@ -3799,164 +3798,16 @@ function App() {
                   <div>GitHub: <a href="https://github.com/bhart22/satledger" target="_blank" rel="noreferrer" style={{color:'var(--bitcoin-orange)',fontWeight:600,textDecoration:'none'}}>github.com/bhart22/satledger</a></div>
                 </div>
                 <div style={{marginTop:'1rem',paddingTop:'1rem',borderTop:'1px solid var(--border-color)',display:'flex',gap:'.625rem',flexWrap:'wrap'}}>
-                  <button className="btn btn-secondary btn-sm" onClick={()=>setTab('privacy')}>
+                  <a className="btn btn-secondary btn-sm" href="privacy.html" style={{textDecoration:'none'}}>
                     {Icon.FileText({width:13,height:13})} Privacy Policy
-                  </button>
-                  <button className="btn btn-secondary btn-sm" onClick={()=>setTab('terms')}>
+                  </a>
+                  <a className="btn btn-secondary btn-sm" href="terms.html" style={{textDecoration:'none'}}>
                     {Icon.FileText({width:13,height:13})} Terms of Service
-                  </button>
+                  </a>
                 </div>
               </div>
             </div>
           </div>
-        )}
-        {tab==='privacy' && (
-          <LegalPage
-            title="Privacy Policy"
-            summary="SatLedger is designed to keep your portfolio data under your control. This policy explains what data the app stores, when data leaves your browser, and what third-party services are involved."
-            points={[
-              `Last updated ${LEGAL_LAST_UPDATED}`,
-              'Core app data stays in your browser',
-              'Google Drive sync is optional',
-            ]}
-            onBack={()=>setTab('dashboard')}
-          >
-            <div className="legal-card">
-              <h2>Overview</h2>
-              <p>SatLedger is a client-side Bitcoin portfolio tracker. By default, your transactions, wallets, settings, and other app data are stored locally in your browser using local storage on the device you use to access the app.</p>
-              <p>SatLedger does not require you to create an account to use its core features, and the app is intended to function without sending your portfolio data to a SatLedger-operated backend.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Information SatLedger Stores</h2>
-              <ul>
-                <li>Portfolio data you enter, such as wallet names, transaction history, notes, price information, and app preferences.</li>
-                <li>Optional encrypted inheritance vault data if you choose to use the vault feature.</li>
-                <li>Temporary interface preferences such as theme, sidebar state, and chart settings.</li>
-                <li>If you enable Google Drive sync, tokens and sync metadata needed to reconnect and locate your app data file.</li>
-              </ul>
-            </div>
-            <div className="legal-card">
-              <h2>How Data Is Used</h2>
-              <ul>
-                <li>To calculate holdings, cost basis, profit and loss, charts, exports, and other portfolio views inside the app.</li>
-                <li>To remember your app configuration and restore your local session on the same browser.</li>
-                <li>To back up and sync your data across devices only if you explicitly sign in with Google and enable that feature.</li>
-              </ul>
-            </div>
-            <div className="legal-card">
-              <h2>Google Drive Sync</h2>
-              <p>If you choose to sign in with Google, SatLedger requests access to Google Drive's <code>appDataFolder</code> scope. That scope is intended for app-specific hidden storage and is used only to read and write the SatLedger backup file needed for sync.</p>
-              <p>Your synced data is stored in your own Google account, not in a public folder. SatLedger uses the Google Identity Services and Google Drive APIs solely to authenticate you and move your chosen backup data between your browser and your Google Drive app data storage.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Inheritance Vault</h2>
-              <p>The inheritance vault is intended to store sensitive notes in encrypted form. Vault encryption and decryption happen in your browser using the passphrase you provide. SatLedger is not designed to know or recover that passphrase for you.</p>
-              <p>If you sync the vault through Google Drive, the encrypted vault data may be included in your backup file, but it remains encrypted ciphertext unless someone also has the correct passphrase.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Third-Party Services</h2>
-              <ul>
-                <li>Coinbase endpoints are used to request live and historical BTC price data.</li>
-                <li>Google services are used only if you opt into Google sign-in and Drive sync.</li>
-                <li>Your use of those services is also subject to the applicable Google and Coinbase terms and privacy practices.</li>
-              </ul>
-            </div>
-            <div className="legal-card">
-              <h2>Data Retention and Control</h2>
-              <ul>
-                <li>You can delete local app data by using the reset and import/export controls inside SatLedger or by clearing your browser storage.</li>
-                <li>If you used Google Drive sync, copies stored in your Google Drive app data folder remain there until replaced or deleted.</li>
-                <li>You are responsible for maintaining your own backups and verifying exported files before relying on them.</li>
-              </ul>
-            </div>
-            <div className="legal-card">
-              <h2>Security</h2>
-              <p>SatLedger is built to minimize unnecessary data transmission, but no software, browser environment, local device, or third-party platform can be guaranteed to be completely secure. You are responsible for protecting your device, browser profile, Google account, exported backups, and vault passphrase.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Children's Privacy</h2>
-              <p>SatLedger is not directed to children under 13, and it is not intended for use by anyone who cannot legally agree to these terms in their jurisdiction.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Changes to This Policy</h2>
-              <p>This Privacy Policy may be updated from time to time as SatLedger evolves. The updated version will be posted on this page with a revised effective date.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Contact</h2>
-              <p>Questions about this Privacy Policy can be sent to <a href="mailto:info@satledger.com" style={{color:'var(--bitcoin-orange)',fontWeight:600,textDecoration:'none'}}>info@satledger.com</a>.</p>
-            </div>
-          </LegalPage>
-        )}
-
-        {tab==='terms' && (
-          <LegalPage
-            title="Terms of Service"
-            summary="These terms govern your use of SatLedger. They focus on practical responsibilities: you control your data, you verify your own records, and you do not rely on SatLedger as legal, tax, investment, or custody infrastructure."
-            points={[
-              `Last updated ${LEGAL_LAST_UPDATED}`,
-              'Use at your own risk',
-              'Not financial, tax, or legal advice',
-            ]}
-            onBack={()=>setTab('dashboard')}
-          >
-            <div className="legal-card">
-              <h2>Acceptance of Terms</h2>
-              <p>By accessing or using SatLedger, you agree to these Terms of Service. If you do not agree, do not use the app.</p>
-            </div>
-            <div className="legal-card">
-              <h2>What SatLedger Provides</h2>
-              <p>SatLedger is a self-directed Bitcoin portfolio tracking tool. It is provided for informational and personal record-keeping purposes only. SatLedger does not provide brokerage, exchange, custody, fiduciary, investment advisory, accounting, tax, or legal services.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Your Responsibilities</h2>
-              <ul>
-                <li>You are responsible for the accuracy of the transactions, wallet assignments, prices, notes, and other data you enter or import.</li>
-                <li>You are responsible for reviewing outputs, charts, cost basis calculations, exports, and tax-related files before relying on them.</li>
-                <li>You are responsible for securing your device, browser profile, exported files, Google account, backups, and any vault passphrase you choose.</li>
-                <li>You are responsible for complying with applicable laws, regulations, and tax-reporting obligations.</li>
-              </ul>
-            </div>
-            <div className="legal-card">
-              <h2>No Financial, Tax, or Legal Advice</h2>
-              <p>Information produced by SatLedger is a software output based on the data available to it. It is not financial advice, tax advice, legal advice, or a substitute for professional review.</p>
-            </div>
-            <div className="legal-card">
-              <h2>No Warranties</h2>
-              <p>SatLedger is provided on an "as is" and "as available" basis. To the maximum extent permitted by law, SatLedger disclaims warranties of any kind, whether express or implied, including warranties of merchantability, fitness for a particular purpose, non-infringement, accuracy, availability, and uninterrupted operation.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Price Data and Third-Party Dependencies</h2>
-              <p>Some features depend on third-party data and services, including Coinbase price data and optional Google authentication and Drive sync. Those services may change, become unavailable, rate-limit requests, or return incomplete or inaccurate data, and SatLedger is not responsible for that behavior.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Limitation of Liability</h2>
-              <p>To the maximum extent permitted by law, SatLedger and its operator will not be liable for any indirect, incidental, special, consequential, exemplary, or punitive damages, or for any loss of data, profits, tax positions, investment opportunity, or digital assets arising out of or related to your use of the app.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Prohibited Use</h2>
-              <ul>
-                <li>You may not use SatLedger in a way that violates law or infringes the rights of others.</li>
-                <li>You may not attempt to interfere with the app, its client-side operation, or any connected third-party services.</li>
-                <li>You may not represent SatLedger outputs as guaranteed accurate without independent verification.</li>
-              </ul>
-            </div>
-            <div className="legal-card">
-              <h2>Intellectual Property</h2>
-              <p>Except where otherwise stated, SatLedger and its associated branding, interface, and source materials remain the property of their respective owner(s). These terms do not transfer ownership of the app to you.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Changes, Suspension, or Discontinuation</h2>
-              <p>SatLedger may be updated, changed, suspended, or discontinued at any time without notice. Features, integrations, and data formats may also change over time.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Changes to These Terms</h2>
-              <p>These Terms of Service may be updated from time to time. Continued use of SatLedger after updated terms are posted constitutes acceptance of the revised terms.</p>
-            </div>
-            <div className="legal-card">
-              <h2>Contact</h2>
-              <p>Questions about these Terms of Service can be sent to <a href="mailto:info@satledger.com" style={{color:'var(--bitcoin-orange)',fontWeight:600,textDecoration:'none'}}>info@satledger.com</a>.</p>
-            </div>
-          </LegalPage>
         )}
       </main>
       </div>{/* end app-body */}
