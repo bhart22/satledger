@@ -794,7 +794,7 @@ const LEGAL_NAV_ITEMS = NAV_ITEMS.filter(item => item.legal);
 const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','valueBasis','costBasis','pl','waterfall','dca','rewards','feeBurn','monthly'];
 const STAT_CARD_DEFS = [
   { key:'holdings', label:'Holdings', desc:'BTC held in active wallets' },
-  { key:'costBasis', label:'Cost Basis', desc:'Total capital invested' },
+  { key:'costBasis', label:'Cost Basis', desc:'Remaining cost basis of current holdings' },
   { key:'totalPL', label:'Total P&L', desc:'Unrealized profit & loss' },
   { key:'breakEven', label:'Break-Even Price', desc:'BTC price needed to break even on purchases' },
   { key:'rewards', label:'Rewards Earned', desc:'Cumulative reward income in BTC' },
@@ -2776,22 +2776,32 @@ function App() {
 
   // ─── Stats (ALL transactions, not filtered by registered wallets) ────────
   const stats = useMemo(() => {
-    let totalBought=0, totalSold=0, totalFeesBTC=0, costBasis=0, proceeds=0, rewardsIncome=0;
-    transactions.forEach(tx => {
-      if(tx.excludeStats) return;
+    let totalBought=0, totalSold=0, totalFeesBTC=0, costBasis=0, runningBTC=0, rewardsIncome=0;
+    // Sort by date to process sells in chronological order for proportional cost reduction
+    const sorted = [...transactions].filter(tx => !tx.excludeStats)
+      .map(tx => ({ ...tx, _nd: normalizeDate(tx.date) }))
+      .filter(tx => tx._nd)
+      .sort((a,b) => a._nd.localeCompare(b._nd));
+    sorted.forEach(tx => {
       const amt = parseFloat(tx.amount)||0;
       const price = parseFloat(tx.price)||0;
       const fee = parseFloat(tx.fee)||0;
-      if(tx.type==='Buy') { totalBought+=amt; costBasis+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee; }
-      else if(tx.type==='Sell') { totalSold+=amt; proceeds+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))-fee; }
-      else if(tx.type==='Transfer') { totalFeesBTC+=fee; }
-      else if(tx.type==='Consolidation') { totalFeesBTC+=fee; }
-      else if(tx.type==='Reward') { totalBought+=amt; rewardsIncome+=amt; }
+      if(tx.type==='Buy') {
+        totalBought+=amt; runningBTC+=amt;
+        costBasis+=(tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price))+fee;
+      } else if(tx.type==='Sell') {
+        totalSold+=amt;
+        const ratio = runningBTC > 0.00000001 ? amt / runningBTC : 0;
+        costBasis -= costBasis * ratio;
+        runningBTC -= amt;
+      } else if(tx.type==='Transfer') { totalFeesBTC+=fee; runningBTC-=fee; }
+      else if(tx.type==='Consolidation') { totalFeesBTC+=fee; runningBTC-=fee; }
+      else if(tx.type==='Reward') { totalBought+=amt; runningBTC+=amt; rewardsIncome+=amt; }
     });
     // Use trackedHoldings (wallet-based) for market value — it correctly handles transfers
     const currentValue = trackedHoldings * (btcPrice||0);
-    const unrealized = currentValue - costBasis + proceeds;
-    return { totalBought, totalSold, totalFeesBTC, costBasis, proceeds, rewardsIncome, currentValue, unrealized };
+    const unrealized = currentValue - costBasis;
+    return { totalBought, totalSold, totalFeesBTC, costBasis, rewardsIncome, currentValue, unrealized };
   }, [transactions, btcPrice, trackedHoldings]);
 
   // ─── Filtered transactions ────────────────────────────────────────────────
