@@ -1739,23 +1739,23 @@ function PieChart({ segments, totalBTC, btcPrice }) {
   );
 }
 
-function InfoTip({ text }) {
+function InfoTip({ text, position }) {
   const [show, setShow] = React.useState(false);
   const ref = React.useRef(null);
   const [pos, setPos] = React.useState('bottom');
   React.useEffect(() => {
-    if(show && ref.current) {
+    if(show && ref.current && !position) {
       const r = ref.current.getBoundingClientRect();
       setPos(r.top < 80 ? 'bottom' : 'top');
     }
-  }, [show]);
+  }, [show, position]);
   return (
     <span ref={ref} style={{position:'relative',display:'inline-flex',lineHeight:0,flexShrink:0}}
       onMouseEnter={()=>setShow(true)} onMouseLeave={()=>setShow(false)}>
       <span style={{color:'var(--text-tertiary)',cursor:'help'}}>{Icon.Info({width:14,height:14})}</span>
       {show && <div style={{
         position:'absolute',left:'50%',transform:'translateX(-50%)',
-        [pos==='top'?'bottom':'top']:'calc(100% + 6px)',
+        [(position||pos)==='top'?'bottom':'top']:'calc(100% + 6px)',
         background:'var(--bg-secondary)',color:'var(--text-secondary)',
         fontSize:'.75rem',lineHeight:'1.4',padding:'.5rem .625rem',borderRadius:'8px',
         border:'1px solid var(--border-color)',boxShadow:'0 4px 12px rgba(0,0,0,.15)',
@@ -3265,7 +3265,7 @@ function App() {
                     <div className="stat-label" style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'.375rem'}}>
                       <div style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
                         <span>Holdings</span>
-                        <InfoTip text="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." />
+                        <InfoTip text="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." position="bottom" />
                       </div>
                       {hasDashboardWalletFilter && <span className="scope-badge">Selected wallets</span>}
                     </div>
