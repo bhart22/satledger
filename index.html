@@ -4,7 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Track Bitcoin transactions, wallet holdings, cost basis, and P&L. Export to CoinLedger for tax reporting.">
+  <meta name="theme-color" content="#0a0a0a">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23f7931a'/><text x='50' y='68' text-anchor='middle' font-size='55' font-weight='bold' fill='white'>₿</text></svg>">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icon-192.svg">
   <title>SatLedger — Bitcoin Portfolio Tracker</title>
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -578,7 +581,7 @@
     <a class="legal-link" href="privacy.html">Privacy Policy</a>
     <a class="legal-link" href="terms.html">Terms</a>
   </div>
-  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.28</div>
+  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.29</div>
 </footer>
 
 <script type="text/babel">
@@ -761,6 +764,15 @@ const PRIMARY_NAV_ITEMS = NAV_ITEMS.filter(item => !item.legal);
 const LEGAL_NAV_ITEMS = NAV_ITEMS.filter(item => item.legal);
 
 const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','costBasis','usdHoldings','dca','pl','feeBurn','rewards','monthly'];
+const STAT_CARD_DEFS = [
+  { key:'holdings', label:'Holdings', desc:'BTC held in active wallets' },
+  { key:'costBasis', label:'Cost Basis', desc:'Total capital invested' },
+  { key:'totalPL', label:'Total P&L', desc:'Unrealized profit & loss' },
+  { key:'breakEven', label:'Break-Even Price', desc:'BTC price needed to break even on purchases' },
+  { key:'rewards', label:'Rewards Earned', desc:'Cumulative reward income in BTC' },
+  { key:'networkFees', label:'Network Fees', desc:'BTC lost to transfer and consolidation fees' },
+  { key:'totalTx', label:'Total Transactions', desc:'Transaction count breakdown' },
+];
 const DEFAULT_RSI_THRESHOLDS = { overbought: 70, oversold: 30 };
 const RSI_ZONE_COLORS = {
   neutral: '#8b5cf6',
@@ -1313,7 +1325,6 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
         </div>
         <div className="dashboard-filter-actions">
           <button className={hasWalletFilter ? 'btn btn-secondary btn-sm' : 'btn btn-primary btn-sm'} onClick={() => updateSettings({ dashboardWalletFilter: [] })}>All</button>
-          <button className="btn btn-secondary btn-sm" onClick={() => updateSettings({ dashboardWalletFilter: [] })} disabled={!hasWalletFilter}>Clear</button>
         </div>
         <div className="dashboard-wallet-chips">
           {activeWallets.map(wallet => (
@@ -2656,7 +2667,7 @@ function App() {
   // ─── Export Full Backup JSON ──────────────────────────────────────────────
   const exportNativeCSV = () => {
     const payload = {
-      version: '3.28',
+      version: '3.29',
       exportedAt: new Date().toISOString(),
       transactions,
       wallets,
@@ -2873,7 +2884,7 @@ function App() {
             ))}
           </div>
         </div>
-        <div className="sidebar-version">v3.28</div>
+        <div className="sidebar-version">v3.29</div>
       </nav>
 
       <div className="app-body">
@@ -2908,7 +2919,7 @@ function App() {
               ))}
             </div>
           </div>
-          <div className="sidebar-version">v3.28</div>
+          <div className="sidebar-version">v3.29</div>
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
@@ -2938,46 +2949,76 @@ function App() {
                 </div>
               );
             })()}
-            <div className={`stats-grid ${moreStats?'stats-expanded':''}`}>
-              <div className="stat-card">
-                <div className="stat-label" style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'.375rem'}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
-                    <span>Holdings</span>
-                    <InfoTip text="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." />
+            {(() => {
+              const hs = settings.hiddenStats || {};
+              const breakEvenPrice = trackedHoldings > 0.00000001 ? stats.costBasis / trackedHoldings : null;
+              const statCards = {
+                holdings: () => (
+                  <div className="stat-card" key="holdings">
+                    <div className="stat-label" style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'.375rem'}}>
+                      <div style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
+                        <span>Holdings</span>
+                        <InfoTip text="Holdings only include active (non-archived) wallets. Archived wallets still contribute to cost basis and P&L calculations. Delete a wallet entirely to remove it from all stats." />
+                      </div>
+                      {hasDashboardWalletFilter && <span className="scope-badge">Selected wallets</span>}
+                    </div>
+                    <div className="stat-value btc">{fmtBTC(dashboardTrackedHoldings)}</div>
+                    <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(dashboardTrackedHoldings*(btcPrice||0))}`:''}</div>
                   </div>
-                  {hasDashboardWalletFilter && <span className="scope-badge">Selected wallets</span>}
+                ),
+                costBasis: () => (
+                  <div className="stat-card" key="costBasis">
+                    <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Cost Basis{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
+                    <div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
+                    <div className="stat-sub">{fmtBTC(stats.totalBought)} BTC acquired</div>
+                  </div>
+                ),
+                totalPL: () => (
+                  <div className="stat-card" key="totalPL">
+                    <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total P&L{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
+                    <div className={`stat-value ${btcPrice?(stats.unrealized>=0?'green':'red'):''}`} style={{fontSize:'1.375rem'}}>
+                      {btcPrice?fmtUSD(stats.unrealized):'—'}
+                    </div>
+                    <div className="stat-sub">{btcPrice&&stats.costBasis>0?`${(stats.unrealized/stats.costBasis*100).toFixed(1)}% return on cost`:'Waiting for price'}</div>
+                  </div>
+                ),
+                breakEven: () => (
+                  <div className="stat-card" key="breakEven">
+                    <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Break-Even Price{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
+                    <div className={`stat-value${btcPrice && breakEvenPrice ? (btcPrice >= breakEvenPrice ? ' green' : ' red') : ''}`} style={{fontSize:'1.375rem'}}>
+                      {breakEvenPrice ? fmtUSD(breakEvenPrice) : '—'}
+                    </div>
+                    <div className="stat-sub">{btcPrice && breakEvenPrice ? (btcPrice >= breakEvenPrice ? `${fmtUSD(btcPrice - breakEvenPrice)} below market` : `${fmtUSD(breakEvenPrice - btcPrice)} above market`) : 'BTC price needed to break even'}</div>
+                  </div>
+                ),
+                rewards: () => (
+                  <div className="stat-card stat-extra" key="rewards">
+                    <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Rewards Earned{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
+                    <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
+                    <div className="stat-sub">{btcPrice?fmtUSD(stats.rewardsIncome*btcPrice):''} at current price</div>
+                  </div>
+                ),
+                networkFees: () => (
+                  <div className="stat-card stat-extra" key="networkFees">
+                    <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Network Fees{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
+                    <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTC(stats.totalFeesBTC)}</div>
+                    <div className="stat-sub">BTC in transfer fees</div>
+                  </div>
+                ),
+                totalTx: () => (
+                  <div className="stat-card stat-extra" key="totalTx">
+                    <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total Transactions{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
+                    <div className="stat-value" style={{fontSize:'1.875rem'}}>{transactions.length}</div>
+                    <div className="stat-sub">{transactions.filter(t=>t.type==='Buy').length} buys · {transactions.filter(t=>t.type==='Reward').length} rewards</div>
+                  </div>
+                ),
+              };
+              return (
+                <div className={`stats-grid ${moreStats?'stats-expanded':''}`}>
+                  {STAT_CARD_DEFS.map(def => !hs[def.key] && statCards[def.key] ? statCards[def.key]() : null)}
                 </div>
-                <div className="stat-value btc">{fmtBTC(dashboardTrackedHoldings)}</div>
-                <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(dashboardTrackedHoldings*(btcPrice||0))}`:''}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Cost Basis{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                <div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
-                <div className="stat-sub">{fmtBTC(stats.totalBought)} BTC acquired</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total P&L{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                <div className={`stat-value ${btcPrice?(stats.unrealized>=0?'green':'red'):''}`} style={{fontSize:'1.375rem'}}>
-                  {btcPrice?fmtUSD(stats.unrealized):'—'}
-                </div>
-                <div className="stat-sub">{btcPrice&&stats.costBasis>0?`${(stats.unrealized/stats.costBasis*100).toFixed(1)}% return on cost`:'Waiting for price'}</div>
-              </div>
-              <div className="stat-card stat-extra">
-                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Rewards Earned{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
-                <div className="stat-sub">{btcPrice?fmtUSD(stats.rewardsIncome*btcPrice):''} at current price</div>
-              </div>
-              <div className="stat-card stat-extra">
-                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Network Fees{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTC(stats.totalFeesBTC)}</div>
-                <div className="stat-sub">BTC in transfer fees</div>
-              </div>
-              <div className="stat-card stat-extra">
-                <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total Transactions{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                <div className="stat-value" style={{fontSize:'1.875rem'}}>{transactions.length}</div>
-                <div className="stat-sub">{transactions.filter(t=>t.type==='Buy').length} buys · {transactions.filter(t=>t.type==='Reward').length} rewards</div>
-              </div>
-            </div>
+              );
+            })()}
             <button className="stats-toggle-btn" onClick={()=>setMoreStats(s=>!s)}>
               {moreStats ? 'Show less' : 'Show more stats'}
               <span style={{display:'inline-flex',transform:moreStats?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
@@ -3738,6 +3779,32 @@ function App() {
                 </div>
               );
             })()}
+
+            {/* Dashboard Stat Cards — visibility */}
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Dashboard Stat Cards</div>
+              </div>
+              <div className="card-body">
+                <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',marginBottom:'1rem'}}>Toggle visibility of the summary stat cards on the dashboard.</div>
+                {STAT_CARD_DEFS.map((def, i) => (
+                  <div key={def.key} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.5rem',...(i>0?{borderTop:'1px solid var(--border-color)',marginTop:'.625rem',paddingTop:'.625rem'}:{})}}>
+                    <div style={{flex:1,minWidth:0,display:'flex',alignItems:'center',gap:'.375rem'}}>
+                      <div style={{fontSize:'.875rem',fontWeight:600}}>{def.label}</div>
+                      <InfoTip text={def.desc} />
+                    </div>
+                    <label className="theme-switch" style={{flexShrink:0}}>
+                      <input type="checkbox" checked={!(settings.hiddenStats||{})[def.key]} onChange={e=>{
+                        const hs = {...(settings.hiddenStats||{})};
+                        hs[def.key] = e.target.checked ? false : true;
+                        updateSettings({hiddenStats:hs});
+                      }} />
+                      <span className="theme-slider"></span>
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
 
             {/* Data management */}
             <div className="card">
