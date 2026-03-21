@@ -1837,14 +1837,34 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
   const buildOverlaySegments = (xsFn, ysFn) => {
     if(!hasOverlay || typeof overlay.getValueColor !== 'function' || overlay.data.length < 2) return [];
     const segments = [];
+    const refLines = Array.isArray(overlay.refLines) ? overlay.refLines : [];
+    const thresholds = refLines.map(r => r.value).filter(v => Number.isFinite(v)).sort((a,b) => a - b);
     for(let i=1;i<overlay.data.length;i++) {
       const prevVal = overlay.data[i-1]?.[overlay.dataKey];
       const currVal = overlay.data[i]?.[overlay.dataKey];
       if(prevVal == null || currVal == null) continue;
-      segments.push({
-        d: `M${xsFn(i-1).toFixed(1)},${ysFn(prevVal).toFixed(1)} L${xsFn(i).toFixed(1)},${ysFn(currVal).toFixed(1)}`,
-        color: overlayGetValueColor(currVal) || overlay.color,
+      const x1 = xsFn(i-1), y1 = ysFn(prevVal), x2 = xsFn(i), y2 = ysFn(currVal);
+      // Find threshold crossings between prevVal and currVal
+      const crossings = [];
+      thresholds.forEach(th => {
+        if((prevVal < th && currVal > th) || (prevVal > th && currVal < th)) {
+          const t = (th - prevVal) / (currVal - prevVal);
+          crossings.push({ t, val: th });
+        }
       });
+      crossings.sort((a,b) => a.t - b.t);
+      if(!crossings.length) {
+        segments.push({ d: `M${x1.toFixed(1)},${y1.toFixed(1)} L${x2.toFixed(1)},${y2.toFixed(1)}`, color: overlayGetValueColor(currVal) || overlay.color });
+      } else {
+        let lastX = x1, lastY = y1, lastVal = prevVal;
+        crossings.forEach(cr => {
+          const mx = x1 + (x2 - x1) * cr.t, my = y1 + (y2 - y1) * cr.t;
+          const midVal = (lastVal + cr.val) / 2;
+          segments.push({ d: `M${lastX.toFixed(1)},${lastY.toFixed(1)} L${mx.toFixed(1)},${my.toFixed(1)}`, color: overlayGetValueColor(midVal) || overlay.color });
+          lastX = mx; lastY = my; lastVal = cr.val;
+        });
+        segments.push({ d: `M${lastX.toFixed(1)},${lastY.toFixed(1)} L${x2.toFixed(1)},${y2.toFixed(1)}`, color: overlayGetValueColor(currVal) || overlay.color });
+      }
     }
     return segments;
   };
