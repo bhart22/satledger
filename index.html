@@ -592,7 +592,7 @@
     <a class="legal-link" href="privacy.html">Privacy Policy</a>
     <a class="legal-link" href="terms.html">Terms</a>
   </div>
-  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.29</div>
+  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.30</div>
 </footer>
 
 <script type="text/babel">
@@ -1524,9 +1524,9 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
             };
           })()}
           lines={[
-            ...((effectiveMaLines.ma50d!==false) && _movingAvg.some(d=>d.ma50d!=null) ? [{ dataKey:'ma50d', color:'#10b981', label:'50D MA', dashed:false, formatTooltip:v=>'50D: $'+Math.round(v).toLocaleString() }] : []),
-            ...((effectiveMaLines.ma200d!==false) && _movingAvg.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#2563eb', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
-            ...((effectiveMaLines.ma200w!==false) && _movingAvg.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#6495ed', label:'200W MA', dashed:false, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma50d!==false) && _movingAvg.some(d=>d.ma50d!=null) ? [{ dataKey:'ma50d', color:'#ef4444', label:'50D MA', dashed:false, formatTooltip:v=>'50D: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma200d!==false) && _movingAvg.some(d=>d.ma200d!=null) ? [{ dataKey:'ma200d', color:'#a855f7', label:'200D MA', dashed:false, formatTooltip:v=>'200D: $'+Math.round(v).toLocaleString() }] : []),
+            ...((effectiveMaLines.ma200w!==false) && _movingAvg.some(d=>d.ma200w!=null) ? [{ dataKey:'ma200w', color:'#06b6d4', label:'200W MA', dashed:false, formatTooltip:v=>'200W: $'+Math.round(v).toLocaleString() }] : []),
           ]}
         /> : null,
       };
@@ -2954,7 +2954,7 @@ function App() {
   // ─── Export Full Backup JSON ──────────────────────────────────────────────
   const exportNativeCSV = () => {
     const payload = {
-      version: '3.29',
+      version: '3.30',
       exportedAt: new Date().toISOString(),
       transactions,
       wallets,
@@ -3171,7 +3171,7 @@ function App() {
             ))}
           </div>
         </div>
-        <div className="sidebar-version">v3.29</div>
+        <div className="sidebar-version">v3.30</div>
       </nav>
 
       <div className="app-body">
@@ -3206,7 +3206,7 @@ function App() {
               ))}
             </div>
           </div>
-          <div className="sidebar-version">v3.29</div>
+          <div className="sidebar-version">v3.30</div>
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
@@ -4043,9 +4043,9 @@ function App() {
                 updateSettings({ chartOrder: o });
               };
               const maLineDefs = [
-                { key:'ma50d', label:'50-Day MA', color:'#10b981' },
-                { key:'ma200d', label:'200-Day MA', color:'#2563eb' },
-                { key:'ma200w', label:'200-Week MA', color:'#6495ed' },
+                { key:'ma50d', label:'50-Day MA', color:'#ef4444' },
+                { key:'ma200d', label:'200-Day MA', color:'#a855f7' },
+                { key:'ma200w', label:'200-Week MA', color:'#06b6d4' },
                 { key:'rsi14', label:'RSI (14)', color:'#8b5cf6' },
               ];
               return (
