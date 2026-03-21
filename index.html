@@ -3112,10 +3112,12 @@ function App() {
                 </div>
               );
             })()}
-            <button className="stats-toggle-btn" onClick={()=>setMoreStats(s=>!s)}>
-              {moreStats ? 'Show less' : 'Show more stats'}
-              <span style={{display:'inline-flex',transform:moreStats?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
-            </button>
+            {STAT_CARD_DEFS.filter(def => !(settings.hiddenStats||{})[def.key]).length > 4 && (
+              <button className="stats-toggle-btn" onClick={()=>setMoreStats(s=>!s)}>
+                {moreStats ? 'Show less' : 'Show more stats'}
+                <span style={{display:'inline-flex',transform:moreStats?'rotate(180deg)':'none',transition:'transform .2s'}}>{Icon.ChevronDown({width:16,height:16})}</span>
+              </button>
+            )}
 
             {/* ── Charts ── */}
             <DashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={updateSettings} selectedWallets={selectedDashboardWallets} />
