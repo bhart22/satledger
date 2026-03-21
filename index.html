@@ -791,7 +791,7 @@ const NAV_ITEMS = [
 const PRIMARY_NAV_ITEMS = NAV_ITEMS.filter(item => !item.legal);
 const LEGAL_NAV_ITEMS = NAV_ITEMS.filter(item => item.legal);
 
-const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','costBasis','usdHoldings','dca','pl','feeBurn','rewards','monthly'];
+const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','valueBasis','costBasis','pl','waterfall','dca','rewards','feeBurn','monthly'];
 const STAT_CARD_DEFS = [
   { key:'holdings', label:'Holdings', desc:'BTC held in active wallets' },
   { key:'costBasis', label:'Cost Basis', desc:'Total capital invested' },
@@ -947,7 +947,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   const hasWalletFilter = selectedWalletSet.size > 0;
   const filteredScopeLabel = hasWalletFilter ? 'Selected wallets' : null;
   const globalScopeLabel = hasWalletFilter ? 'Portfolio-wide' : null;
-  const { chartData, accumulatedData, holdingsHistory, dcaData, feeBurnData, rewardData, plData, monthlySummary } = React.useMemo(() => {
+  const { chartData, accumulatedData, dcaData, feeBurnData, rewardData, plData, monthlySummary } = React.useMemo(() => {
     const sorted = transactions
       .map(tx => ({ ...tx, normalizedDate: normalizeDate(tx.date) }))
       .filter(tx => tx.normalizedDate)
@@ -955,7 +955,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     let totalCost = 0;
     const walletBalances = {};
     const filteredWalletBalances = {};
-    const points = [], holdingsPoints = [];
+    const points = [];
     const accumulatedPoints = [];
     const dcaMap = {};
     let runningBTC = 0;
@@ -1062,9 +1062,6 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       } else if(tx.type==='Consolidation') {
         if(w1) walletBalances[w1]-=fee;
       }
-      const includedHoldingsBTC = Object.values(walletBalances)
-        .reduce((sum, bal) => sum + bal, 0);
-
       if(matchesSelected) {
         if(tx.type==='Buy'||tx.type==='Reward') {
           if(selectedWalletSet.has(w1)) {
@@ -1094,31 +1091,20 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           }
         }
       }
-      const filteredHoldingsBTC = hasWalletFilter
-        ? Object.values(filteredWalletBalances).reduce((sum, bal) => sum + bal, 0)
-        : includedHoldingsBTC;
-
       const totalBTC = runningBTC;
       const avgCost = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : null;
       const pt = { date:tx.normalizedDate, btc:+totalBTC.toFixed(8), avgCost:avgCost!==null ? +avgCost.toFixed(2) : null };
       const accumulatedPt = { date:tx.normalizedDate, btc:+(hasWalletFilter ? filteredRunningBTC : totalBTC).toFixed(8) };
-      const holdingsPt = { date:tx.normalizedDate, holdingsBtc:+filteredHoldingsBTC.toFixed(8) };
       const last = points[points.length-1];
       if(last && last.date===tx.normalizedDate) points[points.length-1]=pt;
       else points.push(pt);
       const lastAccumulated = accumulatedPoints[accumulatedPoints.length-1];
       if(lastAccumulated && lastAccumulated.date===tx.normalizedDate) accumulatedPoints[accumulatedPoints.length-1]=accumulatedPt;
       else accumulatedPoints.push(accumulatedPt);
-      const lastHoldings = holdingsPoints[holdingsPoints.length-1];
-      if(lastHoldings && lastHoldings.date===tx.normalizedDate) holdingsPoints[holdingsPoints.length-1]=holdingsPt;
-      else holdingsPoints.push(holdingsPt);
     });
     // Trim leading zero-BTC points
     while(points.length > 1 && points[0].btc < 0.00000001) {
       points.shift();
-    }
-    while(holdingsPoints.length > 1 && holdingsPoints[0].holdingsBtc < 0.00000001) {
-      holdingsPoints.shift();
     }
     while(accumulatedPoints.length > 1 && accumulatedPoints[0].btc < 0.00000001) {
       accumulatedPoints.shift();
@@ -1127,13 +1113,13 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     const monthlyPts = Object.entries(monthlyMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([month, d])=>({
       date: month+'-15', month, buys:+d.buys.toFixed(2), sells:+d.sells.toFixed(2), rewards:+d.rewards.toFixed(8), fees:+d.fees.toFixed(8)
     }));
-    return { chartData: points, accumulatedData: accumulatedPoints, holdingsHistory: holdingsPoints, dcaData: dcaPts, feeBurnData: feePoints, rewardData: rewardPoints, plData: plPoints, monthlySummary: monthlyPts };
+    return { chartData: points, accumulatedData: accumulatedPoints, dcaData: dcaPts, feeBurnData: feePoints, rewardData: rewardPoints, plData: plPoints, monthlySummary: monthlyPts };
   }, [transactions, wallets, hasWalletFilter, selectedWalletSet]);
 
   // Time-range filtering
   const rangeFiltered = React.useMemo(() => {
     const range = settings.chartRange || 'All';
-    if(range === 'All') return { chart: chartData, accumulated: accumulatedData, holdings: holdingsHistory, dca: dcaData, fees: feeBurnData, rewards: rewardData, pl: plData, monthly: monthlySummary };
+    if(range === 'All') return { chart: chartData, accumulated: accumulatedData, dca: dcaData, fees: feeBurnData, rewards: rewardData, pl: plData, monthly: monthlySummary };
     let cutoff;
     if(range === 'Custom') {
       cutoff = settings.chartRangeCustom || '2000-01-01';
@@ -1148,23 +1134,15 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     return {
       chart: chartData.filter(d => d.date >= cutoff),
       accumulated: accumulatedData.filter(d => d.date >= cutoff),
-      holdings: holdingsHistory.filter(d => d.date >= cutoff),
       dca: dcaData.filter(d => d.date >= cutoff),
       fees: feeBurnData.filter(d => d.date >= cutoff),
       rewards: rewardData.filter(d => d.date >= cutoff),
       pl: plData.filter(d => d.date >= cutoff),
       monthly: monthlySummary.filter(d => d.date >= cutoff),
     };
-  }, [chartData, accumulatedData, holdingsHistory, dcaData, feeBurnData, rewardData, plData, monthlySummary, settings.chartRange, settings.chartRangeCustom]);
+  }, [chartData, accumulatedData, dcaData, feeBurnData, rewardData, plData, monthlySummary, settings.chartRange, settings.chartRangeCustom]);
 
   const costData = React.useMemo(() => rangeFiltered.chart.filter(d=>d.avgCost!==null), [rangeFiltered.chart]);
-  const usdHoldingsData = React.useMemo(() => {
-    return rangeFiltered.holdings.map(d => ({
-      date: d.date,
-      holdingsUsd: historicalPrices[d.date]!==undefined ? +(d.holdingsBtc * historicalPrices[d.date]).toFixed(2) : null,
-    })).filter(d => d.holdingsUsd!==null);
-  }, [rangeFiltered.holdings, historicalPrices]);
-
   // P&L chart data — compute unrealized using historical prices for accuracy
   const plChartData = React.useMemo(() => {
     if(!rangeFiltered.pl.length || !Object.keys(historicalPrices).length) return [];
@@ -1184,6 +1162,67 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       return { date, realized: snap.realized, unrealized, totalPL: +(snap.realized + unrealized).toFixed(2) };
     }).filter(Boolean);
   }, [rangeFiltered.pl, historicalPrices]);
+
+  // Portfolio Value vs Cost Basis chart data
+  const valueBasisData = React.useMemo(() => {
+    if(!rangeFiltered.pl.length || !Object.keys(historicalPrices).length) return [];
+    const plPts = rangeFiltered.pl;
+    const sortedDates = Object.keys(historicalPrices).filter(d => {
+      return plPts.length && d >= plPts[0].date && d <= (plPts[plPts.length-1].date > new Date().toISOString().slice(0,10) ? plPts[plPts.length-1].date : new Date().toISOString().slice(0,10));
+    }).sort();
+    if(!sortedDates.length) return [];
+    let pi = 0;
+    return sortedDates.map(date => {
+      while(pi < plPts.length-1 && plPts[pi+1].date <= date) pi++;
+      const snap = plPts[pi];
+      if(!snap || date < snap.date) return null;
+      const mktPrice = historicalPrices[date];
+      const marketValue = +(snap.btcHeld * mktPrice).toFixed(2);
+      return { date, marketValue, costBasis: +snap.costBasis.toFixed(2) };
+    }).filter(Boolean);
+  }, [rangeFiltered.pl, historicalPrices]);
+
+  // Waterfall data for BTC flow chart
+  const waterfallData = React.useMemo(() => {
+    const range = settings.chartRange || 'All';
+    let cutoff = '1900-01-01';
+    if(range !== 'All') {
+      if(range === 'Custom') cutoff = settings.chartRangeCustom || '2000-01-01';
+      else if(range === 'YTD') cutoff = new Date().getFullYear() + '-01-01';
+      else {
+        const now = new Date();
+        const months = { '3M':3, '6M':6, '1Y':12, '5Y':60 };
+        const d = new Date(now.getFullYear(), now.getMonth() - (months[range]||0), now.getDate());
+        cutoff = d.toISOString().slice(0,10);
+      }
+    }
+    const sorted = transactions
+      .map(tx => ({ ...tx, normalizedDate: normalizeDate(tx.date) }))
+      .filter(tx => tx.normalizedDate)
+      .sort((a,b) => a.normalizedDate.localeCompare(b.normalizedDate));
+    // Compute starting BTC (all transactions before cutoff)
+    let startBTC = 0;
+    let buys = 0, rewards = 0, sells = 0, fees = 0;
+    sorted.forEach(tx => {
+      const amt = parseFloat(tx.amount)||0;
+      const fee = parseFloat(tx.fee)||0;
+      if(tx.normalizedDate < cutoff) {
+        // Before range — accumulate into starting balance
+        if(tx.type==='Buy') startBTC += amt;
+        else if(tx.type==='Reward') startBTC += amt;
+        else if(tx.type==='Sell') startBTC -= amt;
+        else if(tx.type==='Transfer'||tx.type==='Consolidation') startBTC -= fee;
+      } else {
+        // In range — track each category
+        if(tx.type==='Buy') buys += amt;
+        else if(tx.type==='Reward') rewards += amt;
+        else if(tx.type==='Sell') sells += amt;
+        if(fee > 0 && (tx.type==='Transfer'||tx.type==='Consolidation')) fees += fee;
+      }
+    });
+    const endBTC = startBTC + buys + rewards - sells - fees;
+    return { startBTC: +startBTC.toFixed(8), buys: +buys.toFixed(8), rewards: +rewards.toFixed(8), sells: +sells.toFixed(8), fees: +fees.toFixed(8), endBTC: +endBTC.toFixed(8) };
+  }, [transactions, settings.chartRange, settings.chartRangeCustom]);
 
   // Price overlay data for Accumulated BTC chart
   const priceOverlayData = React.useMemo(() => {
@@ -1224,7 +1263,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   const sampleChartData = React.useMemo(() => {
     if(!isSample) return {};
     const today = new Date();
-    const pts = [], dcaPts = [], feePts = [], rewardPts = [], plPts = [], monthlyPts = [], holdPts = [], priceOverlayPts = [];
+    const pts = [], dcaPts = [], feePts = [], rewardPts = [], plPts = [], monthlyPts = [], priceOverlayPts = [], valueBasisPts = [];
     const samplePriceForMonth = (idx) => {
       const trend = 18000 + (24 - idx) * 2200;
       const cycle = Math.sin(idx * 0.55) * 11000;
@@ -1249,12 +1288,12 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       const mktVal = btc * price;
       const unrealized = +(mktVal - cost).toFixed(2);
       pts.push({ date, btc:+btc.toFixed(8), avgCost });
-      holdPts.push({ date, holdingsBtc: +btc.toFixed(8), holdingsUsd: +mktVal.toFixed(2) });
       priceOverlayPts.push({ date, price });
       dcaPts.push({ date, buyUsd });
       feePts.push({ date, fees: +fees.toFixed(8) });
       rewardPts.push({ date, rewards: +rewards.toFixed(8) });
       plPts.push({ date, realized: +realized.toFixed(2), unrealized, totalPL: +(realized+unrealized).toFixed(2) });
+      valueBasisPts.push({ date, marketValue: +mktVal.toFixed(2), costBasis: +cost.toFixed(2) });
       monthlyPts.push({ date, month, buys: buyUsd, sells: 0, rewards: 0, fees: 0 });
     }
     const totalDays = 1700;
@@ -1274,7 +1313,6 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     const movingAvgPts = buildMovingAverageSeries(dailyPrices);
     return {
       chart: pts,
-      holdings: holdPts,
       dca: dcaPts,
       fees: feePts,
       rewards: rewardPts,
@@ -1282,6 +1320,8 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       monthly: monthlyPts,
       priceOverlay: priceOverlayPts,
       movingAvg: movingAvgPts,
+      valueBasis: valueBasisPts,
+      waterfall: { startBTC: +(pts[0]?.btc||0).toFixed(8), buys: 0.65, rewards: 0.003, sells: 0.05, fees: 0.0002, endBTC: +(pts[pts.length-1]?.btc||0).toFixed(8) },
     };
   }, [isSample]);
 
@@ -1302,17 +1342,18 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
   const effectiveMaLines = isSample && ml.rsi14 === undefined ? { ...ml, rsi14: false } : ml;
   const rsiThresholds = normalizeRsiThresholds(settings.rsiThresholds);
   const _costData = isSample ? sc.chart.filter(d=>d.avgCost!==null) : costData;
-  const _usdHoldings = isSample ? sc.holdings : usdHoldingsData;
   const _dca = isSample ? sc.dca : rangeFiltered.dca;
   const _fees = isSample ? sc.fees : rangeFiltered.fees;
   const _rewards = isSample ? sc.rewards : rangeFiltered.rewards;
   const _pl = isSample ? sc.pl : plChartData;
   const _monthly = isSample ? sc.monthly : rangeFiltered.monthly;
+  const _valueBasis = isSample ? sc.valueBasis : valueBasisData;
+  const _waterfall = isSample ? sc.waterfall : waterfallData;
   const _priceOverlay = isSample ? sc.priceOverlay : priceOverlayData;
   const hasLiveMovingAvg = maChartData.length > 0;
   const _movingAvg = hasLiveMovingAvg ? maChartData : (isSample ? sc.movingAvg : maChartData);
   const walletFilterSelection = (settings.dashboardWalletFilter || []).filter(name => activeWallets.some(w => w.name === name));
-  const noFilteredData = hasWalletFilter && !visibleChart.length && !_usdHoldings.length && !_dca.length && !_fees.length && !_rewards.length && !_monthly.length;
+  const noFilteredData = hasWalletFilter && !visibleChart.length && !_dca.length && !_fees.length && !_rewards.length && !_monthly.length;
   const S = isSample || undefined; // sampleData prop
   const toggleWalletFilter = (name) => {
     const current = new Set(walletFilterSelection);
@@ -1410,12 +1451,15 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           formatTooltip={(v)=>'$'+Math.round(v).toLocaleString()+' avg cost'}
           refLine={isSample?undefined:btcPrice} refLineColor="#16a34a" refLineLabel={isSample?undefined:'Now $'+Math.round(btcPrice||0).toLocaleString()}
         /> : null,
-        usdHoldings: () => _usdHoldings.length > 0 ? <SVGChart sampleData={S}
-          data={_usdHoldings} dataKey="holdingsUsd" title="USD Holdings Value"
-          subtitle={isSample?'Portfolio value over time':`${fmtUSD(_usdHoldings[_usdHoldings.length-1]?.holdingsUsd||0)} using daily BTC closes`}
-          scopeLabel={filteredScopeLabel}
-          color="#f59e0b" formatY={fmtCompactUSD} formatTooltip={(v)=>`${fmtUSD(v)} at daily close`} fillGradient={true}
-        /> : (historicalPriceLoading ? <div className="card"><div className="card-header"><div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}><div className="card-title">USD Holdings Value</div>{filteredScopeLabel && <span className="scope-badge">{filteredScopeLabel}</span>}</div><div style={{fontSize:'.8125rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>Loading daily BTC closes…</div></div><div className="card-body" style={{color:'var(--text-secondary)'}}>Building historical USD values from Coinbase daily BTC-USD candles.</div></div> : (hasWalletFilter ? renderFilteredEmptyCard('USD Holdings Value') : null)),
+        valueBasis: () => _valueBasis.length > 1 ? <SVGChart sampleData={S}
+          data={_valueBasis} dataKey="marketValue" title="Portfolio Value vs Cost Basis"
+          subtitle={(() => { const last = _valueBasis[_valueBasis.length-1]; if(!last) return ''; const diff = last.marketValue - last.costBasis; return fmtCompactUSD(last.marketValue) + ' value · ' + (diff>=0?'+':'') + fmtCompactUSD(diff) + ' P&L'; })()}
+          scopeLabel={globalScopeLabel}
+          color="#16a34a" formatY={fmtCompactUSD}
+          formatTooltip={v => fmtUSD(v) + ' market value'}
+          fillGradient={true}
+          lines={[{ dataKey:'costBasis', color:'#2563eb', label:'Cost Basis', dashed: true, formatTooltip: v => fmtUSD(v) + ' invested' }]}
+        /> : (historicalPriceLoading ? <div className="card"><div className="card-header"><div className="card-title">Portfolio Value vs Cost Basis</div><div style={{fontSize:'.8125rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>Loading…</div></div></div> : null),
         dca: () => _dca.length > 0 ? <SVGChart sampleData={S}
           data={_dca} dataKey="buyUsd" title="DCA Tracker"
           subtitle={'$'+Math.round(_dca.reduce((s,d)=>s+d.buyUsd,0)).toLocaleString()+' total invested'}
@@ -1432,6 +1476,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           formatTooltip={v => (v>=0?'+':'-')+'$'+Math.round(Math.abs(v)).toLocaleString()}
           refLine={0} refLineColor="var(--text-tertiary)" refLineLabel="Break even"
         /> : null,
+        waterfall: () => (_waterfall.buys > 0 || _waterfall.rewards > 0 || _waterfall.sells > 0 || _waterfall.fees > 0 || _waterfall.startBTC > 0) ? <WaterfallChart data={_waterfall} btcPrice={btcPrice} sampleData={S} scopeLabel={globalScopeLabel} /> : null,
         feeBurn: () => _fees.length > 0 ? <SVGChart sampleData={S}
           data={_fees} dataKey="fees" title="Cumulative Fee Burn"
           subtitle={_fees[_fees.length-1]?.fees.toFixed(8)+' BTC in fees'}
@@ -1494,6 +1539,145 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       );
     })()}
     </>
+  );
+}
+
+function WaterfallChart({ data, btcPrice, sampleData, scopeLabel }) {
+  const [hover, setHover] = React.useState(null);
+  const [mouse, setMouse] = React.useState({x:0,y:0});
+  const [expanded, setExpanded] = React.useState(false);
+  const handleMove = useThrottledCallback((e) => setMouse({x:e.clientX,y:e.clientY}), 32);
+  const { startBTC, buys, rewards, sells, fees, endBTC } = data;
+  const bars = [
+    { key:'start', label:'Start', value: startBTC, color:'#6b7280', isTotal: true },
+    { key:'buys', label:'Buys', value: buys, color:'#16a34a', direction: 1 },
+    { key:'rewards', label:'Rewards', value: rewards, color:'#8b5cf6', direction: 1 },
+    { key:'sells', label:'Sells', value: sells, color:'#dc2626', direction: -1 },
+    { key:'fees', label:'Fees', value: fees, color:'#ef4444', direction: -1 },
+    { key:'end', label:'End', value: endBTC, color:'#f7931a', isTotal: true },
+  ];
+  let running = startBTC;
+  const positioned = bars.map(bar => {
+    if(bar.isTotal) {
+      const r = { ...bar, bottom: 0, top: bar.value };
+      if(bar.key === 'end') running = endBTC;
+      return r;
+    }
+    const bottom = bar.direction > 0 ? running : running - bar.value;
+    const top = bar.direction > 0 ? running + bar.value : running;
+    running = bar.direction > 0 ? running + bar.value : running - bar.value;
+    return { ...bar, bottom, top };
+  });
+  const maxVal = Math.max(...positioned.map(b => b.top), 0.00000001);
+  const netChange = endBTC - startBTC;
+  const netPct = startBTC > 0.00000001 ? ((netChange / startBTC) * 100).toFixed(1) : '—';
+  const subtitle = (netChange >= 0 ? '+' : '') + netChange.toFixed(8) + ' BTC (' + (netChange >= 0 ? '+' : '') + netPct + '%)';
+  const niceStep = (range, count) => { if(!range||range<=0) return 0.01; const rough=range/count; const mag=Math.pow(10,Math.floor(Math.log10(rough))); const norm=rough/mag; const nice=norm<=1.5?1:norm<=3?2:norm<=7?5:10; return nice*mag; };
+
+  const renderSVG = (isExp) => {
+    const W = isExp?960:480, H = isExp?400:180, PL = isExp?64:58, PR = isExp?20:16, PT = isExp?12:8, PB = isExp?36:32;
+    const iW = W-PL-PR, iH = H-PT-PB;
+    const barCount = positioned.length;
+    const gap = iW * 0.08 / (barCount - 1 || 1);
+    const barW = (iW - gap * (barCount - 1)) / barCount;
+    const yScale = v => PT + iH - (v / maxVal) * iH;
+    const step = niceStep(maxVal, isExp?8:4);
+    const ticks = [];
+    for(let v = 0; v <= maxVal + step * 0.01 && ticks.length < (isExp?16:12); v += step) ticks.push(+v.toPrecision(10));
+    const fontSize = isExp ? 11 : 9;
+    const valFontSize = isExp ? 10 : 8;
+    const rx = isExp ? 4 : 3;
+    return (
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{display:'block',overflow:'visible'}}
+        onMouseLeave={() => setHover(null)}>
+        {ticks.map(v => (
+          <React.Fragment key={v}>
+            <line x1={PL} x2={W-PR} y1={yScale(v)} y2={yScale(v)} stroke="var(--border-color)" strokeWidth="0.5" strokeDasharray="3,3"/>
+            <text x={PL-6} y={yScale(v)+3} textAnchor="end" fontSize={fontSize} fill="var(--text-tertiary)" fontFamily="JetBrains Mono">{v.toFixed(v>=0.01?2:4)}</text>
+          </React.Fragment>
+        ))}
+        {positioned.map((bar, i) => {
+          const x = PL + i * (barW + gap);
+          const yTop = yScale(bar.top);
+          const yBot = yScale(bar.bottom);
+          const barH = Math.max(yBot - yTop, 1);
+          return (
+            <React.Fragment key={bar.key}>
+              <rect x={x} y={yTop} width={barW} height={barH} rx={rx} fill={bar.color} opacity={hover===i?1:0.85}
+                onMouseEnter={() => setHover(i)} onMouseLeave={() => setHover(null)} style={{cursor:'default'}}/>
+              {i < positioned.length - 1 && (
+                <line x1={x + barW} x2={x + barW + gap} y1={yScale(bar.isTotal ? bar.top : (bar.direction > 0 ? bar.top : bar.bottom))} y2={yScale(bar.isTotal ? bar.top : (bar.direction > 0 ? bar.top : bar.bottom))}
+                  stroke="var(--text-tertiary)" strokeWidth="1" strokeDasharray="3,2" opacity="0.5"/>
+              )}
+              <text x={x + barW/2} y={H - PB + (isExp?18:14)} textAnchor="middle" fontSize={fontSize} fill="var(--text-secondary)" fontFamily="JetBrains Mono">{bar.label}</text>
+              <text x={x + barW/2} y={yTop - (isExp?6:4)} textAnchor="middle" fontSize={valFontSize} fill="var(--text-tertiary)" fontFamily="JetBrains Mono">
+                {bar.isTotal ? bar.value.toFixed(isExp?8:4) : (bar.direction > 0 ? '+' : '-') + bar.value.toFixed(isExp?8:4)}
+              </text>
+            </React.Fragment>
+          );
+        })}
+      </svg>
+    );
+  };
+
+  const renderTooltip = () => hover !== null ? (
+    <div style={{position:'fixed',left:mouse.x+12,top:mouse.y-10,background:'var(--bg-primary)',border:'1px solid var(--border-color)',borderRadius:8,padding:'.375rem .625rem',fontSize:'.75rem',fontFamily:'JetBrains Mono',pointerEvents:'none',zIndex:9999,boxShadow:'0 4px 12px rgba(0,0,0,.15)'}}>
+      <div style={{fontWeight:600,color:positioned[hover].color}}>{positioned[hover].label}</div>
+      <div style={{color:'var(--text-primary)'}}>{positioned[hover].value.toFixed(8)} BTC</div>
+      {btcPrice > 0 && <div style={{color:'var(--text-secondary)'}}>${Math.round(positioned[hover].value * btcPrice).toLocaleString()}</div>}
+    </div>
+  ) : null;
+
+  return (
+    <div className="card">
+      <div className="card-header" style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between'}}>
+        <div>
+          <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
+            <div className="card-title">BTC Flow Waterfall</div>
+            {scopeLabel && <span className="scope-badge">{scopeLabel}</span>}
+            {sampleData && <span style={{fontSize:'.625rem',fontWeight:700,letterSpacing:'.05em',textTransform:'uppercase',background:'var(--bg-tertiary)',color:'var(--text-tertiary)',border:'1px solid var(--border-color)',borderRadius:'4px',padding:'.125rem .375rem',whiteSpace:'nowrap'}}>Sample</span>}
+          </div>
+          <div style={{fontSize:'.8125rem',color:netChange>=0?'#16a34a':'#dc2626',fontFamily:'JetBrains Mono'}}>{subtitle}</div>
+        </div>
+        {!sampleData && <button onClick={()=>{setHover(null);setExpanded(true);}} title="Expand chart"
+          style={{background:'none',border:'none',cursor:'pointer',padding:'6px',color:'var(--text-tertiary)',flexShrink:0,marginTop:'2px'}}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+          </svg>
+        </button>}
+      </div>
+      <div className="card-body" style={{paddingTop:'.25rem',paddingBottom:'.5rem'}} onMouseMove={handleMove}>
+        {renderSVG(false)}
+        {!expanded && renderTooltip()}
+      </div>
+      {expanded && ReactDOM.createPortal(
+        <div style={{position:'fixed',inset:0,zIndex:9999,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(0,0,0,.5)',backdropFilter:'blur(4px)'}}
+          onClick={e=>{if(e.target===e.currentTarget){setExpanded(false);setHover(null);}}}>
+          <div style={{background:'var(--bg-primary)',borderRadius:'16px',width:'calc(100vw - 2rem)',maxWidth:'960px',maxHeight:'calc(100vh - 2rem)',overflow:'auto',boxShadow:'0 25px 50px rgba(0,0,0,.25)'}}>
+            <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',padding:'1.25rem 1.5rem .5rem'}}>
+              <div>
+                <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
+                  <div style={{fontSize:'1.125rem',fontWeight:700,color:'var(--text-primary)'}}>BTC Flow Waterfall</div>
+                  {scopeLabel && <span className="scope-badge">{scopeLabel}</span>}
+                </div>
+                <div style={{fontSize:'.875rem',color:netChange>=0?'#16a34a':'#dc2626',fontFamily:'JetBrains Mono'}}>{subtitle}</div>
+              </div>
+              <button onClick={()=>{setExpanded(false);setHover(null);}} title="Close"
+                style={{background:'none',border:'none',cursor:'pointer',padding:'4px',color:'var(--text-secondary)',fontSize:'1.25rem',lineHeight:1}}>
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+            <div style={{padding:'0 1.5rem 1.25rem'}} onMouseMove={handleMove}>
+              {renderSVG(true)}
+              {renderTooltip()}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+    </div>
   );
 }
 
@@ -3828,9 +4012,10 @@ function App() {
                 { key:'movingAvg', label:'BTC Price & Moving Averages', desc:'BTC price with 50-day, 200-day, and 200-week MAs' },
                 { key:'accumulatedBtc', label:'Accumulated BTC', desc:'Total BTC holdings over time with price overlay' },
                 { key:'costBasis', label:'Average Cost Basis', desc:'Running average cost per BTC' },
-                { key:'usdHoldings', label:'USD Holdings Value', desc:'Portfolio value in USD using daily closes' },
+                { key:'valueBasis', label:'Portfolio Value vs Cost Basis', desc:'Market value and cost basis over time' },
                 { key:'dca', label:'DCA Tracker', desc:'Buy amounts over time' },
                 { key:'pl', label:'Realized vs Unrealized P&L', desc:'Profit & loss from sells and unrealized gains' },
+                { key:'waterfall', label:'BTC Flow Waterfall', desc:'BTC inflows and outflows for the selected period' },
                 { key:'feeBurn', label:'Cumulative Fee Burn', desc:'Total BTC lost to network and exchange fees' },
                 { key:'rewards', label:'Reward Income', desc:'Cumulative staking and earn rewards' },
                 { key:'monthly', label:'Monthly Summary', desc:'Monthly buy volume as bar chart' },
@@ -3859,7 +4044,10 @@ function App() {
                     <div className="card-title">Dashboard Charts</div>
                   </div>
                   <div className="card-body">
-                    <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',marginBottom:'1rem'}}>Toggle visibility and reorder your dashboard charts.</div>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'1rem'}}>
+                      <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Toggle visibility and reorder your dashboard charts.</div>
+                      <button className="btn btn-secondary btn-sm" style={{fontSize:'.75rem',whiteSpace:'nowrap'}} onClick={() => updateSettings({ chartOrder: DEFAULT_CHART_ORDER, hiddenCharts: {}, maLines: {} })}>Reset to default</button>
+                    </div>
                     {orderedCharts.map((chart, i) => (
                       <React.Fragment key={chart.key}>
                         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.5rem',...(i>0?{borderTop:'1px solid var(--border-color)',marginTop:'.625rem',paddingTop:'.625rem'}:{})}}>
@@ -3963,7 +4151,10 @@ function App() {
                 <div className="card-title">Dashboard Stat Cards</div>
               </div>
               <div className="card-body">
-                <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',marginBottom:'1rem'}}>Toggle visibility of the summary stat cards on the dashboard.</div>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:'1rem'}}>
+                  <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Toggle visibility of the summary stat cards on the dashboard.</div>
+                  <button className="btn btn-secondary btn-sm" style={{fontSize:'.75rem',whiteSpace:'nowrap'}} onClick={() => updateSettings({ hiddenStats: {} })}>Reset to default</button>
+                </div>
                 {STAT_CARD_DEFS.map((def, i) => (
                   <div key={def.key} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.5rem',...(i>0?{borderTop:'1px solid var(--border-color)',marginTop:'.625rem',paddingTop:'.625rem'}:{})}}>
                     <div style={{flex:1,minWidth:0,display:'flex',alignItems:'center',gap:'.375rem'}}>
