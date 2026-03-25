@@ -76,6 +76,8 @@
       color: var(--text-primary);
     }
     .header-logo img { width: 32px; height: 32px; }
+    [data-theme="light"] .logo-dark { display: none; }
+    [data-theme="dark"] .logo-light { display: none; }
     .header-logo span { font-size: 1.125rem; font-weight: 700; letter-spacing: -.02em; }
     .header-actions { display: flex; align-items: center; gap: .75rem; }
 
@@ -149,8 +151,6 @@
       justify-content: center;
     }
     .hero-logo img { max-width: 420px; width: 100%; height: auto; border-radius: 12px; }
-    [data-theme="light"] .logo-dark { display: none; }
-    [data-theme="dark"] .logo-light { display: none; }
 
     /* Sections */
     .section {
@@ -319,7 +319,8 @@
 
   <header class="header">
     <a href="/" class="header-logo">
-      <img src="images/icon-192.png" alt="SatLedger">
+      <img class="logo-light" src="images/logo-dark.png" alt="SatLedger">
+      <img class="logo-dark" src="images/logo-white.png" alt="SatLedger">
       <span>SatLedger</span>
     </a>
     <div class="header-actions">
@@ -339,6 +340,10 @@
       <div class="hero-ctas">
         <a href="app.html" class="btn btn-primary btn-lg">Open App</a>
         <a href="app.html#dashboard" class="btn btn-secondary btn-lg">Try Sample Dashboard</a>
+      </div>
+      <div class="hero-logo">
+        <img class="logo-light" src="images/logo-dark.png" alt="SatLedger logo">
+        <img class="logo-dark" src="images/logo-white.png" alt="SatLedger logo">
       </div>
     </section>
 
