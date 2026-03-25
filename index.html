@@ -20,6 +20,12 @@
       } catch (err) {
         document.documentElement.setAttribute('data-theme', 'light');
       }
+      // Redirect returning users straight to the app
+      try {
+        if (localStorage.getItem('btc-transactions') || localStorage.getItem('btc-wallets')) {
+          window.location.replace('app.html');
+        }
+      } catch (e) {}
     })();
   </script>
   <style>
