@@ -592,7 +592,7 @@
     <a class="legal-link" href="privacy.html">Privacy Policy</a>
     <a class="legal-link" href="terms.html">Terms</a>
   </div>
-  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.30</div>
+  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.31</div>
 </footer>
 
 <script type="text/babel">
@@ -1031,9 +1031,10 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       }
 
       // P&L tracking — record realized P&L and cost snapshot at each transaction date
-      if(!tx.excludeStats && (tx.type==='Buy'||tx.type==='Sell'||tx.type==='Reward')) {
+      // Also track totalBtc (all holdings incl. excluded) for portfolio value chart
+      if(tx.type==='Buy'||tx.type==='Sell'||tx.type==='Reward'||tx.type==='Transfer'||tx.type==='Consolidation') {
         const lastPL = plPoints[plPoints.length-1];
-        const plPt = { date:tx.normalizedDate, realized:+realizedPL.toFixed(2), btcHeld:+runningBTCForCost.toFixed(8), costBasis:+totalCost.toFixed(2) };
+        const plPt = { date:tx.normalizedDate, realized:+realizedPL.toFixed(2), btcHeld:+runningBTCForCost.toFixed(8), totalBtc:+runningBTC.toFixed(8), costBasis:+totalCost.toFixed(2) };
         if(lastPL && lastPL.date===tx.normalizedDate) plPoints[plPoints.length-1] = plPt;
         else plPoints.push(plPt);
       }
@@ -1177,7 +1178,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       const snap = plPts[pi];
       if(!snap || date < snap.date) return null;
       const mktPrice = historicalPrices[date];
-      const marketValue = +(snap.btcHeld * mktPrice).toFixed(2);
+      const marketValue = +((snap.totalBtc != null ? snap.totalBtc : snap.btcHeld) * mktPrice).toFixed(2);
       return { date, marketValue, costBasis: +snap.costBasis.toFixed(2) };
     }).filter(Boolean);
   }, [rangeFiltered.pl, historicalPrices]);
@@ -2974,7 +2975,7 @@ function App() {
   // ─── Export Full Backup JSON ──────────────────────────────────────────────
   const exportNativeCSV = () => {
     const payload = {
-      version: '3.30',
+      version: '3.31',
       exportedAt: new Date().toISOString(),
       transactions,
       wallets,
@@ -3191,7 +3192,7 @@ function App() {
             ))}
           </div>
         </div>
-        <div className="sidebar-version">v3.30</div>
+        <div className="sidebar-version">v3.31</div>
       </nav>
 
       <div className="app-body">
@@ -3226,7 +3227,7 @@ function App() {
               ))}
             </div>
           </div>
-          <div className="sidebar-version">v3.30</div>
+          <div className="sidebar-version">v3.31</div>
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
@@ -4365,7 +4366,7 @@ function App() {
                   <div className="form-group full">
                     <label style={{display:'flex',alignItems:'center',gap:'.5rem',fontSize:'.8125rem',color:'var(--text-secondary)',cursor:'pointer'}}>
                       <input type="checkbox" checked={form.excludeStats||false} onChange={e=>setForm({...form,excludeStats:e.target.checked})} style={{accentColor:'var(--bitcoin-orange)'}}/>
-                      Exclude from charts & statistics
+                      Exclude from cost basis & P&L
                     </label>
                   </div>
                 </div>
