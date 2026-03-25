@@ -2,7 +2,7 @@
   "name": "SatLedger — Bitcoin Portfolio Tracker",
   "short_name": "SatLedger",
   "description": "Track Bitcoin transactions, wallet holdings, cost basis, and P&L.",
-  "start_url": "/",
+  "start_url": "/app.html",
   "display": "standalone",
   "background_color": "#0a0a0a",
   "theme_color": "#0a0a0a",
