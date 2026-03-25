@@ -334,9 +334,6 @@
     .legal-card ul { margin:0; padding-left:1.1rem; color:var(--text-secondary); }
     .legal-card li { margin:.35rem 0; }
     .legal-actions { display:flex; gap:.625rem; flex-wrap:wrap; margin-top:1rem; }
-    .legal-link-row { display:flex; gap:.5rem; flex-wrap:wrap; padding:.625rem .75rem .75rem; border-top:1px solid var(--border-color); }
-    .legal-link { display:inline-flex; align-items:center; gap:.4rem; padding:.35rem .65rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-tertiary); color:var(--text-secondary); text-decoration:none; font-size:.75rem; font-weight:600; cursor:pointer; }
-    .legal-link:hover { color:var(--text-primary); border-color:var(--border-hover); }
 
     /* Stats grid */
     .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:1rem; margin-bottom:1.25rem; }
@@ -588,14 +585,6 @@
 <body>
 <div id="root"></div>
 
-<!-- Static, crawlable links for verification (uses site styles for light/dark themes) -->
-<footer class="card" style="margin:1rem 0 0;width:100%;max-width:none;border-left:none;border-right:none;border-bottom:none;border-radius:0;">
-  <div class="card-body" style="display:flex;justify-content:center;align-items:center;gap:10px;flex-wrap:wrap;padding:.625rem 1rem;">
-    <a class="legal-link" href="privacy.html">Privacy Policy</a>
-    <a class="legal-link" href="terms.html">Terms</a>
-  </div>
-  <div style="text-align:center;padding:.35rem 0;color:var(--text-tertiary);font-size:.75rem;border-top:1px solid var(--border-color);line-height:1;">v3.31</div>
-</footer>
 
 <script type="text/babel">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
@@ -787,11 +776,7 @@ const NAV_ITEMS = [
   { key:'vault', label:'Vault', icon:'Lock' },
   { key:'export', label:'Export', icon:'Download' },
   { key:'settings', label:'Settings', icon:'Settings' },
-  { key:'privacy', label:'Privacy Policy', icon:'FileText', legal:true, href:'privacy.html' },
-  { key:'terms', label:'Terms of Service', icon:'FileText', legal:true, href:'terms.html' },
 ];
-const PRIMARY_NAV_ITEMS = NAV_ITEMS.filter(item => !item.legal);
-const LEGAL_NAV_ITEMS = NAV_ITEMS.filter(item => item.legal);
 
 const DEFAULT_CHART_ORDER = ['movingAvg','accumulatedBtc','valueBasis','costBasis','pl','waterfall','dca','rewards','feeBurn','monthly'];
 const STAT_CARD_DEFS = [
@@ -3168,7 +3153,7 @@ function App() {
           <img className="logo-icon logo-icon-dark" src="images/logo-white.png" alt="SatLedger" />
         </div>
         <div className="mobile-drawer-nav">
-          {PRIMARY_NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
+          {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
             <button key={item.key} className={`sidebar-item ${tab===item.key?'active':''}`} onClick={()=>{setTab(item.key);setMobileMenuOpen(false);}}>
               {Icon[item.icon]({width:18,height:18})}
               <span>{item.label}</span>
@@ -3188,13 +3173,6 @@ function App() {
           <button onClick={()=>{setShowTipJar(true);setMobileMenuOpen(false);}} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:'.5rem',padding:'.5rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',textAlign:'center'}}>
             {Icon.Heart({width:16,height:16})} Send a tip
           </button>
-          <div className="legal-link-row" style={{paddingTop:'.75rem',justifyContent:'center'}}>
-            {LEGAL_NAV_ITEMS.map(item => (
-              <a key={item.key} className="legal-link" href={item.href} onClick={()=>setMobileMenuOpen(false)}>
-                {Icon[item.icon]({width:12,height:12})} {item.label}
-              </a>
-            ))}
-          </div>
         </div>
         <div className="sidebar-version">v3.31</div>
       </nav>
@@ -3203,7 +3181,7 @@ function App() {
         {/* Desktop sidebar */}
         <aside className={`sidebar ${sidebarCollapsed?'collapsed':''}`}>
           <nav className="sidebar-nav">
-            {PRIMARY_NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
+            {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
               <button key={item.key} className={`sidebar-item ${tab===item.key?'active':''}`} onClick={()=>setTab(item.key)} title={sidebarCollapsed?item.label:undefined}>
                 {Icon[item.icon]({width:18,height:18})}
                 <span className="sidebar-item-label">{item.label}</span>
@@ -3223,13 +3201,6 @@ function App() {
             <button onClick={()=>setShowTipJar(true)} title="Send a tip" style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.375rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',justifyContent:'center',textAlign:'center'}}>
               {Icon.Heart({width:16,height:16})} {!sidebarCollapsed && 'Send a tip'}
             </button>
-            <div className="legal-link-row" style={{justifyContent:'center'}}>
-              {LEGAL_NAV_ITEMS.map(item => (
-                <a key={item.key} className="legal-link" href={item.href} title={sidebarCollapsed?item.label:undefined}>
-                  {Icon[item.icon]({width:12,height:12})} {!sidebarCollapsed && item.label}
-                </a>
-              ))}
-            </div>
           </div>
           <div className="sidebar-version">v3.31</div>
         </aside>
