@@ -3253,7 +3253,7 @@ function App() {
                   <div className="stat-card" key="costBasis">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Cost Basis{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                     <div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
-                    <div className="stat-sub">{fmtBTC(stats.totalBought)} BTC acquired</div>
+                    <div className="stat-sub">{fmtBTC(trackedHoldings)} BTC acquired</div>
                   </div>
                 ),
                 totalPL: () => (
