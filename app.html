@@ -2740,7 +2740,7 @@ function App() {
         h[w1]-=(amt+fee);
         if(w2) { if(!h[w2]) h[w2]=0; h[w2]+=amt; }
       } else if(tx.type==='Consolidation') {
-        h[w1]-=fee; // only fee is lost; BTC stays in same wallet
+        h[w1]-=fee;
       }
     });
     return h;
@@ -2839,18 +2839,18 @@ function App() {
   // ─── CRUD ─────────────────────────────────────────────────────────────────
   const handleSubmit = () => {
     // Validate required fields
-    if(!form.date || !form.amount) { showToast('Date and Amount are required'); return; }
+    if(!form.date || (form.type!=='Consolidation' && !form.amount)) { showToast(`Date${form.type!=='Consolidation' ? ' and Amount' : ''} ${form.type!=='Consolidation' ? 'are' : 'is'} required`); return; }
     if((form.type==='Buy'||form.type==='Sell') && !form.price && !form.totalUsd) { showToast('Price or Total USD is required for Buy/Sell'); return; }
     // If totalUsd provided but no price, derive price
     const finalForm = {...form};
     if((finalForm.type==='Buy'||finalForm.type==='Sell') && finalForm.totalUsd && !finalForm.price && finalForm.amount) {
       finalForm.price = (parseFloat(finalForm.totalUsd)/parseFloat(finalForm.amount)).toFixed(2);
     }
-    // Warn if sell/transfer would cause negative wallet balance
+    // Warn if a BTC outflow would cause negative wallet balance
     let negativeWarning = '';
-    if(finalForm.type==='Sell' || finalForm.type==='Transfer') {
+    if(finalForm.type==='Sell' || finalForm.type==='Transfer' || finalForm.type==='Consolidation') {
       const amt = parseFloat(finalForm.amount)||0;
-      const fee = finalForm.type==='Transfer' ? (parseFloat(finalForm.fee)||0) : 0;
+      const fee = (finalForm.type==='Transfer' || finalForm.type==='Consolidation') ? (parseFloat(finalForm.fee)||0) : 0;
       const walletBal = walletHoldings[finalForm.wallet] || 0;
       // If editing, add back the old transaction's impact
       let adjustment = 0;
@@ -2858,9 +2858,13 @@ function App() {
         const old = transactions[editIdx];
         if(old.type==='Sell') adjustment = parseFloat(old.amount)||0;
         else if(old.type==='Transfer') adjustment = (parseFloat(old.amount)||0) + (parseFloat(old.fee)||0);
+        else if(old.type==='Consolidation') adjustment = parseFloat(old.fee)||0;
       }
-      if(walletBal + adjustment - amt - fee < -0.000000005) {
-        negativeWarning = ` ⚠ ${finalForm.wallet} balance is now negative (${fmtBTC(walletBal + adjustment - amt - fee)} BTC)`;
+      const balanceAfter = finalForm.type==='Consolidation'
+        ? walletBal + adjustment - fee
+        : walletBal + adjustment - amt - fee;
+      if(balanceAfter < -0.000000005) {
+        negativeWarning = ` ⚠ ${finalForm.wallet} balance is now negative (${fmtBTC(balanceAfter)} BTC)`;
       }
     }
     if(editIdx!==null) {
@@ -2938,8 +2942,6 @@ function App() {
             'Deposit', `Transfer from ${tx.wallet||'wallet'}`, tx.txhash||'']);
         }
       } else if(tx.type==='Consolidation') {
-        // UTXO consolidation: same wallet in/out, only fee is lost
-        // CoinLedger: single Withdrawal row with fee, 0 amount sent
         if(fee) {
           rows.push([dateStr, tx.wallet||'', 'BTC', fmtNum(fee), '', '',
             '', '',
@@ -3211,7 +3213,7 @@ function App() {
           <>
             {/* Transfer wizard banner */}
             {(()=>{
-              const incomplete = transactions.filter(t=>t.type==='Transfer'&&(!t.wallet||!t.wallet2)); // Consolidation excluded — same-wallet fee tx
+              const incomplete = transactions.filter(t=>t.type==='Transfer'&&(!t.wallet||!t.wallet2)); // Consolidation excluded — same-wallet adjustment
               if(!incomplete.length) return null;
               return (
                 <div style={{background:'rgba(217,119,6,.08)',border:'1px solid #d97706',borderRadius:12,padding:'1rem 1.5rem',marginBottom:'1.25rem',display:'flex',alignItems:'center',justifyContent:'space-between',gap:'1rem',flexWrap:'wrap'}}>
@@ -3478,7 +3480,7 @@ function App() {
                             <td className="mono desktop-only">{tx.price && parseFloat(tx.price)>0 ? fmtUSD(tx.price) : '—'}</td>
                             <td className="mono desktop-only">{total>0 ? fmtUSD(total) : '—'}</td>
                             <td className="mono desktop-only" style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>
-                              {tx.fee && parseFloat(tx.fee)>0 ? (tx.type==='Transfer'?`${fmtBTC(tx.fee)} BTC`:fmtUSD(tx.fee)) : '—'}
+                              {tx.fee && parseFloat(tx.fee)>0 ? (tx.type==='Transfer'||tx.type==='Consolidation'?`${fmtBTC(tx.fee)} BTC`:fmtUSD(tx.fee)) : '—'}
                             </td>
                             <td className="desktop-only" style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:'.75rem',color:'var(--text-secondary)'}}>
                               {tx.notes||'—'}
@@ -3870,7 +3872,7 @@ function App() {
                         <tr><td style={{padding:'.5rem'}}><span className="badge badge-buy">Buy</span></td><td style={{padding:'.5rem',fontFamily:'monospace'}}>Trade</td><td style={{padding:'.5rem',color:'var(--text-secondary)'}}>USD → BTC, price computed</td></tr>
                         <tr><td style={{padding:'.5rem'}}><span className="badge badge-sell">Sell</span></td><td style={{padding:'.5rem',fontFamily:'monospace'}}>Trade</td><td style={{padding:'.5rem',color:'var(--text-secondary)'}}>BTC → USD, price computed</td></tr>
                         <tr><td style={{padding:'.5rem'}}><span className="badge badge-transfer">Transfer</span></td><td style={{padding:'.5rem',fontFamily:'monospace'}}>Withdrawal + Deposit</td><td style={{padding:'.5rem',color:'var(--text-secondary)'}}>Two rows: sender Withdrawal + receiver Deposit</td></tr>
-                        <tr><td style={{padding:'.5rem'}}><span className="badge badge-consolidation">Consolidation</span></td><td style={{padding:'.5rem',fontFamily:'monospace'}}>Withdrawal (fee only)</td><td style={{padding:'.5rem',color:'var(--text-secondary)'}}>UTXO consolidation — only miner fee deducted</td></tr>
+                        <tr><td style={{padding:'.5rem'}}><span className="badge badge-consolidation">Consolidation</span></td><td style={{padding:'.5rem',fontFamily:'monospace'}}>Withdrawal (fee only)</td><td style={{padding:'.5rem',color:'var(--text-secondary)'}}>Same-wallet movement; only miner fee is deducted from holdings</td></tr>
                         <tr><td style={{padding:'.5rem'}}><span className="badge badge-reward">Reward</span></td><td style={{padding:'.5rem',fontFamily:'monospace'}}>Income</td><td style={{padding:'.5rem',color:'var(--text-secondary)'}}>Cashback, staking, etc.</td></tr>
                       </tbody>
                     </table>
@@ -4285,13 +4287,13 @@ function App() {
                     </div>
                   )}
                   <div className="form-group">
-                    <label className="form-label">Amount (BTC)</label>
+                    <label className="form-label">{form.type==='Consolidation'?'Amount Consolidated (BTC, optional)':'Amount (BTC)'}</label>
                     <input type="number" step="0.00000001" className="form-input" placeholder="0.00000000" value={form.amount} onChange={e=>{
                       const amt = e.target.value;
                       const price = parseFloat(form.price);
                       const newTotal = (amt && price) ? (parseFloat(amt)*price).toFixed(2) : form.totalUsd;
                       setForm({...form, amount:amt, totalUsd:newTotal});
-                    }} required/>
+                    }} required={form.type!=='Consolidation'}/>
                   </div>
                   {(form.type==='Buy'||form.type==='Sell') && (
                     <div className="form-group">
@@ -4326,9 +4328,16 @@ function App() {
                     </div>
                   )}
                   <div className="form-group">
-                    <label className="form-label">Fee {form.type==='Transfer'?'(BTC)':'(USD)'}</label>
-                    <input type="number" step={form.type==='Transfer'?'0.00000001':'0.01'} className="form-input" placeholder="0" value={form.fee} onChange={e=>setForm({...form,fee:e.target.value})}/>
+                    <label className="form-label">Fee {form.type==='Transfer'||form.type==='Consolidation'?'(BTC)':'(USD)'}</label>
+                    <input type="number" step={form.type==='Transfer'||form.type==='Consolidation'?'0.00000001':'0.01'} className="form-input" placeholder="0" value={form.fee} onChange={e=>setForm({...form,fee:e.target.value})}/>
                   </div>
+                  {form.type==='Consolidation' && (
+                    <div className="form-group full" style={{marginTop:'-.25rem'}}>
+                      <div style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>
+                        Amount consolidated is informational only. Only the BTC fee changes wallet holdings.
+                      </div>
+                    </div>
+                  )}
                   <div className="form-group full">
                     <label className="form-label">TxHash (optional)</label>
                     <input className="form-input" placeholder="On-chain transaction hash" value={form.txhash} onChange={e=>setForm({...form,txhash:e.target.value})} style={{fontFamily:'JetBrains Mono',fontSize:'.75rem'}}/>
@@ -4507,7 +4516,7 @@ function App() {
                 <li><strong>Sell</strong> — Sell BTC from a wallet</li>
                 <li><strong>Transfer</strong> — Move BTC between wallets (network fees deducted)</li>
                 <li><strong>Reward</strong> — Staking, interest, or earn rewards</li>
-                <li><strong>Consolidation</strong> — Combine UTXOs in the same wallet (only fees apply)</li>
+                <li><strong>Consolidation</strong> — Same-wallet movement where only the BTC fee affects holdings</li>
               </ul>
 
               <h4 style={{color:'var(--text-primary)',marginBottom:'.375rem',fontSize:'.9375rem'}}>Google Drive Sync</h4>
@@ -4759,7 +4768,7 @@ function WizardWalletSelect({ label, value, wallets, onChange }) {
 function TransferWizard({ transactions, wallets, wizardStep, setWizardStep, wizardEdits, setWizardEdits, setShowWizard, setTransactions, save, showToast }) {
   const incomplete = transactions
     .map((t,i)=>({...t,_idx:i}))
-    .filter(t=>t.type==='Transfer'&&(!t.wallet||!t.wallet2)); // Consolidation excluded — same-wallet fee tx
+    .filter(t=>t.type==='Transfer'&&(!t.wallet||!t.wallet2)); // Consolidation excluded — same-wallet adjustment
   const total = incomplete.length;
   const isIntro = wizardStep===0;
   const isSummary = wizardStep===total+1;
