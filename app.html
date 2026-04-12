@@ -225,12 +225,16 @@
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.4); --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
       --shadow-lg: 0 8px 24px rgba(0,0,0,0.6);
     }
+    :root { --app-header-height:53px; }
+    html, body { max-width:100%; overflow-x:hidden; }
     body { font-family:'IBM Plex Sans',sans-serif; background:var(--bg-primary); color:var(--text-primary); line-height:1.6; -webkit-font-smoothing:antialiased; transition:background .3s,color .3s; }
-    .app { min-height:100vh; display:flex; flex-direction:column; }
+    .app { min-height:100vh; display:flex; flex-direction:column; width:100%; }
 
     /* Header */
-    .header { background:var(--bg-secondary); border-bottom:1px solid var(--border-color); padding:.875rem 1.5rem; position:sticky; top:0; z-index:200; box-shadow:var(--shadow-sm); display:flex; align-items:center; gap:.75rem; }
+    .header { background:var(--bg-secondary); border-bottom:1px solid var(--border-color); padding:.875rem 1.5rem; position:fixed; top:0; left:0; right:0; z-index:200; box-shadow:var(--shadow-sm); display:flex; align-items:center; gap:.75rem; }
     .header-inner { flex:1; display:flex; justify-content:space-between; align-items:center; gap:1rem; }
+    .header-brand { display:flex; align-items:center; gap:.5rem; min-width:0; }
+    .header-controls { display:flex; align-items:center; gap:.5rem; min-width:0; }
     .logo { display:flex; align-items:center; gap:.625rem; text-decoration:none; color:inherit; }
     .logo-icon { width:30px; height:30px; border-radius:50%; flex-shrink:0; object-fit:contain; }
     [data-theme="light"] .logo-icon-dark { display:none; }
@@ -238,16 +242,14 @@
     .logo-text { font-size:1.0625rem; font-weight:600; letter-spacing:-.02em; white-space:nowrap; display:block; }
     .logo-tagline { font-size:.6875rem; color:var(--text-tertiary); font-weight:400; white-space:nowrap; border-left:1px solid var(--border-color); padding-left:.625rem; margin-left:.25rem; }
     .header-actions { display:flex; gap:.5rem; align-items:center; }
-    .hamburger { display:none; width:34px; height:34px; border-radius:7px; background:var(--bg-tertiary); border:1px solid var(--border-color); align-items:center; justify-content:center; cursor:pointer; color:var(--text-primary); font-size:1rem; }
-    .hamburger:hover { border-color:var(--border-hover); }
     .sidebar-collapse-btn { width:32px; height:32px; border-radius:7px; background:var(--bg-tertiary); border:1px solid var(--border-color); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; color:var(--text-secondary); transition:all .15s; }
     .sidebar-collapse-btn:hover { border-color:var(--border-hover); color:var(--text-primary); background:var(--bg-secondary); }
 
     /* App body: sidebar + main */
-    .app-body { display:flex; flex:1; }
+    .app-body { display:flex; flex:1; padding-top:var(--app-header-height); }
 
     /* Sidebar */
-    .sidebar { width:220px; background:var(--bg-secondary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; transition:width .2s ease; overflow:hidden; height:calc(100vh - 53px); position:fixed; top:53px; z-index:100; }
+    .sidebar { width:220px; background:var(--bg-secondary); border-right:1px solid var(--border-color); display:flex; flex-direction:column; flex-shrink:0; transition:width .2s ease; overflow:hidden; height:calc(100vh - var(--app-header-height)); position:fixed; top:var(--app-header-height); z-index:100; }
     .sidebar ~ .main { margin-left:220px; transition:margin-left .2s ease; }
     .sidebar.collapsed ~ .main { margin-left:60px; }
     .sidebar.collapsed { width:60px; }
@@ -279,13 +281,60 @@
     .sidebar-version { padding:.375rem .75rem; font-size:.6875rem; color:var(--text-tertiary); font-family:'JetBrains Mono',monospace; text-align:center; border-top:1px solid var(--border-color); }
     .sidebar.collapsed .sidebar-version { font-size:.5625rem; }
 
-    /* Mobile drawer overlay */
-    .drawer-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.5); backdrop-filter:blur(4px); z-index:300; animation:fadeIn .2s ease; }
-    .drawer-overlay.open { display:block; }
-    .mobile-drawer { position:fixed; top:0; left:-280px; width:280px; height:100%; background:var(--bg-secondary); z-index:310; box-shadow:var(--shadow-lg); display:flex; flex-direction:column; transition:left .25s ease; }
-    .mobile-drawer.open { left:0; }
-    .mobile-drawer-header { padding:1rem 1.25rem; border-bottom:1px solid var(--border-color); display:flex; align-items:center; justify-content:space-between; }
-    .mobile-drawer-nav { flex:1; padding:.75rem; display:flex; flex-direction:column; gap:2px; overflow-y:auto; }
+    /* Mobile bottom navigation */
+    .mobile-bottom-nav {
+      display:none;
+      position:fixed;
+      left:0;
+      right:0;
+      bottom:0;
+      width:100vw;
+      max-width:100vw;
+      z-index:320;
+      padding:.55rem .6rem calc(.55rem + env(safe-area-inset-bottom, 0px));
+      background:rgba(255,255,255,.96);
+      border-top:1px solid var(--border-color);
+      backdrop-filter:blur(18px);
+      box-shadow:0 -8px 24px rgba(15,23,42,.08);
+      visibility:hidden;
+      opacity:0;
+      pointer-events:none;
+      align-items:stretch;
+      gap:.35rem;
+    }
+    [data-theme="dark"] .mobile-bottom-nav { background:rgba(20,20,20,.96); }
+    .mobile-bottom-nav-item {
+      display:flex;
+      flex:1 1 0;
+      width:100%;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:.28rem;
+      min-height:52px;
+      border:none;
+      border-radius:12px;
+      background:none;
+      color:var(--text-secondary);
+      font:inherit;
+      font-size:.64rem;
+      font-weight:600;
+      letter-spacing:.01em;
+      cursor:pointer;
+      transition:all .15s ease;
+    }
+    .mobile-bottom-nav-item svg { flex-shrink:0; }
+    .mobile-bottom-nav-item.active {
+      background:var(--bitcoin-light);
+      color:var(--bitcoin-orange);
+    }
+    .mobile-bottom-nav-item:active { transform:translateY(1px); }
+    .mobile-bottom-nav-label {
+      max-width:100%;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
 
     /* Main */
     .main {
@@ -495,8 +544,13 @@
     @media(max-width:768px) {
       .main { padding:1rem; }
       .header { padding:.75rem 1rem; }
+      .header-inner { gap:.625rem; }
+      .header-brand { flex:1; min-width:0; }
+      .header-controls { flex-shrink:0; gap:.375rem; }
       .logo-text { display:none; }
       .logo-tagline { display:none; }
+      .price-pill { max-width:120px; overflow:hidden; text-overflow:ellipsis; }
+      .sync-pill { padding:.25rem .5rem; }
       .stats-grid { grid-template-columns:1fr 1fr; }
       .stats-grid .stat-extra { display:none; }
       .stats-grid.stats-expanded .stat-extra { display:block; }
@@ -514,13 +568,26 @@
       .mobile-only { display:inline !important; }
       .sidebar { display:none; }
       .sidebar ~ .main { margin-left:0; }
-      .hamburger { display:flex; }
+      .main { padding-bottom:6.5rem; }
+      .mobile-bottom-nav {
+        display:flex !important;
+        visibility:visible;
+        opacity:1;
+        pointer-events:auto;
+      }
     }
     @media(max-width:480px) {
+      .header { padding:.625rem .75rem; }
+      .header-inner { align-items:center; }
+      .header-controls { gap:.25rem; }
+      .price-pill { display:none; }
+      .sync-pill { padding:.25rem .45rem; }
+      .btn.btn-primary { padding:.5rem .75rem; }
       .main {
         background-image:radial-gradient(circle, color-mix(in srgb, var(--main-dot-color) 60%, transparent) 1.2px, transparent 1.2px);
         background-size:10px 10px;
         background-position:5px 5px;
+        padding-bottom:7rem;
       }
       .stats-grid { grid-template-columns:1fr; }
       .charts-grid { grid-template-columns:1fr !important; }
@@ -530,6 +597,8 @@
       .wallet-chip { height:28px; padding:0 .625rem; font-size:.6875rem; line-height:1; }
       .dashboard-range-row { gap:.3125rem; }
       .dashboard-range-row .btn { padding:.25rem .625rem !important; }
+      .mobile-bottom-nav { gap:.2rem; padding-left:.35rem; padding-right:.35rem; }
+      .mobile-bottom-nav-item { min-height:50px; font-size:.58rem; }
     }
 
     /* Info banner */
@@ -2245,12 +2314,12 @@ function App() {
     const hash = location.hash.slice(1);
     return NAV_ITEMS.some(n => n.key === hash) ? hash : 'dashboard';
   });
+  const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth <= 768);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('btc-sidebar-collapsed') === 'true');
   const [moreStats, setMoreStats] = useState(false);
   const [walletsOpen, setWalletsOpen] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [showTipJar, setShowTipJar] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [showWalletModal, setShowWalletModal] = useState(false);
   const [showWizard, setShowWizard] = useState(false);
@@ -2377,6 +2446,12 @@ function App() {
   useEffect(() => {
     localStorage.setItem('btc-sidebar-collapsed', sidebarCollapsed);
   }, [sidebarCollapsed]);
+  useEffect(() => {
+    const onResize = () => setIsMobileViewport(window.innerWidth <= 768);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   useEffect(() => { location.hash = tab; }, [tab]);
   useEffect(() => {
     const onHash = () => {
@@ -3101,14 +3176,11 @@ function App() {
     <div className={`app ${effectiveSettings.hideValues?'values-hidden':''}`}>
       {/* Header */}
       <header className="header">
-        <button className="hamburger" onClick={()=>setMobileMenuOpen(true)}>
-          {Icon.Menu({width:18,height:18})}
-        </button>
         <button className="sidebar-collapse-btn desktop-only" onClick={()=>setSidebarCollapsed(c=>!c)} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'}>
           {sidebarCollapsed ? Icon.ChevronRight({width:16,height:16}) : Icon.ChevronLeft({width:16,height:16})}
         </button>
         <div className="header-inner">
-          <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+          <div className="header-brand">
             <div className="logo">
               <img className="logo-icon logo-icon-light" src="images/logo-dark.png" alt="SatLedger" />
               <img className="logo-icon logo-icon-dark" src="images/logo-white.png" alt="SatLedger" />
@@ -3116,7 +3188,7 @@ function App() {
               <span className="logo-tagline desktop-only">Track your Bitcoin, your way</span>
             </div>
           </div>
-          <div style={{display:'flex',alignItems:'center',gap:'.5rem'}}>
+          <div className="header-controls">
             {/* Sync status */}
             {syncState==='disconnected' ? (
               <button className="sync-pill" onClick={handleSignIn} title="Sign in with Google to sync across devices">
@@ -3145,40 +3217,6 @@ function App() {
         </div>
       </header>
 
-      {/* Mobile drawer */}
-      <div className={`drawer-overlay ${mobileMenuOpen?'open':''}`} onClick={()=>setMobileMenuOpen(false)}/>
-      <nav className={`mobile-drawer ${mobileMenuOpen?'open':''}`}>
-        <div className="mobile-drawer-header">
-          <button className="btn-icon" onClick={()=>setMobileMenuOpen(false)}>{Icon.X()}</button>
-          <span className="logo-text">SatLedger</span>
-          <img className="logo-icon logo-icon-light" src="images/logo-dark.png" alt="SatLedger" />
-          <img className="logo-icon logo-icon-dark" src="images/logo-white.png" alt="SatLedger" />
-        </div>
-        <div className="mobile-drawer-nav">
-          {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
-            <button key={item.key} className={`sidebar-item ${tab===item.key?'active':''}`} onClick={()=>{setTab(item.key);setMobileMenuOpen(false);}}>
-              {Icon[item.icon]({width:18,height:18})}
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
-        <div className="sidebar-theme">
-          <button className={`sidebar-theme-toggle ${theme}`} onClick={()=>setTheme(t=>t==='light'?'dark':'light')} title={theme==='light'?'Switch to dark mode':'Switch to light mode'}>
-            <div className="toggle-knob"/>
-          </button>
-          <span className="sidebar-theme-label" style={{display:'flex',alignItems:'center',gap:'.375rem'}}>{theme==='dark' ? Icon.Moon({width:14,height:14}) : Icon.Sun({width:14,height:14})} {theme==='dark' ? 'Dark mode' : 'Light mode'}</span>
-        </div>
-        <div className="sidebar-utility-links" style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-          <button onClick={()=>{setShowGuide(true);setMobileMenuOpen(false);}} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:'.5rem',padding:'.5rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',textAlign:'center'}}>
-            {Icon.HelpCircle({width:16,height:16})} How it works
-          </button>
-          <button onClick={()=>{setShowTipJar(true);setMobileMenuOpen(false);}} style={{display:'flex',alignItems:'center',justifyContent:'center',gap:'.5rem',padding:'.5rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',textAlign:'center'}}>
-            {Icon.Heart({width:16,height:16})} Send a tip
-          </button>
-        </div>
-        <div className="sidebar-version">v3.31</div>
-      </nav>
-
       <div className="app-body">
         {/* Desktop sidebar */}
         <aside className={`sidebar ${sidebarCollapsed?'collapsed':''}`}>
@@ -3190,20 +3228,6 @@ function App() {
               </button>
             ))}
           </nav>
-          <div className="sidebar-theme">
-            <button className={`sidebar-theme-toggle ${theme}`} onClick={()=>setTheme(t=>t==='light'?'dark':'light')} title={sidebarCollapsed?(theme==='light'?'Dark mode':'Light mode'):(theme==='light'?'Switch to dark mode':'Switch to light mode')}>
-              <div className="toggle-knob"/>
-            </button>
-            <span className="sidebar-theme-label" style={{display:'flex',alignItems:'center',gap:'.375rem'}}>{theme==='dark' ? Icon.Moon({width:14,height:14}) : Icon.Sun({width:14,height:14})} {theme==='dark' ? 'Dark mode' : 'Light mode'}</span>
-          </div>
-          <div className="sidebar-utility-links" style={{display:'flex',flexDirection:'column',alignItems:'center'}}>
-            <button onClick={()=>setShowGuide(true)} title="How it works" style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.375rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',justifyContent:'center',textAlign:'center'}}>
-              {Icon.HelpCircle({width:16,height:16})} {!sidebarCollapsed && 'How it works'}
-            </button>
-            <button onClick={()=>setShowTipJar(true)} title="Send a tip" style={{display:'flex',alignItems:'center',gap:'.5rem',padding:'.375rem .75rem',background:'none',border:'none',color:'var(--text-secondary)',cursor:'pointer',fontSize:'.8125rem',fontFamily:'inherit',width:'100%',justifyContent:'center',textAlign:'center'}}>
-              {Icon.Heart({width:16,height:16})} {!sidebarCollapsed && 'Send a tip'}
-            </button>
-          </div>
           <div className="sidebar-version">v3.31</div>
         </aside>
 
@@ -4014,6 +4038,31 @@ function App() {
               </div>
             </div>
 
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">App Options</div>
+              </div>
+              <div className="card-body">
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'1rem'}}>
+                  <div>
+                    <div style={{fontSize:'.9375rem',fontWeight:600}}>Theme</div>
+                    <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Switch between light and dark mode</div>
+                  </div>
+                  <button className={`sidebar-theme-toggle ${theme}`} onClick={()=>setTheme(t=>t==='light'?'dark':'light')} title={theme==='light'?'Switch to dark mode':'Switch to light mode'}>
+                    <div className="toggle-knob"/>
+                  </button>
+                </div>
+                <div style={{borderTop:'1px solid var(--border-color)',marginTop:'1rem',paddingTop:'1rem',display:'flex',gap:'.625rem',flexWrap:'wrap'}}>
+                  <button className="btn btn-secondary btn-sm" onClick={()=>setShowGuide(true)} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
+                    {Icon.HelpCircle({width:14,height:14})} How it works
+                  </button>
+                  <button className="btn btn-secondary btn-sm" onClick={()=>setShowTipJar(true)} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
+                    {Icon.Heart({width:14,height:14})} Send a tip
+                  </button>
+                </div>
+              </div>
+            </div>
+
             {/* Dashboard Charts — visibility & order */}
             {(() => {
               const chartDefs = [
@@ -4610,6 +4659,36 @@ function App() {
         </div>
       )}
 
+      <nav
+        className="mobile-bottom-nav"
+        aria-label="Primary"
+        style={isMobileViewport ? {
+          display:'flex',
+          position:'fixed',
+          left:0,
+          right:0,
+          bottom:0,
+          width:'100vw',
+          maxWidth:'100vw',
+          visibility:'visible',
+          opacity:1,
+          pointerEvents:'auto',
+        } : { display:'none' }}
+      >
+        {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
+          <button
+            key={item.key}
+            className={`mobile-bottom-nav-item ${tab===item.key?'active':''}`}
+            onClick={()=>setTab(item.key)}
+            aria-current={tab===item.key ? 'page' : undefined}
+            aria-label={item.label}
+          >
+            {Icon[item.icon]({width:18,height:18})}
+            <span className="mobile-bottom-nav-label">{item.label}</span>
+          </button>
+        ))}
+      </nav>
+
       {/* Toast */}
       {toast && <div className="toast">{toast}</div>}
     </div>
@@ -4711,6 +4790,7 @@ function ResetDialog({ transactions, wallets, hasVault, onClose, onReset }) {
           </button>
         </div>
       </div>
+
     </div>
   );
 }
