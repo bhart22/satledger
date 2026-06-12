@@ -8,6 +8,8 @@
   <link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32.png">
   <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
   <meta name="theme-color" content="#0a0a0a">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -22,10 +24,16 @@
       }
       // Redirect returning users straight to the app
       try {
-        if (localStorage.getItem('btc-transactions') || localStorage.getItem('btc-wallets')) {
+        if (localStorage.getItem('btc-tx-v2') || localStorage.getItem('btc-transactions') || localStorage.getItem('btc-wallets')) {
           window.location.replace('app.html');
         }
       } catch (e) {}
+      // Offline support — service workers require HTTPS (or localhost); skipped on file://
+      if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+        window.addEventListener('load', function() {
+          navigator.serviceWorker.register('sw.js').catch(function(e) { console.warn('Service worker registration failed:', e); });
+        });
+      }
     })();
   </script>
   <style>

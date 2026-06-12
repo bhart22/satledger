@@ -5,13 +5,15 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Track Bitcoin transactions, wallet holdings, cost basis, and P&L. Export to CoinLedger for tax reporting.">
   <meta name="theme-color" content="#0a0a0a">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com https://accounts.google.com; connect-src 'self' https://api.coinbase.com https://api.exchange.coinbase.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://accounts.google.com https://*.googleusercontent.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32.png">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
   <title>SatLedger — Bitcoin Portfolio Tracker</title>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin="anonymous" integrity="sha384-ezQ6HS3FLspd9te19o2McUV6FAK091+GG7KO54f/R8DKgCDi7fULhapNrd5LY+vG" src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
     // Google Drive Sync Module
@@ -36,9 +38,10 @@
                 scope: GDRIVE_SCOPE,
                 callback: () => {},
               });
-              // Restore cached token
+              // Restore cached token (sessionStorage only — cleared when the tab closes)
+              try { localStorage.removeItem('btc-gtoken'); } catch {} // clean up legacy persistent copy
               try {
-                const cached = JSON.parse(localStorage.getItem('btc-gtoken')||'null');
+                const cached = JSON.parse(sessionStorage.getItem('btc-gtoken')||'null');
                 if(cached && cached.token && cached.expiry > Date.now()) {
                   this.accessToken = cached.token;
                   this.tokenExpiry = cached.expiry;
@@ -57,15 +60,18 @@
 
       _cacheToken(token, expiresIn) {
         this.accessToken = token;
-        // Cache token for 4 hours; ensureToken will silently refresh if Google rejects it
-        this.tokenExpiry = Date.now() + 4 * 60 * 60 * 1000;
-        localStorage.setItem('btc-gtoken', JSON.stringify({ token, expiry: this.tokenExpiry }));
+        // Honor Google's actual expiry (typically 1h) with a 60s safety margin;
+        // ensureToken will silently refresh if Google rejects it
+        const ttl = (Number(expiresIn) > 0 ? Number(expiresIn) - 60 : 3540) * 1000;
+        this.tokenExpiry = Date.now() + ttl;
+        try { sessionStorage.setItem('btc-gtoken', JSON.stringify({ token, expiry: this.tokenExpiry })); } catch {}
       },
 
       _clearToken() {
         this.accessToken = null;
         this.tokenExpiry = null;
-        localStorage.removeItem('btc-gtoken');
+        try { sessionStorage.removeItem('btc-gtoken'); } catch {}
+        try { localStorage.removeItem('btc-gtoken'); } catch {}
       },
 
       isTokenValid() {
@@ -200,6 +206,13 @@
       
       isSignedIn() { return this.isTokenValid(); }
     };
+
+    // Offline support — service workers require HTTPS (or localhost); skipped on file://
+    if('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(e => console.warn('Service worker registration failed:', e));
+      });
+    }
   </script>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
@@ -216,9 +229,9 @@
       --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
     }
     [data-theme="dark"] {
-      --bg-primary: #0a0a0a; --bg-secondary: #141414; --bg-tertiary: #1e1e1e;
-      --text-primary: #f5f5f5; --text-secondary: #a3a3a3; --text-tertiary: #525252;
-      --border-color: #2a2a2a; --border-hover: #404040;
+      --bg-primary: #0a0a0a; --bg-secondary: #181818; --bg-tertiary: #222222;
+      --text-primary: #f5f5f5; --text-secondary: #a3a3a3; --text-tertiary: #6e6e6e;
+      --border-color: #353535; --border-hover: #4d4d4d;
       --main-surface: #120d08; --main-dot-color: rgba(247,147,26,0.65);
       --bitcoin-light: #2a1800; --green-light: #0f2d1a; --red-light: #2d0f0f;
       --blue-light: #0f1d3d; --purple-light: #1e1030;
@@ -394,6 +407,10 @@
     .stat-value.btc { color:var(--bitcoin-orange); }
     .stat-value.green { color:var(--green); }
     .stat-value.red { color:var(--red); }
+    .stat-value.zero { color:var(--text-tertiary); }
+    .sample-badge { font-size:.625rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; background:var(--bg-tertiary); color:var(--text-tertiary); border:1px solid var(--border-color); border-radius:4px; padding:.125rem .375rem; white-space:nowrap; flex-shrink:0; margin-top:4px; }
+    .stat-card.stat-hero { grid-column:span 2; }
+    @media(min-width:1100px) { .stats-grid { grid-template-columns:repeat(4,1fr); } }
     .values-hidden .stat-value, .values-hidden .stat-sub, .values-hidden .wallet-btc, .values-hidden .wallet-usd, .values-hidden .pie-total, .values-hidden .chart-subtitle { filter:blur(8px); user-select:none; pointer-events:none; }
     .values-hidden .public-data .chart-subtitle { filter:none; user-select:auto; pointer-events:auto; }
     .scope-badge { display:inline-flex; align-items:center; padding:.16rem .45rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-tertiary); color:var(--text-tertiary); font-size:.625rem; font-weight:700; letter-spacing:.05em; text-transform:uppercase; white-space:nowrap; }
@@ -584,6 +601,7 @@
       .price-pill { display:inline-flex; max-width:92px; padding:.25rem .45rem; font-size:.6875rem; }
       .sync-pill { padding:.25rem .45rem; }
       .btn.btn-primary { padding:.5rem .75rem; }
+      .stats-grid .stat-card.stat-hero { grid-column:auto; }
       .main {
         background-image:radial-gradient(circle, color-mix(in srgb, var(--main-dot-color) 60%, transparent) 1.2px, transparent 1.2px);
         background-size:10px 10px;
@@ -600,6 +618,13 @@
       .dashboard-range-row .btn { padding:.25rem .625rem !important; }
       .mobile-bottom-nav { gap:.2rem; padding-left:.35rem; padding-right:.35rem; }
       .mobile-bottom-nav-item { min-height:50px; font-size:.58rem; }
+    }
+    /* Compact header on narrow phones — full "+ Add" overflows below ~560px */
+    @media(max-width:560px) {
+      .header-controls { gap:.25rem; }
+      .add-tx-btn .mobile-only { display:none !important; }
+      .add-tx-btn { padding:.45rem .65rem; font-size:1rem; line-height:1; }
+      .price-pill { max-width:104px; overflow:hidden; text-overflow:ellipsis; }
     }
 
     /* Info banner */
@@ -685,7 +710,10 @@ function useThrottledCallback(fn, delay) {
 const HISTORICAL_PRICE_CACHE_KEY = 'btc-price-history-v1';
 const VAULT_STORAGE_KEY = 'btc-vault';
 const VAULT_SCHEMA_VERSION = 1;
-const VAULT_PBKDF2_ITERATIONS = 250000;
+const VAULT_PBKDF2_ITERATIONS = 600000; // OWASP-recommended minimum for PBKDF2-SHA256
+const VAULT_PBKDF2_LEGACY_ITERATIONS = 250000; // vaults created before the bump
+const VAULT_PBKDF2_MAX_ITERATIONS = 5000000; // cap on stored values so a tampered payload can't hang the browser
+const VAULT_MIN_PASSPHRASE_LENGTH = 12;
 const dayKeyUTC = ts => new Date(ts).toISOString().slice(0,10);
 const addDaysUTC = (dateStr, days) => {
   const dt = new Date(dateStr+'T00:00:00Z');
@@ -738,10 +766,10 @@ const emptyVaultDraft = () => ({
   notes: '',
 });
 const hasVaultContent = draft => Object.values(draft).some(v => String(v||'').trim());
-async function deriveVaultKey(passphrase, salt, usage=['encrypt','decrypt']) {
+async function deriveVaultKey(passphrase, salt, usage=['encrypt','decrypt'], iterations=VAULT_PBKDF2_ITERATIONS) {
   const baseKey = await crypto.subtle.importKey('raw', encoder.encode(passphrase), 'PBKDF2', false, ['deriveKey']);
   return crypto.subtle.deriveKey(
-    { name:'PBKDF2', salt, iterations: VAULT_PBKDF2_ITERATIONS, hash:'SHA-256' },
+    { name:'PBKDF2', salt, iterations, hash:'SHA-256' },
     baseKey,
     { name:'AES-GCM', length:256 },
     false,
@@ -770,7 +798,10 @@ async function decryptVaultData(vault, passphrase) {
   const salt = fromBase64(vault.salt);
   const iv = fromBase64(vault.iv);
   const payload = fromBase64(vault.encryptedPayload);
-  const key = await deriveVaultKey(passphrase, salt, ['decrypt']);
+  // Use the iteration count recorded at encryption time so older vaults still open
+  const storedIterations = Math.floor(Number(vault?.kdf?.iterations)) || VAULT_PBKDF2_LEGACY_ITERATIONS;
+  const iterations = Math.min(Math.max(storedIterations, 1000), VAULT_PBKDF2_MAX_ITERATIONS);
+  const key = await deriveVaultKey(passphrase, salt, ['decrypt'], iterations);
   const plaintext = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, payload);
   const parsed = JSON.parse(decoder.decode(plaintext));
   return {
@@ -794,7 +825,30 @@ const vaultSectionDefs = [
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
-const fmtBTC = v => parseFloat(v||0).toFixed(8);
+// Write to localStorage without throwing when the quota is exceeded
+const safeSetItem = (key, value) => {
+  try { localStorage.setItem(key, value); return true; }
+  catch(e) { console.error('localStorage write failed:', key, e); return false; }
+};
+// Keep one recoverable snapshot of local data before a Drive pull overwrites it
+const stashPreSyncSnapshot = () => {
+  try {
+    const snapshot = {
+      savedAt: new Date().toISOString(),
+      transactions: JSON.parse(localStorage.getItem('btc-tx-v2')||'[]'),
+      wallets: JSON.parse(localStorage.getItem('btc-wallets')||'[]'),
+      settings: JSON.parse(localStorage.getItem('btc-settings')||'{}'),
+      vault: JSON.parse(localStorage.getItem(VAULT_STORAGE_KEY)||'null'),
+      lastModified: localStorage.getItem('btc-last-modified')||null,
+    };
+    safeSetItem('btc-presync-backup', JSON.stringify(snapshot));
+  } catch(e) { console.error('Could not stash pre-sync snapshot:', e); }
+};
+let BTC_DISPLAY_UNIT = 'btc'; // 'btc' | 'sats' — display-only preference, assigned from settings during App render
+const fmtBTC = v => BTC_DISPLAY_UNIT === 'sats'
+  ? Math.round(parseFloat(v||0)*1e8).toLocaleString('en-US')
+  : parseFloat(v||0).toFixed(8);
+const btcUnit = () => BTC_DISPLAY_UNIT === 'sats' ? 'sats' : 'BTC';
 const fmtUSD = v => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:2}).format(v||0);
 const fmtDate = d => { if(!d) return '—'; const [y,m,dy] = d.split('-'); return `${m}/${dy}/${y}`; };
 
@@ -884,6 +938,7 @@ function normalizeSettings(nextSettings) {
   return {
     defaultTxType: 'Buy',
     ...base,
+    displayUnit: base.displayUnit === 'sats' ? 'sats' : 'btc',
     rsiThresholds: normalizeRsiThresholds(base.rsiThresholds),
   };
 }
@@ -1053,7 +1108,8 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
         } else if(tx.type==='Reward') { runningBTCForCost+=amt; }
         else if(tx.type==='Sell') {
           const avgCostBasis = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : 0;
-          const proceeds = tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price);
+          // Net proceeds: USD exchange fee reduces what the sale actually returned
+          const proceeds = (tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price)) - fee;
           const costOfSold = amt * avgCostBasis;
           realizedPL += proceeds - costOfSold;
           const ratio = amt/Math.max(runningBTCForCost,0.00000001);
@@ -1687,16 +1743,16 @@ function WaterfallChart({ data, btcPrice, sampleData, scopeLabel }) {
   ) : null;
 
   return (
-    <div className="card">
+    <div className="card" style={sampleData?{opacity:.7}:{}}>
       <div className="card-header" style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between'}}>
         <div>
           <div style={{display:'flex',alignItems:'center',gap:'.5rem',flexWrap:'wrap'}}>
             <div className="card-title">BTC Flow Waterfall</div>
             {scopeLabel && <span className="scope-badge">{scopeLabel}</span>}
-            {sampleData && <span style={{fontSize:'.625rem',fontWeight:700,letterSpacing:'.05em',textTransform:'uppercase',background:'var(--bg-tertiary)',color:'var(--text-tertiary)',border:'1px solid var(--border-color)',borderRadius:'4px',padding:'.125rem .375rem',whiteSpace:'nowrap'}}>Sample</span>}
           </div>
           <div style={{fontSize:'.8125rem',color:netChange>=0?'#16a34a':'#dc2626',fontFamily:'JetBrains Mono'}}>{subtitle}</div>
         </div>
+        {sampleData && <span className="sample-badge">Sample</span>}
         {!sampleData && <button onClick={()=>{setHover(null);setExpanded(true);}} title="Expand chart"
           style={{background:'none',border:'none',cursor:'pointer',padding:'6px',color:'var(--text-tertiary)',flexShrink:0,marginTop:'2px'}}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1781,13 +1837,13 @@ function PieChart({ segments, totalBTC, btcPrice }) {
         ))}
       </div>
       <div className="pie-total" style={{textAlign:'center',fontFamily:'JetBrains Mono,monospace',fontWeight:700,fontSize:'1rem',color:'var(--bitcoin-orange)'}}>
-        {fmtBTC(totalBTC)} BTC
+        {fmtBTC(totalBTC)} {btcUnit()}
       </div>
       {hover !== null && segments[hover] && ReactDOM.createPortal(
         <div className="donut-tooltip" style={{left:mouse.x+12,top:mouse.y-10}}>
           <div className="dt-name">{segments[hover].name}</div>
           <div className="dt-type">{segments[hover].type}</div>
-          <div className="dt-row"><span className="dt-label">BTC</span><span className="dt-value">{fmtBTC(segments[hover].amount)}</span></div>
+          <div className="dt-row"><span className="dt-label">{btcUnit()}</span><span className="dt-value">{fmtBTC(segments[hover].amount)}</span></div>
           {btcPrice && <div className="dt-row"><span className="dt-label">USD</span><span className="dt-value">{fmtUSD(segments[hover].amount*btcPrice)}</span></div>}
           <div className="dt-row"><span className="dt-label">Share</span><span className="dt-value dt-pct">{(segments[hover].pct*100).toFixed(1)}%</span></div>
         </div>,
@@ -2179,9 +2235,8 @@ function SVGChart({ data, dataKey, title, subtitle, color, formatY, formatToolti
             <div className="chart-subtitle" style={{fontSize:'.8125rem',color:'var(--text-secondary)',fontFamily:'JetBrains Mono'}}>{subtitle}</div>
           </div>
           {scopeLabel && <span className="scope-badge">{scopeLabel}</span>}
-          {sampleData && <span style={{fontSize:'.625rem',fontWeight:700,letterSpacing:'.05em',textTransform:'uppercase',background:'var(--bg-tertiary)',color:'var(--text-tertiary)',border:'1px solid var(--border-color)',borderRadius:'4px',padding:'.125rem .375rem',whiteSpace:'nowrap'}}>Sample</span>}
         </div>
-        {!sampleData && <button onClick={()=>{setTooltip(null);setExpanded(true);}} title="Expand chart"
+        {sampleData ? <span className="sample-badge">Sample</span> : <button onClick={()=>{setTooltip(null);setExpanded(true);}} title="Expand chart"
           style={{background:'none',border:'none',cursor:'pointer',padding:'6px',color:'var(--text-tertiary)',flexShrink:0,marginTop:'2px'}}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
@@ -2259,6 +2314,8 @@ function App() {
       return normalizeSettings({ defaultTxType:'Buy' });
     }
   });
+  // Keep the module-level display unit in sync before children render
+  BTC_DISPLAY_UNIT = settings.displayUnit === 'sats' ? 'sats' : 'btc';
   const [rsiThresholdDraft, setRsiThresholdDraft] = useState(() => {
     const thresholds = normalizeRsiThresholds(settings.rsiThresholds);
     return {
@@ -2418,11 +2475,12 @@ function App() {
   const save = React.useCallback((txs, wals, options={}) => {
     const mod = options.mod || new Date().toISOString();
     const vaultToStore = Object.prototype.hasOwnProperty.call(options, 'vault') ? options.vault : vault;
-    localStorage.setItem('btc-tx-v2', JSON.stringify(txs));
-    localStorage.setItem('btc-wallets', JSON.stringify(wals));
-    if(vaultToStore) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(vaultToStore));
+    let ok = safeSetItem('btc-tx-v2', JSON.stringify(txs));
+    ok = safeSetItem('btc-wallets', JSON.stringify(wals)) && ok;
+    if(vaultToStore) ok = safeSetItem(VAULT_STORAGE_KEY, JSON.stringify(vaultToStore)) && ok;
     else localStorage.removeItem(VAULT_STORAGE_KEY);
-    localStorage.setItem('btc-last-modified', mod);
+    ok = safeSetItem('btc-last-modified', mod) && ok;
+    if(!ok) showToast('⚠ Browser storage is full — changes may not persist locally. Export a backup.', 6000);
     // Auto-sync to Drive if connected
     if(GDriveSync.isSignedIn()) {
       if(syncDebounce.current) clearTimeout(syncDebounce.current);
@@ -2519,7 +2577,7 @@ function App() {
         merged = fillDailyPriceGaps(merged, dataStart, today);
         if(cancelled) return;
         setHistoricalPrices(merged);
-        localStorage.setItem(HISTORICAL_PRICE_CACHE_KEY, JSON.stringify(merged));
+        safeSetItem(HISTORICAL_PRICE_CACHE_KEY, JSON.stringify(merged));
       } catch(e) {
         console.error('Historical price fetch failed:', e);
         if(!cancelled) showToast('Could not fetch BTC price history');
@@ -2586,8 +2644,9 @@ function App() {
           await GDriveSync.push({ transactions, wallets, settings: settingsData, vault, lastModified: mod });
           localStorage.setItem('btc-last-modified', mod);
           showToast('Backed up to Google Drive');
-        } else if(remoteTxCount > localTxCount || remoteMod > localMod) {
-          // Remote has more data or is newer — pull
+        } else if(remoteMod > localMod) {
+          // Remote is newer — pull (keep a local snapshot in case this overwrites unsynced work)
+          stashPreSyncSnapshot();
           setTransactions(Array.isArray(remote.transactions) ? remote.transactions : []);
           setWallets(remote.wallets || []);
           if(Object.prototype.hasOwnProperty.call(remote, 'vault')) {
@@ -2605,7 +2664,7 @@ function App() {
           localStorage.setItem('btc-last-modified', remoteMod);
           showToast(`Updated from Google Drive — ${remoteTxCount} transactions`);
         } else {
-          // Local has more data or same — sync up
+          // Local is newer or same — sync up
           const settingsData = JSON.parse(localStorage.getItem('btc-settings')||'{}');
           const mod = new Date().toISOString();
           await GDriveSync.push({ transactions, wallets, settings: settingsData, vault, lastModified: mod });
@@ -2662,6 +2721,7 @@ function App() {
             if(remote && remote.lastModified) {
               const localMod = localStorage.getItem('btc-last-modified') || '0';
                 if(remote.lastModified > localMod) {
+                stashPreSyncSnapshot();
                 setTransactions(Array.isArray(remote.transactions) ? remote.transactions : []);
                 setWallets(remote.wallets || []);
                 if(Object.prototype.hasOwnProperty.call(remote, 'vault')) {
@@ -2702,7 +2762,7 @@ function App() {
   const handleCreateVault = async () => {
     setVaultError('');
     if(!hasVaultContent(vaultDraft)) { setVaultError('Add at least one vault section before saving.'); return; }
-    if(!vaultSetupPassphrase || vaultSetupPassphrase.length < 10) { setVaultError('Use a vault passphrase with at least 10 characters.'); return; }
+    if(!vaultSetupPassphrase || vaultSetupPassphrase.length < VAULT_MIN_PASSPHRASE_LENGTH) { setVaultError(`Use a vault passphrase with at least ${VAULT_MIN_PASSPHRASE_LENGTH} characters.`); return; }
     if(vaultSetupPassphrase !== vaultSetupConfirm) { setVaultError('Vault passphrases do not match.'); return; }
     setVaultBusy(true);
     try {
@@ -2764,7 +2824,7 @@ function App() {
   const handleChangeVaultPassphrase = async () => {
     setVaultError('');
     if(!vaultUnlocked || !vaultPassphraseRef.current) { setVaultError('Unlock the vault before changing the passphrase.'); return; }
-    if(!vaultNewPassphrase || vaultNewPassphrase.length < 10) { setVaultError('Use a new passphrase with at least 10 characters.'); return; }
+    if(!vaultNewPassphrase || vaultNewPassphrase.length < VAULT_MIN_PASSPHRASE_LENGTH) { setVaultError(`Use a new passphrase with at least ${VAULT_MIN_PASSPHRASE_LENGTH} characters.`); return; }
     if(vaultNewPassphrase !== vaultNewPassphraseConfirm) { setVaultError('New vault passphrases do not match.'); return; }
     setVaultBusy(true);
     try {
@@ -2820,28 +2880,6 @@ function App() {
       }
     });
     return h;
-  }, [transactions]);
-
-  // Per-wallet cost basis
-  const walletCostBasis = useMemo(() => {
-    const cb = {};
-    transactions.forEach(tx => {
-      if(tx.excludeStats) return;
-      const amt = parseFloat(tx.amount)||0;
-      const price = parseFloat(tx.price)||0;
-      const fee = parseFloat(tx.fee)||0;
-      const w = tx.wallet;
-      if(!w) return;
-      if(!cb[w]) cb[w] = { cost: 0, btcAcquired: 0 };
-      if(tx.type==='Buy') {
-        const cost = (tx.totalUsd ? parseFloat(tx.totalUsd) : (amt*price)) + fee;
-        cb[w].cost += cost;
-        cb[w].btcAcquired += amt;
-      } else if(tx.type==='Reward') {
-        cb[w].btcAcquired += amt;
-      }
-    });
-    return cb;
   }, [transactions]);
 
   // Total holdings = only ACTIVE wallets (archived wallets hidden from dashboard)
@@ -2922,8 +2960,18 @@ function App() {
     if((finalForm.type==='Buy'||finalForm.type==='Sell') && finalForm.totalUsd && !finalForm.price && finalForm.amount) {
       finalForm.price = (parseFloat(finalForm.totalUsd)/parseFloat(finalForm.amount)).toFixed(2);
     }
-    // Warn if a BTC outflow would cause negative wallet balance
-    let negativeWarning = '';
+    const commitTransaction = () => {
+      if(editIdx!==null) {
+        const u=[...transactions]; u[editIdx]=finalForm; setTransactions(u); save(u, wallets);
+        showToast('Transaction updated');
+      } else {
+        const added=[...transactions, finalForm]; setTransactions(added); save(added, wallets);
+        showToast('Transaction added');
+      }
+      setShowModal(false); setEditIdx(null); setForm(emptyForm());
+    };
+    // Confirm before saving a BTC outflow that would leave the wallet negative
+    let balanceAfter = null;
     if(finalForm.type==='Sell' || finalForm.type==='Transfer' || finalForm.type==='Consolidation') {
       const amt = parseFloat(finalForm.amount)||0;
       const fee = (finalForm.type==='Transfer' || finalForm.type==='Consolidation') ? (parseFloat(finalForm.fee)||0) : 0;
@@ -2936,21 +2984,21 @@ function App() {
         else if(old.type==='Transfer') adjustment = (parseFloat(old.amount)||0) + (parseFloat(old.fee)||0);
         else if(old.type==='Consolidation') adjustment = parseFloat(old.fee)||0;
       }
-      const balanceAfter = finalForm.type==='Consolidation'
+      balanceAfter = finalForm.type==='Consolidation'
         ? walletBal + adjustment - fee
         : walletBal + adjustment - amt - fee;
-      if(balanceAfter < -0.000000005) {
-        negativeWarning = ` ⚠ ${finalForm.wallet} balance is now negative (${fmtBTC(balanceAfter)} BTC)`;
-      }
     }
-    if(editIdx!==null) {
-      const u=[...transactions]; u[editIdx]=finalForm; setTransactions(u); save(u, wallets);
-      showToast('Transaction updated' + negativeWarning);
-    } else {
-      const added=[...transactions, finalForm]; setTransactions(added); save(added, wallets);
-      showToast('Transaction added' + negativeWarning);
+    if(balanceAfter!==null && balanceAfter < -0.000000005) {
+      setConfirmDialog({
+        title: 'Negative Wallet Balance',
+        message: `This ${finalForm.type} would leave ${finalForm.wallet} at ${fmtBTC(balanceAfter)} ${btcUnit()}. The amount may be larger than the wallet holds, or an earlier transaction may be missing. Save it anyway?`,
+        confirmLabel: 'Save Anyway',
+        danger: true,
+        onConfirm: () => { commitTransaction(); setConfirmDialog(null); },
+      });
+      return;
     }
-    setShowModal(false); setEditIdx(null); setForm(emptyForm());
+    commitTransaction();
   };
 
   const handleEdit = idx => {
@@ -2964,7 +3012,7 @@ function App() {
     const tx = transactions[idx];
     setConfirmDialog({
       title: 'Delete Transaction',
-      message: `Delete the ${tx.type} of ${fmtBTC(tx.amount)} BTC on ${fmtDate(tx.date)}? This cannot be undone — consider exporting a backup first.`,
+      message: `Delete the ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}? This cannot be undone — consider exporting a backup first.`,
       confirmLabel: 'Delete',
       danger: true,
       onConfirm: () => { const filtered=transactions.filter((_,i)=>i!==idx); setTransactions(filtered); save(filtered, wallets); showToast('Deleted'); setConfirmDialog(null); },
@@ -3065,22 +3113,40 @@ function App() {
         try {
           const parsed = JSON.parse(trimmed);
           if(Array.isArray(parsed.transactions) || parsed.vault || Array.isArray(parsed.wallets) || parsed.settings) {
-            const importedTransactions = Array.isArray(parsed.transactions) ? parsed.transactions : [];
-            const importedWallets = Array.isArray(parsed.wallets) ? parsed.wallets : [];
-            setTransactions(importedTransactions);
-            setWallets(importedWallets);
-            if(parsed.settings) {
-              const normalized = normalizeSettings(parsed.settings);
-              setSettings(normalized);
-              localStorage.setItem('btc-settings', JSON.stringify(normalized));
+            // Drop rows that would corrupt portfolio math (bad date, unknown type)
+            const VALID_TX_TYPES = ['Buy','Sell','Transfer','Reward','Consolidation'];
+            const rawTransactions = Array.isArray(parsed.transactions) ? parsed.transactions : [];
+            const importedTransactions = rawTransactions.filter(tx =>
+              tx && typeof tx === 'object' && normalizeDate(tx.date) && VALID_TX_TYPES.includes(tx.type));
+            const skippedCount = rawTransactions.length - importedTransactions.length;
+            const importedWallets = (Array.isArray(parsed.wallets) ? parsed.wallets : []).filter(w => w && typeof w === 'object' && w.name);
+            const applyBackup = () => {
+              setTransactions(importedTransactions);
+              setWallets(importedWallets);
+              if(parsed.settings) {
+                const normalized = normalizeSettings(parsed.settings);
+                setSettings(normalized);
+                safeSetItem('btc-settings', JSON.stringify(normalized));
+              }
+              const importedVault = parsed.vault || null;
+              setVault(importedVault);
+              if(importedVault) safeSetItem(VAULT_STORAGE_KEY, JSON.stringify(importedVault));
+              else localStorage.removeItem(VAULT_STORAGE_KEY);
+              lockVault();
+              save(importedTransactions, importedWallets, { vault: importedVault, mod: parsed.lastModified || new Date().toISOString() });
+              showToast(skippedCount > 0 ? `Backup restored — ${skippedCount} invalid row${skippedCount===1?'':'s'} skipped` : 'Backup restored');
+            };
+            if(transactions.length > 0 || wallets.length > 0) {
+              setConfirmDialog({
+                title: 'Replace Current Data',
+                message: `Restoring this backup replaces your current ${transactions.length} transaction${transactions.length===1?'':'s'} and ${wallets.length} wallet${wallets.length===1?'':'s'} with ${importedTransactions.length} transaction${importedTransactions.length===1?'':'s'} and ${importedWallets.length} wallet${importedWallets.length===1?'':'s'} from the file. Continue?`,
+                confirmLabel: 'Restore Backup',
+                danger: true,
+                onConfirm: () => { applyBackup(); setConfirmDialog(null); },
+              });
+            } else {
+              applyBackup();
             }
-            const importedVault = parsed.vault || null;
-            setVault(importedVault);
-            if(importedVault) localStorage.setItem(VAULT_STORAGE_KEY, JSON.stringify(importedVault));
-            else localStorage.removeItem(VAULT_STORAGE_KEY);
-            lockVault();
-            save(importedTransactions, importedWallets, { vault: importedVault, mod: parsed.lastModified || new Date().toISOString() });
-            showToast('Backup restored');
           } else {
             showToast('Backup file does not contain tracker data');
           }
@@ -3211,7 +3277,7 @@ function App() {
             <button className="btn btn-secondary btn-sm" onClick={()=>updateSettings({hideValues:!settings.hideValues})} title={effectiveSettings.hideValues?'Show values':'Hide values'} style={{padding:'.375rem .5rem',minWidth:0}}>
               {effectiveSettings.hideValues ? Icon.EyeOff({width:14,height:14}) : Icon.Eye({width:14,height:14})}
             </button>
-            <button className="btn btn-primary" onClick={()=>{setForm(emptyForm());setEditIdx(null);setShowModal(true);}}>
+            <button className="btn btn-primary add-tx-btn" title="Add transaction" onClick={()=>{setForm(emptyForm());setEditIdx(null);setShowModal(true);}}>
               + <span className="desktop-only">Add Transaction</span><span className="mobile-only">Add</span>
             </button>
           </div>
@@ -3264,7 +3330,7 @@ function App() {
               const breakEvenPrice = trackedHoldings > 0.00000001 ? stats.costBasis / trackedHoldings : null;
               const statCards = {
                 holdings: () => (
-                  <div className="stat-card" key="holdings">
+                  <div className="stat-card stat-hero" key="holdings">
                     <div className="stat-label" style={{display:'flex',flexDirection:'column',alignItems:'flex-start',gap:'.375rem'}}>
                       <div style={{display:'flex',alignItems:'center',gap:'.375rem'}}>
                         <span>Holdings</span>
@@ -3272,21 +3338,21 @@ function App() {
                       </div>
                       {hasDashboardWalletFilter && <span className="scope-badge">Selected wallets</span>}
                     </div>
-                    <div className="stat-value btc">{fmtBTC(dashboardTrackedHoldings)}</div>
-                    <div className="stat-sub">BTC{btcPrice?` · ${fmtUSD(dashboardTrackedHoldings*(btcPrice||0))}`:''}</div>
+                    <div className={`stat-value ${dashboardTrackedHoldings>0?'btc':'zero'}`}>{fmtBTC(dashboardTrackedHoldings)}</div>
+                    <div className="stat-sub">{btcUnit()}{btcPrice?` · ${fmtUSD(dashboardTrackedHoldings*(btcPrice||0))}`:''}</div>
                   </div>
                 ),
                 costBasis: () => (
                   <div className="stat-card" key="costBasis">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Cost Basis{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                    <div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
-                    <div className="stat-sub">{fmtBTC(trackedHoldings)} BTC acquired</div>
+                    <div className={`stat-value${stats.costBasis>0?'':' zero'}`} style={{fontSize:'1.375rem'}}>{fmtUSD(stats.costBasis)}</div>
+                    <div className="stat-sub">{fmtBTC(trackedHoldings)} {btcUnit()} acquired</div>
                   </div>
                 ),
                 totalPL: () => (
                   <div className="stat-card" key="totalPL">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total P&L{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                    <div className={`stat-value ${btcPrice?(stats.unrealized>=0?'green':'red'):''}`} style={{fontSize:'1.375rem'}}>
+                    <div className={`stat-value ${btcPrice && (stats.currentValue>0 || stats.costBasis>0) ? (stats.unrealized>=0?'green':'red') : 'zero'}`} style={{fontSize:'1.375rem'}}>
                       {btcPrice?fmtUSD(stats.unrealized):'—'}
                     </div>
                     <div className="stat-sub">{btcPrice&&stats.costBasis>0?`${(stats.unrealized/stats.costBasis*100).toFixed(1)}% return on cost`:'Waiting for price'}</div>
@@ -3295,7 +3361,7 @@ function App() {
                 breakEven: () => (
                   <div className="stat-card" key="breakEven">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Break-Even Price{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                    <div className={`stat-value${btcPrice && breakEvenPrice ? (btcPrice >= breakEvenPrice ? ' green' : ' red') : ''}`} style={{fontSize:'1.375rem'}}>
+                    <div className={`stat-value${btcPrice && breakEvenPrice ? (btcPrice >= breakEvenPrice ? ' green' : ' red') : ' zero'}`} style={{fontSize:'1.375rem'}}>
                       {breakEvenPrice ? fmtUSD(breakEvenPrice) : '—'}
                     </div>
                     <div className="stat-sub">{btcPrice && breakEvenPrice ? (btcPrice >= breakEvenPrice ? `${fmtUSD(btcPrice - breakEvenPrice)} below market` : `${fmtUSD(breakEvenPrice - btcPrice)} above market`) : 'BTC price needed to break even'}</div>
@@ -3304,7 +3370,7 @@ function App() {
                 rewards: () => (
                   <div className="stat-card stat-extra" key="rewards">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Rewards Earned{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                    <div className="stat-value btc" style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
+                    <div className={`stat-value ${stats.rewardsIncome>0?'btc':'zero'}`} style={{fontSize:'1.375rem'}}>{fmtBTC(stats.rewardsIncome)}</div>
                     <div className="stat-sub">{btcPrice?fmtUSD(stats.rewardsIncome*btcPrice):''} at current price</div>
                   </div>
                 ),
@@ -3312,13 +3378,13 @@ function App() {
                   <div className="stat-card stat-extra" key="networkFees">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Network Fees{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
                     <div className="stat-value" style={{fontSize:'1.375rem',color:'var(--text-secondary)'}}>{fmtBTC(stats.totalFeesBTC)}</div>
-                    <div className="stat-sub">BTC in transfer fees</div>
+                    <div className="stat-sub">{btcUnit()} in transfer fees</div>
                   </div>
                 ),
                 totalTx: () => (
                   <div className="stat-card stat-extra" key="totalTx">
                     <div className="stat-label" style={{display:'flex',alignItems:'center',gap:'.375rem',flexWrap:'wrap'}}>Total Transactions{hasDashboardWalletFilter && <span className="scope-badge">Portfolio-wide</span>}</div>
-                    <div className="stat-value" style={{fontSize:'1.875rem'}}>{transactions.length}</div>
+                    <div className={`stat-value${transactions.length>0?'':' zero'}`} style={{fontSize:'1.875rem'}}>{transactions.length}</div>
                     <div className="stat-sub">{transactions.filter(t=>t.type==='Buy').length} buys · {transactions.filter(t=>t.type==='Reward').length} rewards</div>
                   </div>
                 ),
@@ -3448,7 +3514,7 @@ function App() {
                         <div className="tx-card-row">
                           <div>
                             <div className="tx-card-label">Amount</div>
-                            <div className="tx-card-val mono">{fmtBTC(tx.amount)} BTC</div>
+                            <div className="tx-card-val mono">{fmtBTC(tx.amount)} {btcUnit()}</div>
                           </div>
                           {tx.price && parseFloat(tx.price)>0 && <div style={{textAlign:'right'}}>
                             <div className="tx-card-label">Price</div>
@@ -3462,7 +3528,7 @@ function App() {
                         {tx.fee && parseFloat(tx.fee)>0 && <div className="tx-card-row">
                           <div>
                             <div className="tx-card-label">Fee</div>
-                            <div className="tx-card-val mono" style={{color:'var(--text-secondary)'}}>{tx.type==='Transfer'||tx.type==='Consolidation'?`${fmtBTC(tx.fee)} BTC`:fmtUSD(tx.fee)}</div>
+                            <div className="tx-card-val mono" style={{color:'var(--text-secondary)'}}>{tx.type==='Transfer'||tx.type==='Consolidation'?`${fmtBTC(tx.fee)} ${btcUnit()}`:fmtUSD(tx.fee)}</div>
                           </div>
                         </div>}
                         {tx.notes && <div style={{marginTop:'.375rem',fontSize:'.75rem',color:'var(--text-tertiary)'}}>{tx.notes}</div>}
@@ -3480,7 +3546,7 @@ function App() {
                         <th>Type</th>
                         <th>From Wallet</th>
                         <th>To Wallet</th>
-                        <th>Amount (BTC)</th>
+                        <th>Amount ({btcUnit()})</th>
                         <th className="desktop-only">Price/BTC</th>
                         <th className="desktop-only">Total USD</th>
                         <th className="desktop-only">Fee</th>
@@ -3505,7 +3571,7 @@ function App() {
                             <td className="mono desktop-only">{tx.price && parseFloat(tx.price)>0 ? fmtUSD(tx.price) : '—'}</td>
                             <td className="mono desktop-only">{total>0 ? fmtUSD(total) : '—'}</td>
                             <td className="mono desktop-only" style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>
-                              {tx.fee && parseFloat(tx.fee)>0 ? (tx.type==='Transfer'||tx.type==='Consolidation'?`${fmtBTC(tx.fee)} BTC`:fmtUSD(tx.fee)) : '—'}
+                              {tx.fee && parseFloat(tx.fee)>0 ? (tx.type==='Transfer'||tx.type==='Consolidation'?`${fmtBTC(tx.fee)} ${btcUnit()}`:fmtUSD(tx.fee)) : '—'}
                             </td>
                             <td className="desktop-only" style={{maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:'.75rem',color:'var(--text-secondary)'}}>
                               {tx.notes||'—'}
@@ -3558,6 +3624,16 @@ function App() {
                 <button className="btn btn-primary btn-sm" onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletIdx(null);setShowWalletModal(true);}}>+ Add Wallet</button>
               </div>
               <div className="card-body">
+                {wallets.filter(w => showArchived ? true : !w.archived).length === 0 && (
+                  <div className="empty">
+                    <div className="empty-icon">₿</div>
+                    <div className="empty-text">{wallets.length===0 ? 'No wallets yet' : 'No active wallets'}</div>
+                    <div className="empty-sub">{wallets.length===0 ? 'Add an exchange, hardware wallet, or cold storage wallet to start tracking' : 'All wallets are archived — use Show Archived to view them'}</div>
+                    {wallets.length===0 && (
+                      <button className="btn btn-primary" style={{marginTop:'1rem'}} onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletIdx(null);setShowWalletModal(true);}}>+ Add Wallet</button>
+                    )}
+                  </div>
+                )}
                 <div className="wallet-grid">
                   {wallets.filter(w => showArchived ? true : !w.archived).map((w,i)=>{
                     const walletIdx = wallets.indexOf(w);
@@ -3583,30 +3659,8 @@ function App() {
                           </div>
                         </div>
                         <span className="wallet-type-badge">{w.type}</span>
-                        <div className="wallet-btc" style={{marginTop:'.625rem'}}>{fmtBTC(bal)} BTC</div>
+                        <div className="wallet-btc" style={{marginTop:'.625rem'}}>{fmtBTC(bal)} {btcUnit()}</div>
                         {usd!==null && <div className="wallet-usd">{fmtUSD(usd)}</div>}
-                        {(() => {
-                          const wcb = walletCostBasis[w.name];
-                          if(!wcb || wcb.btcAcquired < 0.00000001) return null;
-                          const avgCost = wcb.cost / wcb.btcAcquired;
-                          const pl = usd !== null ? usd - wcb.cost : null;
-                          return (
-                            <div style={{marginTop:'.5rem',paddingTop:'.5rem',borderTop:'1px solid var(--border-color)',fontSize:'.75rem',color:'var(--text-secondary)'}}>
-                              <div style={{display:'flex',justifyContent:'space-between'}}>
-                                <span>Avg Cost</span>
-                                <span className="mono" style={{fontWeight:600}}>{fmtUSD(avgCost)}</span>
-                              </div>
-                              {wcb.cost > 0 && <div style={{display:'flex',justifyContent:'space-between',marginTop:'.125rem'}}>
-                                <span>Invested</span>
-                                <span className="mono" style={{fontWeight:600}}>{fmtUSD(wcb.cost)}</span>
-                              </div>}
-                              {pl !== null && <div style={{display:'flex',justifyContent:'space-between',marginTop:'.125rem'}}>
-                                <span>P&L</span>
-                                <span className="mono" style={{fontWeight:600,color:pl>=0?'var(--green)':'var(--red)'}}>{pl>=0?'+':''}{fmtUSD(pl)}</span>
-                              </div>}
-                            </div>
-                          );
-                        })()}
                         {w.address && <div className="wallet-address">{w.address}</div>}
                       </div>
                     );
@@ -3615,7 +3669,8 @@ function App() {
               </div>
             </div>
 
-            {/* Reconciliation audit */}
+            {/* Reconciliation audit — only meaningful once wallets exist */}
+            {wallets.length > 0 && (
             <div className="card">
               <div className="card-header"><div className="card-title">Reconciliation Audit</div></div>
               <div className="card-body">
@@ -3634,7 +3689,7 @@ function App() {
                         {w.archived && <span style={{fontSize:'.5625rem',color:'var(--text-tertiary)'}}>archived</span>}
                       </div>
                       <div style={{display:'flex',alignItems:'center',gap:1}}>
-                        <span className={`audit-value audit-${status}`}>{fmtBTC(tracked)} BTC</span>
+                        <span className={`audit-value audit-${status}`}>{fmtBTC(tracked)} {btcUnit()}</span>
                         {status==='err' && <span style={{marginLeft:'.5rem',fontSize:'.75rem',color:'var(--red)'}}>⚠ Negative balance</span>}
                       </div>
                     </div>
@@ -3643,10 +3698,11 @@ function App() {
                 <div className="sep"/>
                 <div className="audit-row">
                   <strong>Total Tracked</strong>
-                  <strong className="audit-value audit-ok">{fmtBTC(trackedHoldings)} BTC</strong>
+                  <strong className="audit-value audit-ok">{fmtBTC(trackedHoldings)} {btcUnit()}</strong>
                 </div>
               </div>
             </div>
+            )}
           </>
         )}
 
@@ -4014,6 +4070,15 @@ function App() {
                   </div>
                   <select className="form-select" value={settings.defaultTxType||'Buy'} onChange={e=>updateSettings({defaultTxType:e.target.value})} style={{minWidth:140}}>
                     <option>Buy</option><option>Sell</option><option>Transfer</option><option>Reward</option><option>Consolidation</option>
+                  </select>
+                </div>
+                <div style={{borderTop:'1px solid var(--border-color)',marginTop:'1rem',paddingTop:'1rem',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                  <div>
+                    <div style={{fontSize:'.9375rem',fontWeight:600}}>Display Unit</div>
+                    <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Show amounts in BTC or satoshis (entry is always in BTC)</div>
+                  </div>
+                  <select className="form-select" value={settings.displayUnit||'btc'} onChange={e=>updateSettings({displayUnit:e.target.value})} style={{minWidth:140}}>
+                    <option value="btc">BTC</option><option value="sats">sats</option>
                   </select>
                 </div>
                 <div style={{borderTop:'1px solid var(--border-color)',marginTop:'1rem',paddingTop:'1rem',display:'flex',alignItems:'center',justifyContent:'space-between'}}>

@@ -28,20 +28,23 @@ A personal Bitcoin portfolio tracker that runs entirely in your browser. No serv
 
 ### Data & Privacy
 - **100% client-side** — All data stored in browser localStorage
-- **Google Drive sync** — Optional backup and cross-device sync using Drive's appDataFolder (only this app can access it)
-- **Inheritance vault** — Store encrypted notes (seed phrases, instructions) protected by a passphrase
+- **Google Drive sync** — Optional backup and cross-device sync using Drive's appDataFolder (only this app can access it); a local snapshot is kept before any sync pull overwrites local data
+- **Inheritance vault** — Store encrypted notes (seed phrases, instructions) protected by a passphrase (AES-256-GCM, PBKDF2-SHA256 at 600k iterations)
 - **Hide values** — One-click privacy toggle blurs all financial data (BTC price charts remain visible)
 - **Export** — Full JSON backup/restore and CoinLedger-compatible CSV for tax reporting
+- **Hardened delivery** — Content-Security-Policy, version-pinned CDN scripts with Subresource Integrity, OAuth tokens kept in sessionStorage only
 
 ### Interface
 - **Light & dark themes** — Toggle in the sidebar
+- **BTC or sats display** — Show amounts in bitcoin or satoshis (Settings → Display Unit)
 - **Responsive design** — Desktop sidebar with collapse, mobile hamburger drawer
 - **Expandable charts** — Click any chart to view a larger modal version
 - **Customizable settings** — Two-column masonry layout with chart visibility, ordering, MA line toggles, and more
+- **Offline support** — Service worker caches the app and its dependencies, so it loads without a connection (live prices still need network)
 
 ## Tech Stack
 
-- **React 18** with Babel in-browser transpilation
+- **React 18** with Babel in-browser transpilation (version-pinned CDN scripts with SRI)
 - **Single HTML file** — No build step, no bundler, no dependencies to install
 - **SVG charts** — Custom-built charting with no library dependencies
 - **Coinbase API** — Daily BTC-USD candles for historical price data
@@ -69,6 +72,10 @@ Since it's a single HTML file, you can also host it anywhere:
 - GitHub Pages
 - Any static file host
 - Open locally from your filesystem
+
+### Deploying updates
+
+Pages are served network-first by the service worker, so content changes to `app.html`/`index.html` propagate on the next load automatically. However, if you change the caching logic in `sw.js` itself, bump the `CACHE_NAME` constant (e.g. `satledger-v1` → `satledger-v2`) so the new worker evicts the old cache on activation.
 
 ## Tips
 
