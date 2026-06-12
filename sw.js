@@ -1,11 +1,10 @@
 // SatLedger service worker — offline support and CDN asset caching
-const CACHE_NAME = 'satledger-v1';
+const CACHE_NAME = 'satledger-v2';
 
 const PRECACHE_URLS = [
   './',
   './index.html',
   './app.html',
-  './app2.html',
   './manifest.json',
   './privacy.html',
   './terms.html',
