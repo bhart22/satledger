@@ -5,6 +5,7 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './app.html',
+  './app2.html',
   './manifest.json',
   './privacy.html',
   './terms.html',

@@ -10,7 +10,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32.png">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
-  <title>SatLedger — Bitcoin Portfolio Tracker</title>
+  <title>SatLedger 2.0 — Bitcoin Portfolio Tracker (Preview)</title>
   <script crossorigin="anonymous" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
   <script crossorigin="anonymous" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script crossorigin="anonymous" integrity="sha384-ezQ6HS3FLspd9te19o2McUV6FAK091+GG7KO54f/R8DKgCDi7fULhapNrd5LY+vG" src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
@@ -214,29 +214,33 @@
       });
     }
   </script>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     :root {
-      --bg-primary: #fafafa; --bg-secondary: #ffffff; --bg-tertiary: #f5f5f5;
-      --text-primary: #0a0a0a; --text-secondary: #525252; --text-tertiary: #a3a3a3;
-      --border-color: #e5e5e5; --border-hover: #d4d4d4;
-      --bitcoin-orange: #f7931a; --bitcoin-light: #fef3e8;
-      --main-surface: #f7efe6; --main-dot-color: rgba(247,147,26,1);
-      --green: #16a34a; --green-light: #dcfce7; --red: #dc2626; --red-light: #fee2e2;
-      --blue: #2563eb; --blue-light: #dbeafe; --purple: #7c3aed; --purple-light: #ede9fe;
-      --shadow-sm: 0 1px 2px rgba(0,0,0,0.04); --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-      --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+      --bg-primary: #f5f6f8; --bg-secondary: #ffffff; --bg-tertiary: #eef0f3;
+      --text-primary: #13151a; --text-secondary: #5b6271; --text-tertiary: #9aa1b0;
+      --border-color: #e4e7ec; --border-hover: #cdd2db;
+      --bitcoin-orange: #f7931a; --bitcoin-light: #fdf1e0;
+      --main-surface: #f5f6f8; --main-dot-color: rgba(247,147,26,.5);
+      --green: #149a4c; --green-light: #e0f5e9; --red: #d83a3a; --red-light: #fdeaea;
+      --blue: #3b6ef6; --blue-light: #e7edfe; --purple: #7c3aed; --purple-light: #f0e9fd;
+      --shadow-sm: 0 1px 2px rgba(16,20,28,0.05); --shadow-md: 0 6px 16px rgba(16,20,28,0.07);
+      --shadow-lg: 0 12px 32px rgba(16,20,28,0.10);
+      --font-ui: 'Inter', sans-serif;
+      --font-display: 'Space Grotesk', sans-serif;
+      --radius: 16px;
     }
     [data-theme="dark"] {
-      --bg-primary: #0a0a0a; --bg-secondary: #181818; --bg-tertiary: #222222;
-      --text-primary: #f5f5f5; --text-secondary: #a3a3a3; --text-tertiary: #6e6e6e;
-      --border-color: #353535; --border-hover: #4d4d4d;
-      --main-surface: #120d08; --main-dot-color: rgba(247,147,26,0.65);
-      --bitcoin-light: #2a1800; --green-light: #0f2d1a; --red-light: #2d0f0f;
-      --blue-light: #0f1d3d; --purple-light: #1e1030;
-      --shadow-sm: 0 1px 2px rgba(0,0,0,0.4); --shadow-md: 0 4px 12px rgba(0,0,0,0.5);
-      --shadow-lg: 0 8px 24px rgba(0,0,0,0.6);
+      --bg-primary: #0a0c11; --bg-secondary: #11141b; --bg-tertiary: #1a1e28;
+      --text-primary: #eceef4; --text-secondary: #9aa1b2; --text-tertiary: #646b7c;
+      --border-color: #232836; --border-hover: #343b4d;
+      --main-surface: #0a0c11; --main-dot-color: rgba(247,147,26,0.45);
+      --bitcoin-light: #271809; --green-light: #0c2918; --red-light: #2b1010;
+      --blue-light: #101d3d; --purple-light: #1d1133;
+      --green: #2ebd6b; --red: #f0564f;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.5); --shadow-md: 0 6px 16px rgba(0,0,0,0.5);
+      --shadow-lg: 0 12px 32px rgba(0,0,0,0.65);
     }
     :root { --app-header-height:53px; }
     html, body { max-width:100%; overflow-x:hidden; }
@@ -675,6 +679,79 @@
 
     /* Separator */
     .sep { height:1px; background:var(--border-color); margin:1rem 0; }
+
+    /* ════════════════════════════════════════════════════════════════════
+       SATLEDGER 2.0 — REDESIGN LAYER
+       Command bar + icon rail + bento dashboard. Overrides the base styles
+       above; the logic layer (JSX) is shared with the classic app.
+       ════════════════════════════════════════════════════════════════════ */
+    :root { --app-header-height:60px; --rail-width:84px; }
+    body { font-family:var(--font-ui); }
+    .card-title, .stat-label, .page-title, .empty-text, .modal-title, h1, h2, h3 { font-family:var(--font-display); }
+
+    /* ── Command bar ── */
+    .header { height:var(--app-header-height); padding:0 1.5rem 0 calc(var(--rail-width) + 1.5rem); background:color-mix(in srgb, var(--bg-primary) 82%, transparent); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px); border-bottom:1px solid var(--border-color); box-shadow:none; }
+    .header-brand { display:flex; align-items:baseline; gap:.75rem; }
+    .mobile-logo { display:none; }
+    .page-title { font-size:1.25rem; font-weight:700; letter-spacing:-.02em; line-height:1; }
+    .page-crumb { font-size:.6875rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-tertiary); }
+    .price-pill { background:transparent; border:1px solid var(--border-color); color:var(--text-primary); font-size:.8125rem; padding:.375rem .875rem; }
+    .price-pill .price-dot { background:var(--bitcoin-orange); }
+    .sync-pill { background:transparent; }
+
+    /* ── Icon rail ── */
+    .sidebar, .sidebar.collapsed { width:var(--rail-width); top:0; height:100vh; z-index:300; align-items:center; padding:.875rem 0 1rem; border-right:1px solid var(--border-color); background:var(--bg-secondary); }
+    .sidebar ~ .main, .sidebar.collapsed ~ .main { margin-left:var(--rail-width); }
+    .rail-logo { display:flex; align-items:center; justify-content:center; width:44px; height:44px; margin-bottom:1rem; flex-shrink:0; }
+    .rail-logo .logo-icon { width:34px; height:34px; }
+    .sidebar-nav { width:100%; padding:0 .625rem; gap:.375rem; align-items:center; overflow-x:hidden; }
+    .sidebar-item { flex-direction:column; gap:.3rem; padding:.625rem 0 .5rem; width:100%; justify-content:center; align-items:center; text-align:center; border-radius:12px; position:relative; }
+    .sidebar-item svg { margin-left:0; }
+    .sidebar-item-label { font-size:.625rem; font-weight:600; letter-spacing:.02em; }
+    .sidebar-item.active { background:var(--bitcoin-light); color:var(--bitcoin-orange); }
+    .sidebar-item.active::before { content:''; position:absolute; left:-0.625rem; top:50%; transform:translateY(-50%); width:3px; height:22px; border-radius:0 3px 3px 0; background:var(--bitcoin-orange); }
+    .rail-theme { width:40px; height:40px; border-radius:50%; border:1px solid var(--border-color); background:var(--bg-tertiary); color:var(--text-secondary); cursor:pointer; font-size:1rem; line-height:1; margin-bottom:.625rem; transition:all .15s; flex-shrink:0; }
+    .rail-theme:hover { color:var(--text-primary); border-color:var(--border-hover); }
+    .rail-back { font-size:.5625rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-tertiary); text-decoration:none; text-align:center; line-height:1.5; padding:.375rem .5rem; border:1px dashed var(--border-color); border-radius:8px; margin-bottom:.5rem; flex-shrink:0; }
+    .rail-back:hover { color:var(--text-secondary); border-color:var(--border-hover); }
+    .sidebar-version { border-top:none; padding:0; flex-shrink:0; }
+
+    /* ── Panels ── */
+    .card { border-radius:var(--radius); box-shadow:none; transition:border-color .15s; }
+    .card:hover { border-color:var(--border-hover); }
+    .btn { border-radius:999px; font-weight:600; }
+    .btn-primary { box-shadow:0 2px 10px rgba(247,147,26,.35); }
+    .scope-badge, .sample-badge, .wallet-type-badge { border-radius:999px; }
+    .info-banner { border-radius:var(--radius); }
+
+    /* ── Bento dashboard — first VISIBLE stat card becomes the hero,
+         so the layout adapts to whatever cards are toggled on ── */
+    .stats-grid { grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); grid-auto-flow:dense; gap:.875rem; }
+    @media(min-width:1100px) { .stats-grid { grid-template-columns:repeat(4,1fr); } }
+    .stat-card { border-radius:var(--radius); box-shadow:none; transition:border-color .15s; }
+    .stat-card:hover { border-color:var(--border-hover); }
+    .stat-card.stat-hero { grid-column:auto; }
+    @media(min-width:769px) {
+      .stats-grid .stat-card:first-child { grid-column:span 2; grid-row:span 2; display:flex; flex-direction:column; justify-content:center; gap:.375rem; background:linear-gradient(135deg, var(--bg-secondary) 55%, var(--bitcoin-light)); }
+      .stats-grid .stat-card:first-child .stat-value { font-size:2.75rem !important; letter-spacing:-.03em; }
+      .stats-grid .stat-card:first-child .stat-sub { font-size:.9375rem; }
+    }
+    @media(max-width:768px) {
+      .stats-grid .stat-card:first-child { grid-column:1/-1; }
+    }
+
+    /* ── Mobile: floating dock + full-width command bar ── */
+    @media(max-width:768px) {
+      .sidebar { display:none; }
+      .sidebar ~ .main, .sidebar.collapsed ~ .main { margin-left:0; }
+      .header { padding:0 1rem; }
+      .mobile-logo { display:flex; align-self:center; }
+      .mobile-logo .logo-icon { width:26px; height:26px; }
+      .header-brand { align-items:center; }
+      .page-title { font-size:1.0625rem; }
+      .mobile-bottom-nav { left:.75rem; right:.75rem; bottom:.75rem; border-radius:999px; border:1px solid var(--border-color); box-shadow:var(--shadow-lg); overflow:hidden; }
+      [data-theme="dark"] .mobile-bottom-nav { background:rgba(17,20,27,.92); backdrop-filter:blur(14px); }
+    }
   </style>
 </head>
 <body>
@@ -1647,7 +1724,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       const order = settings.chartOrder || DEFAULT_CHART_ORDER;
       const reconciledOrder = [...order.filter(k => DEFAULT_CHART_ORDER.includes(k)), ...DEFAULT_CHART_ORDER.filter(k => !order.includes(k))];
       return (
-        <div className="charts-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:'1rem'}}>
+        <div className="charts-grid" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(340px,1fr))',gridAutoFlow:'dense',gap:'1rem'}}>
           {reconciledOrder.map(key => !effectiveHiddenCharts[key] && chartRenderers[key] ? <React.Fragment key={key}>{chartRenderers[key]()}</React.Fragment> : null)}
         </div>
       );
@@ -2305,7 +2382,7 @@ function App() {
   const [vaultNewPassphrase, setVaultNewPassphrase] = useState('');
   const [vaultNewPassphraseConfirm, setVaultNewPassphraseConfirm] = useState('');
   const vaultPassphraseRef = useRef('');
-  const [theme, setTheme] = useState(() => localStorage.getItem('btc-theme')||'light');
+  const [theme, setTheme] = useState(() => localStorage.getItem('btc-theme')||'dark');
   const [settings, setSettings] = useState(() => {
     try {
       const s = localStorage.getItem('btc-settings');
@@ -3241,19 +3318,16 @@ function App() {
 
   return (
     <div className={`app ${effectiveSettings.hideValues?'values-hidden':''}`}>
-      {/* Header */}
+      {/* Command bar — contextual page title instead of repeated branding */}
       <header className="header">
-        <button className="sidebar-collapse-btn desktop-only" onClick={()=>setSidebarCollapsed(c=>!c)} title={sidebarCollapsed?'Expand sidebar':'Collapse sidebar'}>
-          {sidebarCollapsed ? Icon.ChevronRight({width:16,height:16}) : Icon.ChevronLeft({width:16,height:16})}
-        </button>
         <div className="header-inner">
           <div className="header-brand">
-            <div className="logo">
+            <div className="logo mobile-logo">
               <img className="logo-icon logo-icon-light" src="images/logo-dark.png" alt="SatLedger" />
               <img className="logo-icon logo-icon-dark" src="images/logo-white.png" alt="SatLedger" />
-              <span className="logo-text">SatLedger</span>
-              <span className="logo-tagline desktop-only">Track your Bitcoin, your way</span>
             </div>
+            <span className="page-title">{NAV_ITEMS.find(n=>n.key===tab)?.label||'Dashboard'}</span>
+            <span className="page-crumb desktop-only">SatLedger 2.0 · Preview</span>
           </div>
           <div className="header-controls">
             {/* Sync status */}
@@ -3286,20 +3360,24 @@ function App() {
 
       <div className="app-body">
         {/* Desktop sidebar */}
-        <aside className={`sidebar ${sidebarCollapsed?'collapsed':''}`}>
+        <aside className="sidebar">
+          <a className="rail-logo" href="#dashboard" onClick={()=>setTab('dashboard')} title="SatLedger">
+            <img className="logo-icon logo-icon-light" src="images/logo-dark.png" alt="SatLedger" />
+            <img className="logo-icon logo-icon-dark" src="images/logo-white.png" alt="SatLedger" />
+          </a>
           <nav className="sidebar-nav">
             {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
-              <button key={item.key} className={`sidebar-item ${tab===item.key?'active':''}`} onClick={()=>setTab(item.key)} title={sidebarCollapsed?item.label:undefined}>
-                {Icon[item.icon]({width:18,height:18})}
+              <button key={item.key} className={`sidebar-item ${tab===item.key?'active':''}`} onClick={()=>setTab(item.key)} title={item.label}>
+                {Icon[item.icon]({width:19,height:19})}
                 <span className="sidebar-item-label">{item.label}</span>
               </button>
             ))}
           </nav>
-          <a href="app2.html" className="sidebar-item" style={{textDecoration:'none',color:'var(--bitcoin-orange)'}} title="Preview the redesigned interface">
-            <span style={{fontSize:18,lineHeight:1}}>✦</span>
-            <span className="sidebar-item-label">New design</span>
-          </a>
-          <div className="sidebar-version">v3.31</div>
+          <button className="rail-theme" onClick={()=>setTheme(t=>t==='dark'?'light':'dark')} title="Toggle theme">
+            {theme==='dark' ? '☀' : '☾'}
+          </button>
+          <a className="rail-back" href="app.html" title="Back to the classic interface">Classic<br/>UI</a>
+          <div className="sidebar-version">v2 β</div>
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
