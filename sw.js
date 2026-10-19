@@ -1,5 +1,6 @@
 // SatLedger service worker — offline support and CDN asset caching
-const CACHE_NAME = 'satledger-v3';
+const CACHE_NAME = 'satledger-v4';
+const NETWORK_TIMEOUT_MS = 4000;
 
 // Split so one unreachable URL can't silently disable offline support entirely.
 // cache.addAll() is atomic: a blocked unpkg (corporate proxy, DNS filter, ad blocker) used to
@@ -67,17 +68,35 @@ self.addEventListener('fetch', event => {
   const url = new URL(req.url);
   if (NETWORK_ONLY_HOSTS.includes(url.hostname)) return;
 
-  // App pages: network-first so deploys propagate, cache fallback for offline
+  // App pages: network-first so deploys propagate, cache fallback for offline.
+  //
+  // Only a clean 200 replaces the cached shell. Caching every response meant one 5xx, a
+  // mid-deploy 404 or a captive-portal redirect overwrote the good copy, and the next offline
+  // launch served the error page. A slow network (one bar, hotel Wi-Fi) also used to hang
+  // with no fallback, so give up after NETWORK_TIMEOUT_MS and serve the cached copy — the
+  // fetch carries on and still refreshes the cache for next time.
   if (url.origin === self.location.origin && (req.mode === 'navigate' || url.pathname.endsWith('.html'))) {
-    event.respondWith(
-      fetch(req)
+    const network = fetch(req).then(resp => {
+      if (resp.ok && !resp.redirected && resp.type === 'basic') {
+        const copy = resp.clone();
+        caches.open(CACHE_NAME).then(cache => cache.put(req, copy));
+      }
+      return resp;
+    });
+    const cached = () => caches.match(req, { ignoreSearch: true });
+    event.respondWith(new Promise(resolve => {
+      let settled = false;
+      const done = r => { if (!settled && r) { settled = true; resolve(r); } };
+      const timer = setTimeout(() => cached().then(done), NETWORK_TIMEOUT_MS);
+      network
         .then(resp => {
-          const copy = resp.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(req, copy));
+          // A server error with a good copy on hand: prefer the copy
+          if (!resp.ok) return cached().then(c => c || resp);
           return resp;
         })
-        .catch(() => caches.match(req, { ignoreSearch: true }))
-    );
+        .catch(() => cached().then(c => c || Response.error()))
+        .then(r => { clearTimeout(timer); done(r); });
+    }));
     return;
   }
 

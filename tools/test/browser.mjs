@@ -423,6 +423,37 @@ check('the last push carries the latest commit stamp',
   pushes[pushes.length - 1] === await evaluate(`return localStorage.getItem('btc-last-modified');`));
 check('nothing left marked dirty', !(await evaluate(`return localStorage.getItem('btc-pending-push');`)));
 
+// ── view toggles are not data edits ──────────────────────────────────────────
+// A chart-range click used to stamp btc-last-modified and queue a Drive push, so two devices
+// could raise a Sync Conflict over nothing but a view toggle.
+console.log('\n[view settings stay local]');
+await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS, 'btc-last-modified': '2024-01-01T00:00:00.000Z' });
+await reload();
+await evaluate(`GDriveSync.accessToken = 'stub'; GDriveSync.tokenExpiry = Date.now() + 3600e3; return 1;`);
+await clickByText('Dashboard');
+await wait(600);
+const clicked = await clickByText('1Y');
+await wait(400);
+check('range control found', clicked === 'clicked', clicked);
+check('range change was saved locally',
+  await evaluate(`return JSON.parse(localStorage.getItem('btc-settings')||'{}').chartRange === '1Y';`));
+check('range change did not stamp a commit',
+  await evaluate(`return localStorage.getItem('btc-last-modified') === '2024-01-01T00:00:00.000Z';`));
+check('range change did not mark anything dirty',
+  !(await evaluate(`return localStorage.getItem('btc-pending-push');`)));
+
+// ── wrong-typed settings can't brick the app ─────────────────────────────────
+// Settings come from backups and Drive. `chartOrder: "x"` used to throw on every render, on
+// every synced device.
+console.log('\n[malformed settings]');
+await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS,
+             'btc-settings': { chartOrder: 'x', hiddenCharts: [1,2], maLines: 'yes', dashboardWalletFilter: 7, defaultTxType: 'Steal' } });
+await reload();
+await clickByText('Dashboard');
+await wait(800);
+check('dashboard renders with malformed settings', await evaluate(`return !!document.querySelector('.stats-grid');`));
+check('no error screen', !/Something went wrong|could not start/i.test(await evaluate(`return document.body.innerText;`)));
+
 // Offline price failures are expected in CI — they are warnings now, not errors
 const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e));
 if (unexpected.length) {

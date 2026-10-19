@@ -355,6 +355,31 @@
         navigator.serviceWorker.register('sw.js').catch(e => console.warn('Service worker registration failed:', e));
       });
     }
+
+    // A long-open tab or installed PWA never re-navigates, so a deploy only reached it on a
+    // manual reload. Compare this page's ETag now and then (on return to the tab, at most
+    // every 30 min) and let the app offer a reload. HEAD bypasses the service worker, which
+    // only handles GET.
+    (function () {
+      var baseline = null, lastCheck = 0;
+      function check() {
+        if (Date.now() - lastCheck < 30 * 60e3) return;
+        lastCheck = Date.now();
+        fetch(location.pathname, { method: 'HEAD', cache: 'no-store' }).then(function (r) {
+          var tag = r.ok && (r.headers.get('etag') || r.headers.get('last-modified'));
+          if (!tag) return;
+          if (baseline === null) { baseline = tag; return; }
+          if (tag !== baseline) {
+            window.__satUpdateAvailable = true;
+            window.dispatchEvent(new Event('satledger:update-available'));
+          }
+        }).catch(function () {});
+      }
+      window.addEventListener('load', check);
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'visible') check();
+      });
+    })();
   </script>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
@@ -929,6 +954,8 @@ function useThrottledCallback(fn, delay) {
 const APP_VERSION = '4.0';
 const BACKUP_SCHEMA_VERSION = 2;
 const HISTORICAL_PRICE_CACHE_KEY = 'btc-price-history-v1';
+// Earliest daily candle Coinbase Exchange has for BTC-USD (checked against the API).
+const BTC_USD_FIRST_CANDLE_DAY = '2015-07-20';
 const VAULT_STORAGE_KEY = 'btc-vault';
 const VAULT_SCHEMA_VERSION = 1;
 const VAULT_PBKDF2_ITERATIONS = 600000; // OWASP-recommended minimum for PBKDF2-SHA256
@@ -1151,6 +1178,11 @@ async function deriveVaultKey(passphrase, salt, usage=['encrypt','decrypt'], ite
     usage
   );
 }
+const MAX_IMPORT_BYTES = 4 * 1024 * 1024;
+// The fields decryptVaultData needs, with the right types
+const isVaultBlob = v => !!v && typeof v === 'object'
+  && typeof v.salt === 'string' && typeof v.iv === 'string' && typeof v.encryptedPayload === 'string'
+  && (v.kdf == null || (typeof v.kdf === 'object' && (v.kdf.iterations == null || Number.isFinite(Number(v.kdf.iterations)))));
 async function encryptVaultDraft(draft, passphrase, existingVault=null) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
@@ -1231,6 +1263,21 @@ const sellFromCostPool = (poolBtc, poolCost, amt, proceeds) => {
     poolCost: poolCost - costOfSold,
     realized: take > 0 ? coveredProceeds - costOfSold : 0,
   };
+};
+// The BTC a transaction moves into (+) or out of (−) one named wallet. Same rules as
+// walletHoldings.
+const txEffectOnWallet = (tx, wallet) => {
+  if(!tx || !wallet) return 0;
+  const amt = numOr(tx.amount), fee = numOr(tx.fee);
+  let d = 0;
+  if(tx.wallet === wallet) {
+    if(tx.type==='Buy' || tx.type==='Reward') d += amt;
+    else if(tx.type==='Sell') d -= amt;
+    else if(tx.type==='Transfer') d -= amt + fee;
+    else if(tx.type==='Consolidation') d -= fee;
+  }
+  if(tx.type==='Transfer' && tx.wallet2 === wallet) d += amt;
+  return d;
 };
 // Key-order-independent stringify, for comparing two settings objects that were built by
 // different code paths. Plain JSON.stringify would call {a:1,b:2} and {b:2,a:1} different.
@@ -1426,8 +1473,45 @@ function normalizeRsiThresholds(thresholds) {
   return { overbought, oversold };
 }
 
+// Per-device view state. Stored in btc-settings with everything else, but changing one is not
+// a data edit (no commit stamp, no push), a pull never overwrites this device's values, and
+// the sync conflict dialog ignores them.
+const DEVICE_VIEW_SETTING_KEYS = ['chartRange', 'chartRangeCustom', 'hideValues', 'dashboardWalletFilter'];
+const withoutViewSettings = (s) => {
+  const out = {...(s && typeof s === 'object' ? s : {})};
+  DEVICE_VIEW_SETTING_KEYS.forEach(k => { delete out[k]; });
+  return out;
+};
+const keepLocalViewSettings = (remoteSettings, localSettings) => {
+  const out = {...remoteSettings};
+  DEVICE_VIEW_SETTING_KEYS.forEach(k => {
+    if(localSettings && Object.prototype.hasOwnProperty.call(localSettings, k)) out[k] = localSettings[k];
+  });
+  return out;
+};
+
+// Settings arrive from backups and from Drive, i.e. from files anyone can hand-edit. A value of
+// the wrong type — `chartOrder: "x"` — threw on every render, and because settings sync, it
+// bricked every device at once. Wrong-typed keys are dropped so each consumer's default applies.
+const SETTINGS_TYPE_GUARDS = {
+  chartOrder: v => Array.isArray(v) && v.every(k => typeof k === 'string'),
+  hiddenCharts: v => v && typeof v === 'object' && !Array.isArray(v),
+  hiddenStats: v => v && typeof v === 'object' && !Array.isArray(v),
+  maLines: v => v && typeof v === 'object' && !Array.isArray(v),
+  dashboardWalletFilter: v => v === null || (Array.isArray(v) && v.every(k => typeof k === 'string')),
+  chartRange: v => typeof v === 'string',
+  chartRangeCustom: v => typeof v === 'string',
+  defaultTxType: v => VALID_TX_TYPES.includes(v),
+  hideValues: v => typeof v === 'boolean',
+  bgDots: v => typeof v === 'boolean',
+  showVault: v => typeof v === 'boolean',
+};
 function normalizeSettings(nextSettings) {
-  const base = nextSettings && typeof nextSettings === 'object' ? nextSettings : {};
+  const raw = nextSettings && typeof nextSettings === 'object' && !Array.isArray(nextSettings) ? nextSettings : {};
+  const base = {...raw};
+  for(const [k, valid] of Object.entries(SETTINGS_TYPE_GUARDS)) {
+    if(Object.prototype.hasOwnProperty.call(base, k) && base[k] !== undefined && !valid(base[k])) delete base[k];
+  }
   return {
     defaultTxType: 'Buy',
     // Defaulted here so every chart agrees. Leaving it undefined meant each consumer applied
@@ -3076,7 +3160,10 @@ function App() {
       showToast('⚠ Browser storage is full — this preference was not saved.', 6000);
       return;
     }
-    if(GDriveSync.isSignedIn()) {
+    // Flipping a chart range or hide-values is a glance, not an edit. These used to stamp a
+    // new commit and push, so two devices could hit the Sync Conflict dialog over a toggle.
+    if(Object.keys(patch).every(k => DEVICE_VIEW_SETTING_KEYS.includes(k))) return;
+    if(GDriveSync.hasSession()) {
       const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) ?? fallback); } catch { return JSON.parse(fallback); } };
       const mod = nextCommitStamp();
       safeSetItem('btc-last-modified', mod);
@@ -3119,7 +3206,7 @@ function App() {
     return { date: todayLocal(), type:defType, wallet:'', wallet2:'', amount:'', price:'', fee:'', totalUsd:'', notes:'', txhash:'', excludeStats:false };
   });
   const [editId, setEditId] = useState(null); // a transaction id, not an array index
-  const [editWalletIdx, setEditWalletIdx] = useState(null);
+  const [editWalletTarget, setEditWalletTarget] = useState(null);
   const [showResetDialog, setShowResetDialog] = useState(false);
   const [syncState, setSyncState] = useState('disconnected'); // disconnected, syncing, synced, error
   const [syncUser, setSyncUser] = useState(null); // { email, name }
@@ -3128,7 +3215,12 @@ function App() {
   const syncInitialized = useRef(false);
   const [btcPrice, setBtcPrice] = useState(null);
   const [historicalPrices, setHistoricalPrices] = useState(() => {
-    try { return JSON.parse(localStorage.getItem(HISTORICAL_PRICE_CACHE_KEY)||'{}'); }
+    try {
+      const cached = JSON.parse(localStorage.getItem(HISTORICAL_PRICE_CACHE_KEY)||'{}');
+      // Older caches hold back-filled values from before Coinbase's first candle
+      for(const day of Object.keys(cached)) if(day < BTC_USD_FIRST_CANDLE_DAY) delete cached[day];
+      return cached;
+    }
     catch { return {}; }
   });
   const [historicalPriceLoading, setHistoricalPriceLoading] = useState(false);
@@ -3137,11 +3229,33 @@ function App() {
   // once-a-minute "could not fetch" toast. Mirrored into a ref for the interval closure.
   const [priceUpdatedAt, setPriceUpdatedAt] = useState(null);
   const priceUpdatedAtRef = useRef(null); priceUpdatedAtRef.current = priceUpdatedAt;
+  // Until the first live fetch lands — or forever, offline — show the last known price rather
+  // than nothing. A failed spot fetch at launch used to hide the price and leave P&L reading
+  // "Waiting for price" even with years of cached daily closes on hand. The pill's staleness
+  // styling and timestamp make the age obvious.
+  useEffect(() => {
+    if(btcPrice !== null) return;
+    let last = null;
+    try { last = JSON.parse(localStorage.getItem('btc-last-spot') || 'null'); } catch {}
+    if(last && numOr(last.price, null) !== null && Number.isFinite(last.at)) {
+      setBtcPrice(numOr(last.price)); setPriceUpdatedAt(last.at); return;
+    }
+    const days = Object.keys(historicalPrices).filter(k => numOr(historicalPrices[k], null) !== null).sort();
+    const day = days[days.length - 1];
+    if(day) { setBtcPrice(numOr(historicalPrices[day])); setPriceUpdatedAt(Date.parse(day + 'T23:59:59Z')); }
+  }, [btcPrice, historicalPrices]);
   // Bumped to re-run the historical price fetch on a schedule, replacing the old
   // transactions.length dependency that refetched on every single add or delete.
   const [priceRefreshTick, setPriceRefreshTick] = useState(0);
   const lastPriceHistoryFetchRef = useRef(Date.now());
   const [toast, setToast] = useState(null);
+  // Set by the deploy check in the head script
+  const [updateAvailable, setUpdateAvailable] = useState(() => !!window.__satUpdateAvailable);
+  useEffect(() => {
+    const on = () => setUpdateAvailable(true);
+    window.addEventListener('satledger:update-available', on);
+    return () => window.removeEventListener('satledger:update-available', on);
+  }, []);
   const toastTimer = useRef(null);
   const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, onConfirm, confirmLabel, danger }
   // Bumped whenever btc-presync-backup is written, restored or discarded, so the
@@ -3474,8 +3588,10 @@ function App() {
       const j = await r.json();
       const p = numOr(j?.data?.amount, null);
       if(p === null) throw new Error('spot_price_unparseable');
+      const at = Date.now();
       setBtcPrice(p);
-      setPriceUpdatedAt(Date.now());
+      setPriceUpdatedAt(at);
+      safeSetItem('btc-last-spot', JSON.stringify({ price: p, at }));
       return p;
     } catch(e) {
       if(e?.name !== 'AbortError') console.warn('Spot price fetch failed:', e.message || e);
@@ -3511,9 +3627,15 @@ function App() {
         catch { return {}; }
       })();
       // Without transactions, still fetch full BTC history so the MA chart can stay live.
-      const baseStart = firstTransactionDate || '2014-01-01';
+      // Coinbase has no BTC-USD candles before its first one. The floor used to be 2014-01-01,
+      // and the gap-filler back-filled those 18 months with the first real close, so 2014
+      // transactions were valued at mid-2015 prices and the 200-week MA began on a flat,
+      // fabricated stretch. Days before the floor are now simply absent, and fabricated
+      // values left in older caches are dropped.
+      for(const day of Object.keys(cached)) if(day < BTC_USD_FIRST_CANDLE_DAY) delete cached[day];
+      const baseStart = firstTransactionDate || BTC_USD_FIRST_CANDLE_DAY;
       const maLookbackDate = addDaysUTC(baseStart, -1400);
-      const dataStart = maLookbackDate < '2014-01-01' ? '2014-01-01' : maLookbackDate;
+      const dataStart = maLookbackDate < BTC_USD_FIRST_CANDLE_DAY ? BTC_USD_FIRST_CANDLE_DAY : maLookbackDate;
       const requiredDays = listDaysUTC(dataStart, today);
       const refreshStart = addDaysUTC(today, -2);
       const firstMissingDay = requiredDays.find(day => cached[day]===undefined);
@@ -3566,7 +3688,11 @@ function App() {
             const [time,,,,close] = row;
             merged[dayKeyUTC(time*1000)] = close;
           });
-          lastGoodDay = endExclusive < today ? endExclusive : today;
+          // The window ends the day BEFORE endExclusive. Recording endExclusive itself let the
+          // gap-filler invent a price for a day never fetched — and, now looking present,
+          // firstMissingDay never came back for it.
+          const lastFetched = addDaysUTC(endExclusive, -1);
+          lastGoodDay = lastFetched < today ? lastFetched : today;
         }
         if(cancelled) return;
         // Gap-fill ONLY the contiguous prefix. Forward-filling past the hole would make the
@@ -3636,7 +3762,7 @@ function App() {
       lockVault();
     }
     if(remote.settings) {
-      const normalized = normalizeSettings(remote.settings);
+      const normalized = normalizeSettings(keepLocalViewSettings(remote.settings, settingsRef.current));
       settingsRef.current = normalized;
       setSettings(normalized);
       stored = safeSetItem('btc-settings', JSON.stringify(normalized)) && stored;
@@ -3755,8 +3881,8 @@ function App() {
     }
     let settingsDiffer = false;
     try {
-      const localSet = normalizeSettings(JSON.parse(localStorage.getItem('btc-settings')||'{}'));
-      const remoteSet = normalizeSettings(remote?.settings || {});
+      const localSet = withoutViewSettings(normalizeSettings(JSON.parse(localStorage.getItem('btc-settings')||'{}')));
+      const remoteSet = withoutViewSettings(normalizeSettings(remote?.settings || {}));
       settingsDiffer = stableStringify(localSet) !== stableStringify(remoteSet);
     } catch { settingsDiffer = true; }
     if(settingsDiffer) rows.push({ label:'Preferences', local:'differ', remote:'differ' });
@@ -4080,7 +4206,7 @@ function App() {
 
   // ─── Wallet holdings ─────────────────────────────────────────────────────
   const walletHoldings = useMemo(() => {
-    const h = {};
+    const h = Object.create(null); // wallet names are user text — '__proto__' must be just a name
     transactions.forEach(tx => {
       const amt = parseFloat(tx.amount)||0;
       const fee = parseFloat(tx.fee)||0;
@@ -4109,7 +4235,7 @@ function App() {
       .map((tx, i) => ({ tx, i }))
       .sort((a, b) => a.tx.date.localeCompare(b.tx.date) || a.i - b.i);
     const toSats = v => Math.round(numOr(v) * 1e8);
-    const bal = {};
+    const bal = Object.create(null);
     const out = {};
     chrono.forEach(({ tx }) => {
       const amt = toSats(tx.amount), fee = toSats(tx.fee);
@@ -4121,7 +4247,7 @@ function App() {
       else if(tx.type==='Consolidation') add(w1, -fee);
       // Both sides of a transfer are recorded so the column can follow whichever wallet the
       // user is filtering on, rather than always reporting the source.
-      const after = {};
+      const after = Object.create(null);
       if(w1) after[w1] = bal[w1] || 0;
       if(w2 && tx.type==='Transfer') after[w2] = bal[w2];
       if(Object.keys(after).length) out[tx.id] = after;
@@ -4272,20 +4398,24 @@ function App() {
     if((finalForm.type==='Buy'||finalForm.type==='Sell') && usdN !== null && priceN === null && Number.isFinite(amt) && amt > 0) {
       finalForm.price = (usdN/amt).toFixed(2);
     }
+    // Read the live lists, not this render's: commitTransaction can run from the "Save Anyway"
+    // confirm, after a Drive pull or another tab has replaced them — and saving this render's
+    // copy would silently revert that update.
     const commitTransaction = () => {
+      const txs = transactionsRef.current, wals = walletsRef.current;
       if(editId!==null) {
         // Look up by id, not index: a Drive pull resolving while the modal was open used to
         // land this edit on whichever row happened to occupy that index.
-        const i = transactions.findIndex(t => t.id === editId);
+        const i = txs.findIndex(t => t.id === editId);
         if(i === -1) {
           showToast('That transaction no longer exists — it may have changed on another device.');
           setShowModal(false); setEditId(null); setForm(emptyForm());
           return;
         }
-        const u=[...transactions]; u[i]={...finalForm, id: editId}; setTransactions(u); save(u, wallets);
+        const u=[...txs]; u[i]={...finalForm, id: editId}; setTransactions(u); save(u, wals);
         showToast('Transaction updated');
       } else {
-        const added=[...transactions, {...finalForm, id: newTxId()}]; setTransactions(added); save(added, wallets);
+        const added=[...txs, {...finalForm, id: newTxId()}]; setTransactions(added); save(added, wals);
         showToast('Transaction added');
       }
       setShowModal(false); setEditId(null); setForm(emptyForm());
@@ -4296,14 +4426,11 @@ function App() {
       const amt = parseFloat(finalForm.amount)||0;
       const fee = (finalForm.type==='Transfer' || finalForm.type==='Consolidation') ? (parseFloat(finalForm.fee)||0) : 0;
       const walletBal = walletHoldings[finalForm.wallet] || 0;
-      // If editing, add back the old transaction's impact
-      let adjustment = 0;
-      const old = editId!==null ? transactions.find(t => t.id === editId) : null;
-      if(old) {
-        if(old.type==='Sell') adjustment = numOr(old.amount);
-        else if(old.type==='Transfer') adjustment = numOr(old.amount) + numOr(old.fee);
-        else if(old.type==='Consolidation') adjustment = numOr(old.fee);
-      }
+      // If editing, take the old transaction's effect on THIS wallet back out. It used to add
+      // back the old outflow unconditionally — so moving "Sell 1 from A" to wallet B credited
+      // B with A's coin, and B could be driven negative with no warning.
+      const old = editId!==null ? transactionsRef.current.find(t => t.id === editId) : null;
+      const adjustment = old ? -txEffectOnWallet(old, finalForm.wallet) : 0;
       balanceAfter = finalForm.type==='Consolidation'
         ? walletBal + adjustment - fee
         : walletBal + adjustment - amt - fee;
@@ -4362,15 +4489,32 @@ function App() {
       confirmLabel: 'Delete',
       danger: true,
       onConfirm: () => {
-        const filtered = transactions.filter(t => t.id !== tx.id);
-        if(filtered.length === transactions.length) {
+        // Live refs: the dialog may have sat open across a Drive pull. Checking this render's
+        // array could never catch that, and saving it would revert the pull.
+        const current = transactionsRef.current;
+        const filtered = current.filter(t => t.id !== tx.id);
+        if(filtered.length === current.length) {
           showToast('That transaction no longer exists — it may have changed on another device.');
           setConfirmDialog(null);
           return;
         }
-        setTransactions(filtered); save(filtered, wallets); showToast('Deleted'); setConfirmDialog(null);
+        setTransactions(filtered); save(filtered, walletsRef.current); showToast('Deleted'); setConfirmDialog(null);
       },
     });
+  };
+
+  // Wallet edits, matched by id (name for legacy rows without one) against the LIVE list.
+  // The buttons used to splice by render-time index into render-time arrays, so a list that
+  // changed underneath — a Drive pull, another tab, a confirm left open — had the edit land
+  // on the wrong wallet or revert the update.
+  const sameWallet = (a, b) => (a?.id && b?.id) ? a.id === b.id : String(a?.name||'') === String(b?.name||'');
+  const patchWallet = (target, patch) => {
+    const nw = walletsRef.current.map(w => sameWallet(w, target) ? {...w, ...patch} : w);
+    setWallets(nw); save(transactionsRef.current, nw);
+  };
+  const removeWallet = (target) => {
+    const nw = walletsRef.current.filter(w => !sameWallet(w, target));
+    setWallets(nw); save(transactionsRef.current, nw);
   };
 
   const handleWalletSubmit = (e) => {
@@ -4378,19 +4522,27 @@ function App() {
     // Trim matters on its own: "Ledger " and "Ledger" are two silently-separate balance keys.
     const name = String(walletForm.name||'').trim();
     if(!name) { showToast('Wallet name is required'); return; }
-    const collides = wallets.some((w,i) => i!==editWalletIdx && String(w.name||'').trim().toLowerCase() === name.toLowerCase());
+    // Live lists, and the edited wallet matched by id: the modal can stay open across a Drive
+    // pull, and a stored index would then point at a different wallet.
+    const wals = walletsRef.current, txs = transactionsRef.current;
+    const editIdx = editWalletTarget !== null ? wals.findIndex(w => sameWallet(w, editWalletTarget)) : -1;
+    if(editWalletTarget !== null && editIdx === -1) {
+      showToast('That wallet no longer exists — it may have changed on another device.');
+      setShowWalletModal(false); setEditWalletTarget(null); return;
+    }
+    const collides = wals.some((w,i) => i!==editIdx && String(w.name||'').trim().toLowerCase() === name.toLowerCase());
     if(collides) { showToast(`A wallet named "${name}" already exists`); return; }
     const cleanForm = {...walletForm, name, address: String(walletForm.address||'').trim()};
 
-    if(editWalletIdx!==null) {
-      const oldName = String(wallets[editWalletIdx]?.name||'');
-      const u=[...wallets]; u[editWalletIdx]={...u[editWalletIdx],...cleanForm};
+    if(editWalletTarget!==null) {
+      const oldName = String(wals[editIdx]?.name||'');
+      const u=[...wals]; u[editIdx]={...u[editIdx],...cleanForm};
       // Cascade the rename through every transaction that references the old name, or the
       // wallet's entire balance is orphaned.
-      const affected = oldName !== name ? countWalletReferences(transactions, oldName) : 0;
-      const nextTxs = renameWalletInTransactions(transactions, oldName, name);
+      const affected = oldName !== name ? countWalletReferences(txs, oldName) : 0;
+      const nextTxs = renameWalletInTransactions(txs, oldName, name);
       setWallets(u);
-      if(nextTxs !== transactions) setTransactions(nextTxs);
+      if(nextTxs !== txs) setTransactions(nextTxs);
       // save() FIRST — it writes localStorage synchronously, and updateSettings' debounced
       // push reads transactions back out of localStorage. Both share syncDebounce, so the
       // later call wins; reversing this order would push pre-rename transactions.
@@ -4403,9 +4555,9 @@ function App() {
       }
       if(affected) showToast(`Wallet renamed — updated ${affected} transaction${affected===1?'':'s'}`);
     } else {
-      const nw=[...wallets,{id:'w'+Date.now(),...cleanForm}]; setWallets(nw); save(transactions, nw);
+      const nw=[...wals,{id:'w'+Date.now(),...cleanForm}]; setWallets(nw); save(txs, nw);
     }
-    setShowWalletModal(false); setEditWalletIdx(null); setWalletForm({name:'',type:'Exchange',address:''});
+    setShowWalletModal(false); setEditWalletTarget(null); setWalletForm({name:'',type:'Exchange',address:''});
   };
 
   // ─── Export CoinLedger CSV ────────────────────────────────────────────────
@@ -4419,7 +4571,11 @@ function App() {
 
     src.sort((a,b)=>a.date.localeCompare(b.date)).forEach(tx => {
       const amt = tx.amount||''; const fee = tx.fee||'';
-      const dateStr = tx.date+' 00:00:00';
+      // Normalised, so the one column the formula guard below skips can only ever hold a
+      // date: rows synced from Drive aren't date-checked on the way in.
+      const day = normalizeDate(tx.date);
+      if(!day) return;
+      const dateStr = day+' 00:00:00';
 
       if(tx.type==='Buy') {
         const usd = numOr(tx.totalUsd, numOr(amt)*numOr(tx.price)).toFixed(2);
@@ -4488,6 +4644,12 @@ function App() {
   // ─── Import Backup / CSV ──────────────────────────────────────────────────
   const importCSV = (e) => {
     const file=e.target.files[0]; if(!file) return;
+    // Larger than any real ledger, and too big for localStorage anyway: a write that size
+    // fails, and a restore would then push data to Drive that this device couldn't keep.
+    if(file.size > MAX_IMPORT_BYTES) {
+      showToast(`That file is ${(file.size/1048576).toFixed(1)} MB — too large to be a SatLedger backup or CSV.`, 6000);
+      e.target.value=''; return;
+    }
     const reader=new FileReader();
     reader.onload = ev => {
       const raw = ev.target.result;
@@ -4500,9 +4662,9 @@ function App() {
             // normalizeDate now returns '' for garbage, so this filter finally rejects it —
             // previously it passed the raw string through and a single bad row blanked every chart.
             const rawTransactions = Array.isArray(parsed.transactions) ? parsed.transactions : [];
-            const importedTransactions = ensureTxIds(rawTransactions
+            const importedTransactions = ensureTxIds(sanitizeStoredTransactions(rawTransactions
               .filter(tx => tx && typeof tx === 'object' && normalizeDate(tx.date) && VALID_TX_TYPES.includes(tx.type))
-              .map(tx => ({...tx, date: normalizeDate(tx.date)})));
+              .map(tx => ({...tx, date: normalizeDate(tx.date)}))));
             const skippedCount = rawTransactions.length - importedTransactions.length;
             // De-dupe by trimmed lowercase name: duplicates double-count in the holdings pie
             // and collide as React keys, and a hand-edited backup is an easy way to create them.
@@ -4530,7 +4692,10 @@ function App() {
                 setSettings(normalized);
                 safeSetItem('btc-settings', JSON.stringify(normalized));
               }
-              const importedVault = parsed.vault || null;
+              // A malformed vault can never be unlocked, and stored it would replace a working
+              // one on every synced device. Keep only one that has the fields decryption needs.
+              const vaultInvalid = !!parsed.vault && !isVaultBlob(parsed.vault);
+              const importedVault = vaultInvalid ? null : (parsed.vault || null);
               setVault(importedVault);
               if(importedVault) safeSetItem(VAULT_STORAGE_KEY, JSON.stringify(importedVault));
               else localStorage.removeItem(VAULT_STORAGE_KEY);
@@ -4542,6 +4707,7 @@ function App() {
               const notes = [];
               if(skippedCount > 0) notes.push(`${skippedCount} invalid row${skippedCount===1?'':'s'} skipped`);
               if(mergedWalletCount > 0) notes.push(`${mergedWalletCount} duplicate wallet${mergedWalletCount===1?'':'s'} merged`);
+              if(vaultInvalid) notes.push('vault in the file was unreadable and was not restored');
               showToast(notes.length ? `Backup restored — ${notes.join(', ')}` : 'Backup restored', notes.length ? 6000 : 3000);
             };
             if(transactions.length > 0 || wallets.length > 0) {
@@ -4712,7 +4878,7 @@ function App() {
                   style={{cursor:'pointer',border:'none',opacity:stale?.55:1}}
                   aria-label={`Bitcoin price ${fmtUSD(btcPrice)}${stale?' (may be out of date)':''} — click to refresh`}
                   title={priceUpdatedAt
-                    ? `BTC price · updated ${new Date(priceUpdatedAt).toLocaleTimeString()}${stale?' (may be out of date)':''} · click to refresh`
+                    ? `BTC price · updated ${age > 86400000 ? new Date(priceUpdatedAt).toLocaleString() : new Date(priceUpdatedAt).toLocaleTimeString()}${stale?' (may be out of date)':''} · click to refresh`
                     : 'Click to refresh BTC price'}
                 >
                   <div className={`price-dot${priceLoading?' loading':''}`}/>
@@ -5097,7 +5263,7 @@ function App() {
                     </button>
                   )}
                 </div>
-                <button className="btn btn-primary btn-sm" onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletIdx(null);setShowWalletModal(true);}}>+ Add Wallet</button>
+                <button className="btn btn-primary btn-sm" onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletTarget(null);setShowWalletModal(true);}}>+ Add Wallet</button>
               </div>
               <div className="card-body">
                 {wallets.filter(w => showArchived ? true : !w.archived).length === 0 && (
@@ -5106,7 +5272,7 @@ function App() {
                     <div className="empty-text">{wallets.length===0 ? 'No wallets yet' : 'No active wallets'}</div>
                     <div className="empty-sub">{wallets.length===0 ? 'Add an exchange, hardware wallet, or cold storage wallet to start tracking' : 'All wallets are archived — use Show Archived to view them'}</div>
                     {wallets.length===0 && (
-                      <button className="btn btn-primary" style={{marginTop:'1rem'}} onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletIdx(null);setShowWalletModal(true);}}>+ Add Wallet</button>
+                      <button className="btn btn-primary" style={{marginTop:'1rem'}} onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletTarget(null);setShowWalletModal(true);}}>+ Add Wallet</button>
                     )}
                   </div>
                 )}
@@ -5124,14 +5290,14 @@ function App() {
                           </div>
                           <div style={{display:'flex',gap:'.25rem'}}>
                             {!w.archived && (
-                              <button className="btn-icon" style={{width:36,height:36}} onClick={()=>{setWalletForm({name:w.name,type:w.type,address:w.address});setEditWalletIdx(walletIdx);setShowWalletModal(true);}} title="Edit" aria-label={`Edit wallet ${w.name}`}>{Icon.Edit({width:14,height:14})}</button>
+                              <button className="btn-icon" style={{width:36,height:36}} onClick={()=>{setWalletForm({name:w.name,type:w.type,address:w.address});setEditWalletTarget(w);setShowWalletModal(true);}} title="Edit" aria-label={`Edit wallet ${w.name}`}>{Icon.Edit({width:14,height:14})}</button>
                             )}
                             {!w.archived ? (
-                              <button className="btn-icon" style={{width:36,height:36}} title="Archive wallet" aria-label="Archive wallet" onClick={()=>{const nw=[...wallets];nw[walletIdx]={...nw[walletIdx],archived:true};setWallets(nw);save(transactions,nw);showToast(`${w.name} archived`);}}>{Icon.Archive({width:14,height:14})}</button>
+                              <button className="btn-icon" style={{width:36,height:36}} title="Archive wallet" aria-label="Archive wallet" onClick={()=>{patchWallet(w,{archived:true});showToast(`${w.name} archived`);}}>{Icon.Archive({width:14,height:14})}</button>
                             ) : (
-                              <button className="btn-icon" style={{width:36,height:36,color:'var(--green)'}} title="Unarchive wallet" aria-label="Unarchive wallet" onClick={()=>{const nw=[...wallets];nw[walletIdx]={...nw[walletIdx],archived:false};setWallets(nw);save(transactions,nw);showToast(`${w.name} restored`);}}>{Icon.Unarchive({width:14,height:14})}</button>
+                              <button className="btn-icon" style={{width:36,height:36,color:'var(--green)'}} title="Unarchive wallet" aria-label="Unarchive wallet" onClick={()=>{patchWallet(w,{archived:false});showToast(`${w.name} restored`);}}>{Icon.Unarchive({width:14,height:14})}</button>
                             )}
-                            <button className="btn-icon btn-icon-danger" style={{width:36,height:36,color:'var(--red)'}} title="Delete permanently" aria-label="Delete permanently" onClick={()=>{setConfirmDialog({title:'Delete Wallet',message:`Permanently delete ${w.name}? Its transactions will no longer count toward stats. This cannot be undone — consider archiving instead or exporting a backup first.`,confirmLabel:'Delete Wallet',danger:true,onConfirm:()=>{const nw=wallets.filter((_,j)=>j!==walletIdx);setWallets(nw);save(transactions,nw);showToast(`${w.name} deleted`);setConfirmDialog(null);}});}}>{Icon.X({width:14,height:14})}</button>
+                            <button className="btn-icon btn-icon-danger" style={{width:36,height:36,color:'var(--red)'}} title="Delete permanently" aria-label="Delete permanently" onClick={()=>{setConfirmDialog({title:'Delete Wallet',message:`Permanently delete ${w.name}? Its transactions will no longer count toward stats. This cannot be undone — consider archiving instead or exporting a backup first.`,confirmLabel:'Delete Wallet',danger:true,onConfirm:()=>{removeWallet(w);showToast(`${w.name} deleted`);setConfirmDialog(null);}});}}>{Icon.X({width:14,height:14})}</button>
                           </div>
                         </div>
                         <span className="wallet-type-badge">{w.type}</span>
@@ -5172,7 +5338,7 @@ function App() {
                         <div style={{display:'flex',gap:'.5rem'}}>
                           <button className="btn btn-secondary btn-sm" onClick={()=>{
                             setWalletForm({name, type:'Exchange', address:''});
-                            setEditWalletIdx(null);
+                            setEditWalletTarget(null);
                             setShowWalletModal(true);
                           }}>Add as wallet</button>
                           <button className="btn btn-secondary btn-sm" onClick={()=>{
@@ -5184,9 +5350,9 @@ function App() {
                               confirmLabel: `Rename to ${target}`,
                               danger: false,
                               onConfirm: () => {
-                                const nextTxs = renameWalletInTransactions(transactions, name, target);
+                                const nextTxs = renameWalletInTransactions(transactionsRef.current, name, target);
                                 setTransactions(nextTxs);
-                                save(nextTxs, wallets);
+                                save(nextTxs, walletsRef.current);
                                 setConfirmDialog(null);
                                 showToast(`Updated ${count} transaction${count===1?'':'s'}`);
                               },
@@ -5273,11 +5439,11 @@ function App() {
                     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))',gap:'1rem',marginBottom:'1.25rem'}}>
                       <div className="form-group">
                         <label className="form-label">Vault Passphrase</label>
-                        <input type="password" className="form-input" value={vaultSetupPassphrase} onChange={e=>setVaultSetupPassphrase(e.target.value)} placeholder="Use a separate, memorable passphrase"/>
+                        <input type="password" autoComplete="off" className="form-input" value={vaultSetupPassphrase} onChange={e=>setVaultSetupPassphrase(e.target.value)} placeholder="Use a separate, memorable passphrase"/>
                       </div>
                       <div className="form-group">
                         <label className="form-label">Confirm Passphrase</label>
-                        <input type="password" className="form-input" value={vaultSetupConfirm} onChange={e=>setVaultSetupConfirm(e.target.value)} placeholder="Re-enter the passphrase"/>
+                        <input type="password" autoComplete="off" className="form-input" value={vaultSetupConfirm} onChange={e=>setVaultSetupConfirm(e.target.value)} placeholder="Re-enter the passphrase"/>
                       </div>
                     </div>
                     {vaultSectionDefs.map(section => (
@@ -5309,7 +5475,7 @@ function App() {
                     <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'.75rem',alignItems:'end',marginBottom:'1rem'}}>
                       <div className="form-group" style={{marginBottom:0}}>
                         <label className="form-label">Vault Passphrase</label>
-                        <input type="password" className="form-input" value={vaultPassphraseInput} onChange={e=>setVaultPassphraseInput(e.target.value)} placeholder="Enter vault passphrase"/>
+                        <input type="password" autoComplete="off" className="form-input" value={vaultPassphraseInput} onChange={e=>setVaultPassphraseInput(e.target.value)} placeholder="Enter vault passphrase"/>
                       </div>
                       <button className="btn btn-primary" onClick={()=>handleUnlockVault(false)} disabled={vaultBusy}>
                         {vaultBusy ? 'Unlocking…' : 'Unlock Vault'}
@@ -5354,11 +5520,11 @@ function App() {
                       <div className="card-body" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:'1rem'}}>
                         <div className="form-group" style={{marginBottom:0}}>
                           <label className="form-label">New Passphrase</label>
-                          <input type="password" className="form-input" value={vaultNewPassphrase} onChange={e=>setVaultNewPassphrase(e.target.value)} placeholder="New passphrase"/>
+                          <input type="password" autoComplete="off" className="form-input" value={vaultNewPassphrase} onChange={e=>setVaultNewPassphrase(e.target.value)} placeholder="New passphrase"/>
                         </div>
                         <div className="form-group" style={{marginBottom:0}}>
                           <label className="form-label">Confirm New Passphrase</label>
-                          <input type="password" className="form-input" value={vaultNewPassphraseConfirm} onChange={e=>setVaultNewPassphraseConfirm(e.target.value)} placeholder="Re-enter new passphrase"/>
+                          <input type="password" autoComplete="off" className="form-input" value={vaultNewPassphraseConfirm} onChange={e=>setVaultNewPassphraseConfirm(e.target.value)} placeholder="Re-enter new passphrase"/>
                         </div>
                       </div>
                       <div className="modal-footer" style={{borderTop:'1px solid var(--border-color)'}}>
@@ -6081,7 +6247,7 @@ function App() {
 
       {/* ── Add/Edit Wallet Modal ── */}
       {showWalletModal && (
-        <Modal onClose={()=>setShowWalletModal(false)} title={`${editWalletIdx!==null?'Edit':'Add'} Wallet`} maxWidth={420}>
+        <Modal onClose={()=>setShowWalletModal(false)} title={`${editWalletTarget!==null?'Edit':'Add'} Wallet`} maxWidth={420}>
             <div>
               <div className="modal-body">
                 <div className="form-group" style={{marginBottom:'1rem'}}>
@@ -6101,7 +6267,7 @@ function App() {
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={()=>setShowWalletModal(false)}>Cancel</button>
-                <button type="button" className="btn btn-primary" onClick={handleWalletSubmit}>{editWalletIdx!==null?'Update':'Add'} Wallet</button>
+                <button type="button" className="btn btn-primary" onClick={handleWalletSubmit}>{editWalletTarget!==null?'Update':'Add'} Wallet</button>
               </div>
             </div>
         </Modal>
@@ -6378,7 +6544,13 @@ function App() {
       </nav>
 
       {/* Toast */}
-      {toast && <div className="toast">{toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
+      {updateAvailable && !toast && (
+        <div className="toast" role="status" aria-live="polite" style={{display:'flex',alignItems:'center',gap:'.75rem'}}>
+          <span>A new version of SatLedger is available.</span>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={()=>location.reload()}>Reload</button>
+        </div>
+      )}
     </div>
   );
 }

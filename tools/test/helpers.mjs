@@ -26,7 +26,7 @@ const exported = ['normalizeDate','isRealDate','numOr','newTxId','ensureTxIds','
   'fromBase64','canonicalTxType','renameWalletInTransactions','countWalletReferences',
   'fmtDate','todayLocal','fillDailyPriceGaps','safeSetItem','VALID_TX_TYPES',
   'addDaysUTC','listDaysUTC','toEpochDay','fromEpochDay','dayKeyUTC','rangeCutoff',
-  'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp'];
+  'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp','txEffectOnWallet'];
 const fn = new Function(`${src}\nreturn {${exported.join(',')}};`);
 const H = fn();
 
@@ -216,6 +216,18 @@ ok(/^\d{4}-\d{2}-\d{2}$/.test(H.todayLocal()), 'todayLocal shape');
   // A USD fee on a withdrawal has no price to convert at — must not be read as BTC
   eq(H.parseCoinLedgerRows([['2024-01-01','A','BTC','0.1','','','USD','2.50','Withdrawal','','']]).txs[0].fee, '',
      'CL: fiat withdrawal fee is not stored as BTC');
+}
+
+// ── txEffectOnWallet ────────────────────────────────────────────────────────
+{
+  const sellA = { type:'Sell', wallet:'A', amount:'1' };
+  eq(H.txEffectOnWallet(sellA, 'A'), -1, 'sell drains its own wallet');
+  eq(H.txEffectOnWallet(sellA, 'B'), 0, 'sell from A has no effect on B (edit-check add-back bug)');
+  const xfer = { type:'Transfer', wallet:'A', wallet2:'B', amount:'0.5', fee:'0.001' };
+  eq(H.txEffectOnWallet(xfer, 'A'), -0.501, 'transfer source pays amount + fee');
+  eq(H.txEffectOnWallet(xfer, 'B'), 0.5, 'transfer destination receives amount');
+  eq(H.txEffectOnWallet({ type:'Buy', wallet:'A', amount:'2' }, 'A'), 2, 'buy credits');
+  eq(H.txEffectOnWallet({ type:'Consolidation', wallet:'A', fee:'0.0002' }, 'A'), -0.0002, 'consolidation costs only its fee');
 }
 
 // ── nextCommitStamp ─────────────────────────────────────────────────────────
