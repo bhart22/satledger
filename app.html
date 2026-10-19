@@ -3119,6 +3119,11 @@ const sanitizeStoredTransactions = list => list.map(tx => {
   return out;
 });
 
+// Every keystroke in the transaction modal re-renders App (the form state lives there), and
+// with it every chart: RSI segments and MA paths over thousands of points, rebuilt per key.
+// Memoised on props, which are all state, memo results or the stable updateSettings below.
+const MemoDashboardCharts = React.memo(DashboardCharts);
+
 function App() {
   const [transactions, setTransactions] = useState(() =>
     ensureTxIds(sanitizeStoredTransactions(loadStoredArray('btc-tx-v2', PRELOADED_TRANSACTIONS)))
@@ -3218,6 +3223,10 @@ function App() {
       });
     }
   };
+  // Identity-stable wrapper so memoised children (the charts) aren't re-rendered just because
+  // App re-rendered. Always calls the latest updateSettings.
+  const updateSettingsRef = useRef(updateSettings); updateSettingsRef.current = updateSettings;
+  const stableUpdateSettings = useCallback(patch => updateSettingsRef.current(patch), []);
   const handleRsiThresholdDraftChange = (key, value) => {
     const nextDraft = { ...rsiThresholdDraft, [key]: value };
     setRsiThresholdDraft(nextDraft);
@@ -5095,7 +5104,7 @@ function App() {
             )}
 
             {/* ── Charts ── */}
-            <DashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={updateSettings} selectedWallets={selectedDashboardWallets} />
+            <MemoDashboardCharts transactions={transactions} wallets={wallets} btcPrice={btcPrice} historicalPrices={historicalPrices} historicalPriceLoading={historicalPriceLoading} settings={settings} updateSettings={stableUpdateSettings} selectedWallets={selectedDashboardWallets} />
 
             {/* Wallet holdings pie chart */}
             {(() => {

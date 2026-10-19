@@ -46,7 +46,7 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 - [ ] Build step (esbuild) to drop in-browser Babel (~3 MB, ~2.5 s transform); boot watchdog can fire on slow phones
 - [x] iOS input zoom (<16px inputs). `viewport-fit=cover` deliberately not added: without it iOS already keeps content out of the unsafe areas
 - [~] Labels linked, toggles named, toast `aria-live` done; small touch targets and initial focus on Date still open
-- [ ] Charts re-render on every keystroke in the transaction modal
+- [x] Charts re-render on every keystroke in the transaction modal (DashboardCharts memoised, stable updateSettings)
 - [x] Form validation: future dates, empty wallet, Transfer to same/empty wallet
 - [x] manifest `start_url` absolute; `prefers-color-scheme` ignored; theme flash
 
