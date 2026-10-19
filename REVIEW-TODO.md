@@ -37,18 +37,18 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 
 ## Security
 - [ ] Tighten CSP (needs build step to drop `unsafe-inline`/`unsafe-eval`/all-of-unpkg)
-- [ ] Clickjacking: `frame-ancestors`/`X-Frame-Options` header or frame-buster
-- [ ] Vault: old-passphrase ciphertext survives in recovery snapshot / Drive revisions; change-passphrase doesn't ask for current one
-- [ ] Load Google Identity script only when sync is used
+- [~] Clickjacking: frame-buster added; an HTTP `frame-ancestors 'none'` header is still the stronger fix if the host allows it
+- [~] Vault: snapshot copy now replaced on change/delete and the UI says old backups and Drive revisions remain; change-passphrase still doesn't ask for the current one
+- [x] Load Google Identity script only when sync is used
 - [x] Wallet names as plain-object keys (`__proto__`); CSV Date column unguarded; vault inputs lack `autocomplete`
 
 ## Performance / mobile / a11y
 - [ ] Build step (esbuild) to drop in-browser Babel (~3 MB, ~2.5 s transform); boot watchdog can fire on slow phones
-- [ ] iOS input zoom (<16px inputs); `viewport-fit=cover` missing
-- [~] Labels not linked to inputs; unnamed toggles; small touch targets (toast `aria-live` done)
+- [x] iOS input zoom (<16px inputs). `viewport-fit=cover` deliberately not added: without it iOS already keeps content out of the unsafe areas
+- [~] Labels linked, toggles named, toast `aria-live` done; small touch targets and initial focus on Date still open
 - [ ] Charts re-render on every keystroke in the transaction modal
-- [ ] Form validation: future dates, empty wallet, Transfer to same/empty wallet
-- [ ] manifest `start_url` absolute; `prefers-color-scheme` ignored; theme flash
+- [x] Form validation: future dates, empty wallet, Transfer to same/empty wallet
+- [x] manifest `start_url` absolute; `prefers-color-scheme` ignored; theme flash
 
 ## Feature ideas
 - [ ] Undo delete toast
@@ -79,3 +79,10 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
   2015-07-20), restore validation, and the small security items. New tests: `txEffectOnWallet`
   (unit); view settings stay local and malformed settings (browser). Both browser checks fail on
   the pre-fix code.
+- **2026-10-19**: `dde93fd` pushed (second batch). Third batch: the Google sign-in script now loads
+  only when sync is on or a Sign in button is hovered, focused or touched; frame-buster;
+  theme applied before first paint, following the OS when there's no saved choice; 16px inputs on
+  mobile (stops iOS zoom); relative manifest URLs; form rules (no future dates, wallet required,
+  transfer needs two different wallets); all 20 form labels linked to their controls; toggles named;
+  vault snapshot copy replaced on passphrase change and delete. New browser checks: label wiring,
+  future-date and same-wallet refusal.

@@ -454,6 +454,47 @@ await wait(800);
 check('dashboard renders with malformed settings', await evaluate(`return !!document.querySelector('.stats-grid');`));
 check('no error screen', !/Something went wrong|could not start/i.test(await evaluate(`return document.body.innerText;`)));
 
+// ── transaction form: labelled fields, date and wallet rules ────────────────
+console.log('\n[transaction form]');
+await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS });
+await reload();
+await clickByText('Dashboard');
+await wait(600);
+const openAdd = () => evaluate(`
+  const b=[...document.querySelectorAll('button')].find(x=>/Add transaction/i.test(x.getAttribute('aria-label')||''));
+  if(b) b.click(); return 1;`);
+await openAdd();
+await wait(600);
+check('every form label is linked to its control', await evaluate(`
+  const ls=[...document.querySelectorAll('[role="dialog"] label.form-label')];
+  return ls.length > 3 && ls.every(l => !!l.control);`));
+const setField = (id, value) => evaluate(`
+  const el=document.getElementById('${id}');
+  const proto = el.tagName==='SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype;
+  Object.getOwnPropertyDescriptor(proto,'value').set.call(el, ${JSON.stringify(value)});
+  el.dispatchEvent(new Event(el.tagName==='SELECT'?'change':'input',{bubbles:true})); return 1;`);
+const submit = () => evaluate(`
+  const b=[...document.querySelectorAll('[role="dialog"] button')].find(x=>/^\\s*(Add|Update) Transaction/i.test(x.textContent));
+  if(!b) return 'no button'; b.click(); return 'clicked';`);
+const toastText = () => evaluate(`return document.querySelector('.toast')?.textContent || '';`);
+await setField('tx-date', '2999-01-01');
+await setField('tx-wallet', 'Kraken');
+await setField('tx-amount', '0.1');
+await setField('tx-price', '50000');
+await wait(200);
+check('submit button found', (await submit()) === 'clicked');
+await wait(300);
+check('a future date is refused', /future/i.test(await toastText()), await toastText());
+await setField('tx-date', '2024-05-01');
+await setField('tx-type', 'Transfer');
+await wait(200);
+await setField('tx-wallet2', 'Kraken');
+await wait(200);
+await submit();
+await wait(300);
+check('a transfer to the same wallet is refused', /two different wallets/i.test(await toastText()), await toastText());
+check('nothing was saved', await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).length === 1;`));
+
 // Offline price failures are expected in CI — they are warnings now, not errors
 const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e));
 if (unexpected.length) {

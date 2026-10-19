@@ -14,8 +14,23 @@
   <script crossorigin="anonymous" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
   <script crossorigin="anonymous" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
   <script crossorigin="anonymous" integrity="sha384-ezQ6HS3FLspd9te19o2McUV6FAK091+GG7KO54f/R8DKgCDi7fULhapNrd5LY+vG" src="https://unpkg.com/@babel/standalone@7.29.7/babel.min.js"></script>
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <script>
+    // Refuse to run framed. A meta CSP can't set frame-ancestors, so without this a hostile
+    // page could frame the app and trick clicks through Force Push or Delete Vault. (An HTTP
+    // `Content-Security-Policy: frame-ancestors 'none'` header is the stronger fix where the
+    // host allows custom headers.)
+    if (window.top !== window.self) {
+      document.documentElement.style.display = 'none';
+      try { window.top.location = window.self.location.href; } catch (e) {}
+    }
+    // Apply the theme before first paint (React only sets it after mounting, so the page used
+    // to flash dark for light-theme users). With no saved choice, follow the OS.
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem('btc-theme'); } catch (e) {}
+      if (t !== 'light' && t !== 'dark') t = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    })();
     // Verbose sync logging leaks Drive file ids and portfolio sizes into the console of a
     // shared or screen-shared browser. Opt in with localStorage['btc-debug'] = '1'.
     var DEBUG = (function() { try { return localStorage.getItem('btc-debug') === '1'; } catch (e) { return false; } })();
@@ -40,9 +55,24 @@
       modifiedTime: null, // Drive's server-side revision marker for the synced file
       _initPromise: null,
       
+      // Google's sign-in script can't carry SRI and runs with full page privileges, so it is
+      // only fetched for people who use sync: on launch when sync is on, or when a Sign in
+      // button is hovered, focused or touched (so it is usually ready by the click).
+      loadScript() {
+        if(window.google?.accounts?.oauth2 || document.getElementById('gsi-client')) return;
+        const s = document.createElement('script');
+        s.id = 'gsi-client';
+        s.src = 'https://accounts.google.com/gsi/client';
+        s.async = true;
+        s.onerror = () => { s.remove(); }; // let a later attempt retry
+        document.head.appendChild(s);
+      },
+
       init() {
         if(this._initPromise) return this._initPromise;
+        this.loadScript();
         this._initPromise = new Promise((resolve) => {
+          let expired = false;
           const check = () => {
             if(window.google?.accounts?.oauth2) {
               this.tokenClient = google.accounts.oauth2.initTokenClient({
@@ -61,11 +91,17 @@
               } catch {}
               resolve(true);
             } else {
-              setTimeout(check, 100);
+              if(!expired) setTimeout(check, 100);
             }
           };
           check();
-          setTimeout(() => resolve(false), 5000);
+          setTimeout(() => {
+            // Not loaded in time (offline, blocked). Forget this attempt so the next Sign in
+            // click tries again instead of failing forever on a cached `false`.
+            expired = true;
+            if(!this.tokenClient) this._initPromise = null;
+            resolve(!!this.tokenClient);
+          }, 10000);
         });
         return this._initPromise;
       },
@@ -646,6 +682,11 @@
     .form-input:focus, .form-select:focus { outline:none; border-color:var(--bitcoin-orange); box-shadow:0 0 0 3px rgba(247,147,26,.1); }
     .price-wrap { position:relative; }
     .price-wrap .form-input { padding-right:2.5rem; }
+    /* iOS Safari zooms the whole page into any focused field under 16px and leaves it zoomed.
+       !important because several date filters set a smaller size inline. */
+    @media (max-width:768px) {
+      input:not([type=checkbox]):not([type=radio]), select, textarea { font-size:16px !important; }
+    }
     .price-refresh { position:absolute; right:.5rem; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--bitcoin-orange); font-size:1rem; padding:0; display:flex; }
     .price-refresh:hover { opacity:.7; }
 
@@ -3098,7 +3139,8 @@ function App() {
   const [vaultNewPassphrase, setVaultNewPassphrase] = useState('');
   const [vaultNewPassphraseConfirm, setVaultNewPassphraseConfirm] = useState('');
   const vaultPassphraseRef = useRef('');
-  const [theme, setTheme] = useState(() => localStorage.getItem('btc-theme')||'dark');
+  // The head script already resolved this (saved choice, else the OS preference) before first paint
+  const [theme, setTheme] = useState(() => document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark');
   const [settings, setSettings] = useState(() => {
     try {
       const s = localStorage.getItem('btc-settings');
@@ -3928,6 +3970,7 @@ function App() {
     });
   }, [applyRemotePayload, pushLocalToDrive, describeSyncDifference]);
 
+  const preloadGsi = () => GDriveSync.loadScript();
   const handleSignIn = useCallback(async () => {
     try {
       const ready = await GDriveSync.init();
@@ -4011,7 +4054,9 @@ function App() {
       // drive_unreachable: Drive answered with an error, so nothing was compared or written.
       showToast(e && e.code === 'drive_unreachable'
         ? `Couldn't reach Google Drive (${e.status}). Nothing was changed — try again shortly.`
-        : 'Sign-in failed');
+        : e && e.type === 'popup_failed_to_open'
+          ? 'The Google sign-in window was blocked. Click Sign in again.'
+          : 'Sign-in failed');
     }
   }, [transactions, wallets, vault, applyRemotePayload, pushLocalToDrive, resolveSyncConflict]);
 
@@ -4165,6 +4210,20 @@ function App() {
     }
   };
 
+  // The recovery snapshot keeps its own copy of the vault. Left alone, a passphrase change
+  // (often made BECAUSE the old one leaked) still left ciphertext under the old passphrase on
+  // this device, and Restore Snapshot brought a deleted vault back.
+  const replaceSnapshotVault = (nextVault) => {
+    try {
+      const raw = localStorage.getItem('btc-presync-backup');
+      if(!raw) return;
+      const snap = JSON.parse(raw);
+      if(!snap || typeof snap !== 'object' || !Object.prototype.hasOwnProperty.call(snap, 'vault')) return;
+      snap.vault = nextVault;
+      safeSetItem('btc-presync-backup', JSON.stringify(snap));
+      setSnapshotNonce(n => n+1);
+    } catch {}
+  };
   const handleChangeVaultPassphrase = async () => {
     setVaultError('');
     if(!vaultUnlocked || !vaultPassphraseRef.current) { setVaultError('Unlock the vault before changing the passphrase.'); return; }
@@ -4177,8 +4236,9 @@ function App() {
       vaultPassphraseRef.current = vaultNewPassphrase;
       setVaultNewPassphrase('');
       setVaultNewPassphraseConfirm('');
-      save(transactions, wallets, { vault: encryptedVault });
-      showToast('Vault passphrase updated');
+      save(transactionsRef.current, walletsRef.current, { vault: encryptedVault });
+      replaceSnapshotVault(encryptedVault);
+      showToast("Vault passphrase updated. Older backup files and Drive's revision history still open with the old passphrase.", 9000);
     } catch(e) {
       console.error('Vault passphrase update failed:', e);
       setVaultError('Could not change the vault passphrase.');
@@ -4190,14 +4250,15 @@ function App() {
   const handleDeleteVault = () => {
     setConfirmDialog({
       title: 'Delete Vault',
-      message: 'Delete the encrypted vault permanently? This removes your inheritance instructions from local storage and Google Drive sync.',
+      message: "Delete the encrypted vault permanently? It is removed from this device, the recovery snapshot and the current Google Drive copy. Backup files you exported earlier, and Google Drive's revision history (kept about 30 days), still contain the encrypted vault.",
       confirmLabel: 'Delete Vault',
       danger: true,
       onConfirm: () => {
         setVault(null);
         localStorage.removeItem(VAULT_STORAGE_KEY);
         lockVault();
-        save(transactions, wallets, { vault: null });
+        save(transactionsRef.current, walletsRef.current, { vault: null });
+        replaceSnapshotVault(null);
         setConfirmDialog(null);
         showToast('Vault deleted');
       },
@@ -4362,6 +4423,8 @@ function App() {
   const handleSubmit = () => {
     const date = normalizeDate(form.date);
     if(!date) { showToast('A valid date is required'); return; }
+    // Almost always a mistyped year, and it would sort above everything and skew every chart
+    if(date > todayLocal()) { showToast('The date is in the future — check the year'); return; }
     // Parse once into finite numbers. The old truthiness checks let "0" and "-1" through
     // (both are truthy strings), so a zero amount produced price "Infinity" in storage and
     // poisoned cost basis from then on.
@@ -4394,6 +4457,16 @@ function App() {
       wallet: String(form.wallet||'').trim(),
       wallet2: String(form.wallet2||'').trim(),
     };
+    // Wallet rules. Holdings skip a row with no wallet, so it silently counted toward stats but
+    // no balance; a Transfer to itself only burns the fee. Enforced for new rows; an edit to an
+    // imported, still-incomplete transfer is left to the Fix Transfers wizard.
+    if(editId === null) {
+      if(!finalForm.wallet) { showToast('Choose a wallet'); return; }
+      if(finalForm.type==='Transfer' && !finalForm.wallet2) { showToast('Choose the wallet this transfer goes to'); return; }
+    }
+    if(finalForm.type==='Transfer' && finalForm.wallet && finalForm.wallet === finalForm.wallet2) {
+      showToast('A transfer needs two different wallets — use Consolidation for a fee-only move within one wallet'); return;
+    }
     // Derive price only when the division is actually safe
     if((finalForm.type==='Buy'||finalForm.type==='Sell') && usdN !== null && priceN === null && Number.isFinite(amt) && amt > 0) {
       finalForm.price = (usdN/amt).toFixed(2);
@@ -4855,7 +4928,7 @@ function App() {
           <div className="header-controls">
             {/* Sync status */}
             {syncState==='disconnected' ? (
-              <button className="sync-pill" onClick={handleSignIn} title="Sign in with Google to sync across devices" aria-label="Sign in with Google to sync across devices">
+              <button className="sync-pill" onClick={handleSignIn} onPointerEnter={preloadGsi} onFocus={preloadGsi} onTouchStart={preloadGsi} title="Sign in with Google to sync across devices" aria-label="Sign in with Google to sync across devices">
                 {Icon.Cloud({width:12,height:12})}
                 <span className="desktop-only">Sign in</span>
               </button>
@@ -5438,18 +5511,18 @@ function App() {
                     </div>
                     <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(240px,1fr))',gap:'1rem',marginBottom:'1.25rem'}}>
                       <div className="form-group">
-                        <label className="form-label">Vault Passphrase</label>
-                        <input type="password" autoComplete="off" className="form-input" value={vaultSetupPassphrase} onChange={e=>setVaultSetupPassphrase(e.target.value)} placeholder="Use a separate, memorable passphrase"/>
+                        <label className="form-label" htmlFor="vault-setup-pass">Vault Passphrase</label>
+                        <input id="vault-setup-pass" type="password" autoComplete="off" className="form-input" value={vaultSetupPassphrase} onChange={e=>setVaultSetupPassphrase(e.target.value)} placeholder="Use a separate, memorable passphrase"/>
                       </div>
                       <div className="form-group">
-                        <label className="form-label">Confirm Passphrase</label>
-                        <input type="password" autoComplete="off" className="form-input" value={vaultSetupConfirm} onChange={e=>setVaultSetupConfirm(e.target.value)} placeholder="Re-enter the passphrase"/>
+                        <label className="form-label" htmlFor="vault-setup-confirm">Confirm Passphrase</label>
+                        <input id="vault-setup-confirm" type="password" autoComplete="off" className="form-input" value={vaultSetupConfirm} onChange={e=>setVaultSetupConfirm(e.target.value)} placeholder="Re-enter the passphrase"/>
                       </div>
                     </div>
                     {vaultSectionDefs.map(section => (
                       <div key={section.key} className="form-group" style={{marginBottom:'1rem'}}>
-                        <label className="form-label">{section.title}</label>
-                        <textarea
+                        <label className="form-label" htmlFor={`vault-setup-${section.key}`}>{section.title}</label>
+                        <textarea id={`vault-setup-${section.key}`}
                           className="form-input"
                           rows={section.key==='recoverySteps' ? 6 : 4}
                           placeholder={section.placeholder}
@@ -5474,8 +5547,8 @@ function App() {
                     </div>
                     <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'.75rem',alignItems:'end',marginBottom:'1rem'}}>
                       <div className="form-group" style={{marginBottom:0}}>
-                        <label className="form-label">Vault Passphrase</label>
-                        <input type="password" autoComplete="off" className="form-input" value={vaultPassphraseInput} onChange={e=>setVaultPassphraseInput(e.target.value)} placeholder="Enter vault passphrase"/>
+                        <label className="form-label" htmlFor="vault-unlock-pass">Vault Passphrase</label>
+                        <input id="vault-unlock-pass" type="password" autoComplete="off" className="form-input" value={vaultPassphraseInput} onChange={e=>setVaultPassphraseInput(e.target.value)} placeholder="Enter vault passphrase"/>
                       </div>
                       <button className="btn btn-primary" onClick={()=>handleUnlockVault(false)} disabled={vaultBusy}>
                         {vaultBusy ? 'Unlocking…' : 'Unlock Vault'}
@@ -5504,8 +5577,8 @@ function App() {
                     </div>
                     {vaultSectionDefs.map(section => (
                       <div key={section.key} className="form-group" style={{marginBottom:'1rem'}}>
-                        <label className="form-label">{section.title}</label>
-                        <textarea
+                        <label className="form-label" htmlFor={`vault-edit-${section.key}`}>{section.title}</label>
+                        <textarea id={`vault-edit-${section.key}`}
                           className="form-input"
                           rows={section.key==='recoverySteps' ? 6 : 4}
                           placeholder={section.placeholder}
@@ -5519,12 +5592,12 @@ function App() {
                       <div className="card-header"><div className="card-title">Change Vault Passphrase</div></div>
                       <div className="card-body" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:'1rem'}}>
                         <div className="form-group" style={{marginBottom:0}}>
-                          <label className="form-label">New Passphrase</label>
-                          <input type="password" autoComplete="off" className="form-input" value={vaultNewPassphrase} onChange={e=>setVaultNewPassphrase(e.target.value)} placeholder="New passphrase"/>
+                          <label className="form-label" htmlFor="vault-new-pass">New Passphrase</label>
+                          <input id="vault-new-pass" type="password" autoComplete="off" className="form-input" value={vaultNewPassphrase} onChange={e=>setVaultNewPassphrase(e.target.value)} placeholder="New passphrase"/>
                         </div>
                         <div className="form-group" style={{marginBottom:0}}>
-                          <label className="form-label">Confirm New Passphrase</label>
-                          <input type="password" autoComplete="off" className="form-input" value={vaultNewPassphraseConfirm} onChange={e=>setVaultNewPassphraseConfirm(e.target.value)} placeholder="Re-enter new passphrase"/>
+                          <label className="form-label" htmlFor="vault-new-confirm">Confirm New Passphrase</label>
+                          <input id="vault-new-confirm" type="password" autoComplete="off" className="form-input" value={vaultNewPassphraseConfirm} onChange={e=>setVaultNewPassphraseConfirm(e.target.value)} placeholder="Re-enter new passphrase"/>
                         </div>
                       </div>
                       <div className="modal-footer" style={{borderTop:'1px solid var(--border-color)'}}>
@@ -5747,7 +5820,7 @@ function App() {
                         <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Sign in to automatically back up and sync your data across devices. Vault contents are synced only as encrypted ciphertext.</div>
                       </div>
                     </div>
-                    <button className="btn btn-primary" onClick={handleSignIn} style={{display:'inline-flex',alignItems:'center',gap:'.5rem'}}>
+                    <button className="btn btn-primary" onClick={handleSignIn} onPointerEnter={preloadGsi} onFocus={preloadGsi} onTouchStart={preloadGsi} style={{display:'inline-flex',alignItems:'center',gap:'.5rem'}}>
                       {Icon.User({width:14,height:14})} Sign in with Google
                     </button>
                   </div>
@@ -5853,7 +5926,7 @@ function App() {
                     <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Show dot pattern on the main background</div>
                   </div>
                   <label className="theme-switch">
-                    <input type="checkbox" checked={effectiveSettings.bgDots!==false} onChange={e=>updateSettings({bgDots:e.target.checked})} />
+                    <input type="checkbox" aria-label="Background dots" checked={effectiveSettings.bgDots!==false} onChange={e=>updateSettings({bgDots:e.target.checked})} />
                     <span className="theme-slider"></span>
                   </label>
                 </div>
@@ -5863,7 +5936,7 @@ function App() {
                     <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>Show the encrypted vault page in navigation</div>
                   </div>
                   <label className="theme-switch">
-                    <input type="checkbox" checked={effectiveSettings.showVault!==false} onChange={e=>updateSettings({showVault:e.target.checked})} />
+                    <input type="checkbox" aria-label="Show Inheritance Vault in navigation" checked={effectiveSettings.showVault!==false} onChange={e=>updateSettings({showVault:e.target.checked})} />
                     <span className="theme-slider"></span>
                   </label>
                 </div>
@@ -5955,7 +6028,7 @@ function App() {
                             </button>
                           </div>
                           <label className="theme-switch" style={{flexShrink:0}}>
-                            <input type="checkbox" checked={!effectiveHiddenCharts[chart.key]} onChange={e=>{
+                            <input type="checkbox" aria-label={`Show ${chart.label} chart`} checked={!effectiveHiddenCharts[chart.key]} onChange={e=>{
                               const hc = {...(settings.hiddenCharts||{})};
                               hc[chart.key] = e.target.checked ? false : true;
                               updateSettings({hiddenCharts:hc});
@@ -5973,7 +6046,7 @@ function App() {
                                     <span style={{fontSize:'.8125rem',fontWeight:500}}>{ma.label}</span>
                                   </div>
                                   <label className="theme-switch" style={{flexShrink:0}}>
-                                    <input type="checkbox" checked={effectiveMaLines[ma.key]!==false} onChange={e=>{
+                                    <input type="checkbox" aria-label={`Show ${ma.label} line`} checked={effectiveMaLines[ma.key]!==false} onChange={e=>{
                                       const ml = {...(settings.maLines||{})};
                                       ml[ma.key] = e.target.checked ? true : false;
                                       updateSettings({maLines:ml});
@@ -6051,7 +6124,7 @@ function App() {
                       <InfoTip text={def.desc} />
                     </div>
                     <label className="theme-switch" style={{flexShrink:0}}>
-                      <input type="checkbox" checked={!(settings.hiddenStats||{})[def.key]} onChange={e=>{
+                      <input type="checkbox" aria-label={`Show ${def.label} card`} checked={!(settings.hiddenStats||{})[def.key]} onChange={e=>{
                         const hs = {...(settings.hiddenStats||{})};
                         hs[def.key] = e.target.checked ? false : true;
                         updateSettings({hiddenStats:hs});
@@ -6142,29 +6215,29 @@ function App() {
               <div className="modal-body">
                 <div className="form-grid">
                   <div className="form-group">
-                    <label className="form-label">Date</label>
-                    <input type="date" className="form-input" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} required/>
+                    <label className="form-label" htmlFor="tx-date">Date</label>
+                    <input id="tx-date" type="date" max={todayLocal()} className="form-input" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} required/>
                   </div>
                   <div className="form-group">
-                    <label className="form-label">Type</label>
-                    <select className="form-select" value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>
+                    <label className="form-label" htmlFor="tx-type">Type</label>
+                    <select id="tx-type" className="form-select" value={form.type} onChange={e=>setForm({...form,type:e.target.value})}>
                       <option>Buy</option><option>Sell</option><option>Transfer</option><option>Reward</option><option>Consolidation</option>
                     </select>
                   </div>
                   <div className="form-group">
-                    <label className="form-label">{form.type==='Transfer'?'From Wallet':'Wallet'}</label>
-                    <input list="wallet-list" className="form-input" placeholder="e.g. Gemini" value={form.wallet} onChange={e=>setForm({...form,wallet:e.target.value})}/>
+                    <label className="form-label" htmlFor="tx-wallet">{form.type==='Transfer'?'From Wallet':'Wallet'}</label>
+                    <input id="tx-wallet" list="wallet-list" className="form-input" placeholder="e.g. Gemini" value={form.wallet} onChange={e=>setForm({...form,wallet:e.target.value})}/>
                     <datalist id="wallet-list">{wallets.map(w=><option key={w.id} value={w.name}/>)}</datalist>
                   </div>
                   {form.type==='Transfer' && (
                     <div className="form-group">
-                      <label className="form-label">To Wallet</label>
-                      <input list="wallet-list" className="form-input" placeholder="e.g. Bitkey" value={form.wallet2} onChange={e=>setForm({...form,wallet2:e.target.value})}/>
+                      <label className="form-label" htmlFor="tx-wallet2">To Wallet</label>
+                      <input id="tx-wallet2" list="wallet-list" className="form-input" placeholder="e.g. Bitkey" value={form.wallet2} onChange={e=>setForm({...form,wallet2:e.target.value})}/>
                     </div>
                   )}
                   <div className="form-group">
-                    <label className="form-label">{form.type==='Consolidation'?`Amount Consolidated (${btcUnit()}, optional)`:`Amount (${btcUnit()})`}</label>
-                    <input type="number" min="0" inputMode="decimal" step={satsMode?'1':'0.00000001'} className="form-input" placeholder={satsMode?'0':'0.00000000'} value={btcToUnitInput(form.amount)} onChange={e=>{
+                    <label className="form-label" htmlFor="tx-amount">{form.type==='Consolidation'?`Amount Consolidated (${btcUnit()}, optional)`:`Amount (${btcUnit()})`}</label>
+                    <input id="tx-amount" type="number" min="0" inputMode="decimal" step={satsMode?'1':'0.00000001'} className="form-input" placeholder={satsMode?'0':'0.00000000'} value={btcToUnitInput(form.amount)} onChange={e=>{
                       const btc = unitInputToBtc(e.target.value);
                       const price = numOr(form.price, null);
                       const btcN = numOr(btc, null);
@@ -6174,9 +6247,9 @@ function App() {
                   </div>
                   {(form.type==='Buy'||form.type==='Sell') && (
                     <div className="form-group">
-                      <label className="form-label">Price per BTC</label>
+                      <label className="form-label" htmlFor="tx-price">Price per BTC</label>
                       <div className="price-wrap">
-                        <input type="number" min="0" inputMode="decimal" step="0.01" className="form-input" placeholder={btcPrice?btcPrice.toFixed(2):"0.00"} value={form.price} onChange={e=>{
+                        <input id="tx-price" type="number" min="0" inputMode="decimal" step="0.01" className="form-input" placeholder={btcPrice?btcPrice.toFixed(2):"0.00"} value={form.price} onChange={e=>{
                           const p = e.target.value;
                           const amt = numOr(form.amount, null);
                           const pN = numOr(p, null);
@@ -6196,8 +6269,8 @@ function App() {
                   )}
                   {(form.type==='Buy'||form.type==='Sell') && (
                     <div className="form-group">
-                      <label className="form-label">Total USD</label>
-                      <input type="number" min="0" inputMode="decimal" step="0.01" className="form-input" placeholder="0.00" value={form.totalUsd} onChange={e=>{
+                      <label className="form-label" htmlFor="tx-total-usd">Total USD</label>
+                      <input id="tx-total-usd" type="number" min="0" inputMode="decimal" step="0.01" className="form-input" placeholder="0.00" value={form.totalUsd} onChange={e=>{
                         const usd = e.target.value;
                         const amt = numOr(form.amount, null);
                         const usdN = numOr(usd, null);
@@ -6208,8 +6281,8 @@ function App() {
                     </div>
                   )}
                   <div className="form-group">
-                    <label className="form-label">Fee {form.type==='Transfer'||form.type==='Consolidation'?`(${btcUnit()})`:'(USD)'}</label>
-                    <input type="number" min="0" inputMode="decimal" step={form.type==='Transfer'||form.type==='Consolidation'?(satsMode?'1':'0.00000001'):'0.01'} className="form-input" placeholder="0" value={form.type==='Transfer'||form.type==='Consolidation'?btcToUnitInput(form.fee):form.fee} onChange={e=>{
+                    <label className="form-label" htmlFor="tx-fee">Fee {form.type==='Transfer'||form.type==='Consolidation'?`(${btcUnit()})`:'(USD)'}</label>
+                    <input id="tx-fee" type="number" min="0" inputMode="decimal" step={form.type==='Transfer'||form.type==='Consolidation'?(satsMode?'1':'0.00000001'):'0.01'} className="form-input" placeholder="0" value={form.type==='Transfer'||form.type==='Consolidation'?btcToUnitInput(form.fee):form.fee} onChange={e=>{
                       const isBtcFee = form.type==='Transfer'||form.type==='Consolidation';
                       setForm({...form, fee: isBtcFee ? unitInputToBtc(e.target.value) : e.target.value});
                     }}/>
@@ -6222,12 +6295,12 @@ function App() {
                     </div>
                   )}
                   <div className="form-group full">
-                    <label className="form-label">TxHash (optional)</label>
-                    <input className="form-input" placeholder="On-chain transaction hash" value={form.txhash} onChange={e=>setForm({...form,txhash:e.target.value})} style={{fontFamily:'JetBrains Mono',fontSize:'.75rem'}}/>
+                    <label className="form-label" htmlFor="tx-hash">TxHash (optional)</label>
+                    <input id="tx-hash" className="form-input" placeholder="On-chain transaction hash" value={form.txhash} onChange={e=>setForm({...form,txhash:e.target.value})} style={{fontFamily:'JetBrains Mono',fontSize:'.75rem'}}/>
                   </div>
                   <div className="form-group full">
-                    <label className="form-label">Notes</label>
-                    <input className="form-input" placeholder="Optional description" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/>
+                    <label className="form-label" htmlFor="tx-notes">Notes</label>
+                    <input id="tx-notes" className="form-input" placeholder="Optional description" value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})}/>
                   </div>
                   <div className="form-group full">
                     <label style={{display:'flex',alignItems:'center',gap:'.5rem',fontSize:'.8125rem',color:'var(--text-secondary)',cursor:'pointer'}}>
@@ -6251,18 +6324,18 @@ function App() {
             <div>
               <div className="modal-body">
                 <div className="form-group" style={{marginBottom:'1rem'}}>
-                  <label className="form-label">Name</label>
-                  <input className="form-input" placeholder="e.g. Bitkey Cold Storage" value={walletForm.name} onChange={e=>setWalletForm({...walletForm,name:e.target.value})} required/>
+                  <label className="form-label" htmlFor="wallet-name">Name</label>
+                  <input id="wallet-name" className="form-input" placeholder="e.g. Bitkey Cold Storage" value={walletForm.name} onChange={e=>setWalletForm({...walletForm,name:e.target.value})} required/>
                 </div>
                 <div className="form-group" style={{marginBottom:'1rem'}}>
-                  <label className="form-label">Type</label>
-                  <select className="form-select" value={walletForm.type} onChange={e=>setWalletForm({...walletForm,type:e.target.value})}>
+                  <label className="form-label" htmlFor="wallet-type">Type</label>
+                  <select id="wallet-type" className="form-select" value={walletForm.type} onChange={e=>setWalletForm({...walletForm,type:e.target.value})}>
                     <option>Exchange</option><option>Wallet</option><option>Cold Storage</option><option>Other</option>
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Bitcoin Address (optional)</label>
-                  <input className="form-input" placeholder="bc1q…" value={walletForm.address} onChange={e=>setWalletForm({...walletForm,address:e.target.value})} style={{fontFamily:'JetBrains Mono',fontSize:'.75rem'}}/>
+                  <label className="form-label" htmlFor="wallet-address">Bitcoin Address (optional)</label>
+                  <input id="wallet-address" className="form-input" placeholder="bc1q…" value={walletForm.address} onChange={e=>setWalletForm({...walletForm,address:e.target.value})} style={{fontFamily:'JetBrains Mono',fontSize:'.75rem'}}/>
                 </div>
               </div>
               <div className="modal-footer">
