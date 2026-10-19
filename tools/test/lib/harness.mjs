@@ -31,9 +31,15 @@ const MIME = {
   '.json':'application/json', '.png':'image/png', '.css':'text/css', '.svg':'image/svg+xml',
 };
 
-export function serveRepo(port) {
+// prettyUrls mimics Cloudflare Pages, which 308-redirects /page.html to /page and serves
+// /page from page.html. The service worker has to cope with that redirect.
+export function serveRepo(port, { prettyUrls = false } = {}) {
   const server = createServer(async (req, res) => {
     let p = decodeURIComponent(req.url.split('?')[0]);
+    if (prettyUrls && p.endsWith('.html') && p !== '/index.html') {
+      res.writeHead(308, { Location: p.slice(0, -'.html'.length) }).end(); return;
+    }
+    if (prettyUrls && p !== '/' && !extname(p)) p += '.html';
     if (p === '/') p = '/index.html';
     const file = normalize(join(REPO_ROOT, p));
     if (!file.startsWith(normalize(REPO_ROOT))) { res.writeHead(403).end(); return; }
@@ -47,10 +53,10 @@ export function serveRepo(port) {
 }
 
 // Boots Chrome on `page`, attaches to it, and returns helpers.
-export async function launch({ page = 'app.html', port = 8790, debugPort = 9290, label = 'test' } = {}) {
+export async function launch({ page = 'app.html', port = 8790, debugPort = 9290, label = 'test', prettyUrls = false } = {}) {
   const chromePath = await findChrome();
   if (!chromePath) throw new Error('No Chrome/Edge found. Set CHROME_PATH to run browser tests.');
-  const server = await serveRepo(port);
+  const server = await serveRepo(port, { prettyUrls });
   const profile = join(tmpdir(), `satledger-test-${label}`);
   const chrome = spawn(chromePath, [
     '--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check',
