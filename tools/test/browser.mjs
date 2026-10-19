@@ -531,6 +531,52 @@ await wait(2500);
 const csp = await evaluate(`return window.__csp;`);
 check('no CSP violations after boot', csp.length === 0, JSON.stringify(csp));
 
+// ── delete is undoable; duplicate pre-fills a new row; shortcuts ─────────────
+console.log('\n[undo, duplicate, shortcuts]');
+await seed({ 'btc-tx-v2': [tx({ id:'a', notes:'first' }), tx({ id:'b', date:'2024-02-01', notes:'second', txhash:'abc' })],
+             'btc-wallets': WALLETS });
+await reload();
+await clickByText('Transactions');
+await wait(800);
+const storedIds = () => evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).map(t=>t.id).join(',');`);
+await evaluate(`
+  const b=[...document.querySelectorAll('button')].find(x=>/^Delete Buy/.test(x.getAttribute('aria-label')||'') && /02\\/01\\/2024/.test(x.getAttribute('aria-label')));
+  if(!b) return 0; b.click(); return 1;`);
+await wait(400);
+check('delete happens immediately, no confirm', (await storedIds()) === 'a' && !(await evaluate(`return !!document.querySelector('[role="dialog"]');`)));
+check('toast offers Undo', await evaluate(`return [...document.querySelectorAll('.toast button')].some(b=>b.textContent.trim()==='Undo');`));
+await evaluate(`[...document.querySelectorAll('.toast button')].find(b=>b.textContent.trim()==='Undo').click(); return 1;`);
+await wait(400);
+check('Undo restores the row in its original position', (await storedIds()) === 'a,b', await storedIds());
+// Ctrl+Z path
+await evaluate(`
+  const b=[...document.querySelectorAll('button')].find(x=>/^Delete Buy/.test(x.getAttribute('aria-label')||'') && /01\\/01\\/2024/.test(x.getAttribute('aria-label')));
+  b.click(); document.activeElement && document.activeElement.blur(); return 1;`);
+await wait(300);
+await evaluate(`window.dispatchEvent(new KeyboardEvent('keydown',{key:'z',ctrlKey:true,bubbles:true})); return 1;`);
+await wait(400);
+check('Ctrl+Z undoes a delete', (await storedIds()) === 'a,b', await storedIds());
+// Duplicate
+await evaluate(`
+  const b=[...document.querySelectorAll('button')].find(x=>/^Duplicate Buy/.test(x.getAttribute('aria-label')||'') && /02\\/01\\/2024/.test(x.getAttribute('aria-label')));
+  if(b) b.click(); return 1;`);
+await wait(600);
+const dup = await evaluate(`return { date: document.getElementById('tx-date')?.value, wallet: document.getElementById('tx-wallet')?.value, hash: document.getElementById('tx-hash')?.value, notes: document.getElementById('tx-notes')?.value, title: document.querySelector('[role="dialog"] .modal-title')?.textContent };`);
+check('duplicate opens an Add form copied from the row, dated today, no txhash',
+  /Add/.test(dup.title) && dup.wallet === 'Kraken' && dup.notes === 'second' && dup.hash === '' && dup.date === await evaluate(`const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');`),
+  JSON.stringify(dup));
+check('the form opens with focus on Date', await evaluate(`return document.activeElement?.id === 'tx-date';`));
+await press('Escape', 'Escape');
+await wait(400);
+await evaluate(`const b=[...document.querySelectorAll('button')].find(x=>/^Discard$/i.test(x.textContent.trim())); if(b) b.click(); return 1;`);
+await wait(500);
+// "n" opens a new transaction (not while typing)
+await evaluate(`document.activeElement && document.activeElement.blur(); window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',bubbles:true})); return 1;`);
+await wait(500);
+check('"n" opens the Add Transaction form', await evaluate(`return /Add/.test(document.querySelector('[role="dialog"] .modal-title')?.textContent||'');`));
+await press('Escape', 'Escape');
+await wait(400);
+
 // ── a new deploy is announced ────────────────────────────────────────────────
 // Built page only: app.dev.html has no build id and skips the check.
 if (!process.env.SATLEDGER_PAGE || process.env.SATLEDGER_PAGE === 'app.html') {

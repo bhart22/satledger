@@ -33,28 +33,28 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 - [x] Unrealized P&L values excluded coins at $0 cost → decided: P&L only on coins with a cost basis; break-even uses the same pool
 - [x] Rewards carry $0 cost basis → decided: basis = market value on the day (entered price, else that day's close)
 - [x] Transfer with no destination → decided: outflow everywhere (pro-rata basis out, no realized P&L); balance rules consolidated into txWalletDeltas / txPortfolioDelta / applyTxToCostPool
-- [ ] Export "Date (UTC)" column is really local date
+- [x] Export "Date (UTC)" column is really local date: now exported at 12:00, the same UTC calendar day from UTC−11 to UTC+11
 
 ## Security
 - [x] Tighten CSP: built app.html pins script-src to inline-script hashes + exact CDN files (no unsafe-inline/unsafe-eval). Note: this blocks Cloudflare's injected "JavaScript detections" script (harmless unless a WAF rule uses js_detection)
 - [x] Clickjacking: frame-buster + `_headers` (Cloudflare Pages) with `frame-ancestors 'none'` and X-Frame-Options
-- [~] Vault: snapshot copy now replaced on change/delete and the UI says old backups and Drive revisions remain; change-passphrase still doesn't ask for the current one
+- [x] Vault: snapshot copy replaced on change/delete, UI says old backups and Drive revisions remain, and changing the passphrase requires the current one
 - [x] Load Google Identity script only when sync is used
 - [x] Wallet names as plain-object keys (`__proto__`); CSV Date column unguarded; vault inputs lack `autocomplete`
 
 ## Performance / mobile / a11y
 - [x] Build step (esbuild): app.dev.html → app.html (273 KB, no Babel); version.json drives the update prompt
 - [x] iOS input zoom (<16px inputs). `viewport-fit=cover` deliberately not added: without it iOS already keeps content out of the unsafe areas
-- [~] Labels linked, toggles named, toast `aria-live` done; small touch targets and initial focus on Date still open
+- [x] Labels linked, toggles named, toast `aria-live`, larger touch targets on touch screens, forms open focused on their first field
 - [x] Charts re-render on every keystroke in the transaction modal (DashboardCharts memoised, stable updateSettings)
 - [x] Form validation: future dates, empty wallet, Transfer to same/empty wallet
 - [x] manifest `start_url` absolute; `prefers-color-scheme` ignored; theme flash
 
 ## Feature ideas
-- [ ] Undo delete toast
-- [ ] Exchange CSV import presets
-- [ ] Duplicate transaction (DCA)
-- [ ] Keyboard shortcuts
+- [x] Undo delete toast (also Ctrl/Cmd+Z)
+- [ ] Exchange CSV import presets: needs sample exports from each exchange to build against
+- [x] Duplicate transaction (DCA)
+- [x] Keyboard shortcuts: n, /, g+letter, ?, Ctrl/Cmd+Z
 
 ## Tests to add
 - [x] Cost basis / P&L / holdings tests (shared balance-rule unit tests, oversell + excluded-P&L browser checks)
@@ -90,3 +90,6 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
   fix. Cloudflare Pages 308-redirects /app.html → /app, and SW v4 (from `dde93fd`) broke navigation to
   /app.html. v5 is live and tools/test/sw.mjs reproduces the redirect. Then the build step: app.html is
   now generated (edit app.dev.html), with `_headers` for Cloudflare and version.json for the update prompt.
+- **2026-10-19**: `6679c35` build step live (checked in headless Chrome against satledger.com), `cdd92ce`
+  Cloudflare Web Analytics allowed, with a privacy policy update. Then: CSV export dates at noon, current
+  passphrase required for vault change, touch targets, form autofocus, undo on delete, Duplicate, shortcuts.

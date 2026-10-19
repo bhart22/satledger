@@ -690,6 +690,18 @@
     @media (max-width:768px) {
       input:not([type=checkbox]):not([type=radio]), select, textarea { font-size:16px !important; }
     }
+    /* Touch targets. Several controls are 14–36px, under the ~44px a fingertip needs. Their
+       tap area grows invisibly so the layout doesn't move. Icon buttons and chips grow only
+       vertically: neighbours such as Archive and Delete sit 4px apart, and widening them would
+       overlap their hit areas. */
+    @media (pointer:coarse) {
+      .btn-icon, .wallet-chip, .info-tip-btn { position:relative; }
+      .btn-icon::after, .wallet-chip::after, .info-tip-btn::after, .price-refresh::after { content:''; position:absolute; }
+      .btn-icon::after { inset:-6px 0; }
+      .wallet-chip::after { inset:-8px 0; }
+      .info-tip-btn::after { inset:-15px; }
+      .price-refresh::after { inset:-12px; }
+    }
     .price-refresh { position:absolute; right:.5rem; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; color:var(--bitcoin-orange); font-size:1rem; padding:0; display:flex; }
     .price-refresh:hover { opacity:.7; }
 
@@ -1750,7 +1762,9 @@ function useModalA11y(onClose) {
       'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
     )).filter(el => el.offsetParent !== null || el === document.activeElement);
 
-    (focusables()[0] || node).focus();
+    // A field marked data-autofocus wins over the header's Close button, which is otherwise
+    // first in the DOM. Dialogs without one keep the old behaviour.
+    (node.querySelector('[data-autofocus]') || focusables()[0] || node).focus();
 
     const onKeyDown = (e) => {
       if(e.key === 'Escape') {
@@ -2651,6 +2665,7 @@ function InfoTip({ text, position }) {
         onBlur={()=>setShow(false)}
         onClick={(e)=>{ e.preventDefault(); setShow(s=>!s); }}
         onKeyDown={(e)=>{ if(e.key==='Escape' && show) { e.stopPropagation(); setShow(false); } }}
+        className="info-tip-btn"
         style={{background:'none',border:'none',padding:0,margin:0,lineHeight:0,color:'var(--text-tertiary)',cursor:'help',display:'inline-flex'}}
       >
         {Icon.Info({width:14,height:14})}
@@ -3189,6 +3204,7 @@ function App() {
   const [vaultPassphraseInput, setVaultPassphraseInput] = useState('');
   const [vaultSetupPassphrase, setVaultSetupPassphrase] = useState('');
   const [vaultSetupConfirm, setVaultSetupConfirm] = useState('');
+  const [vaultCurrentPassphrase, setVaultCurrentPassphrase] = useState('');
   const [vaultNewPassphrase, setVaultNewPassphrase] = useState('');
   const [vaultNewPassphraseConfirm, setVaultNewPassphraseConfirm] = useState('');
   const vaultPassphraseRef = useRef('');
@@ -3348,6 +3364,7 @@ function App() {
   const [priceRefreshTick, setPriceRefreshTick] = useState(0);
   const lastPriceHistoryFetchRef = useRef(Date.now());
   const [toast, setToast] = useState(null);
+  const [toastAction, setToastAction] = useState(null);
   // Set by the deploy check in the head script
   const [updateAvailable, setUpdateAvailable] = useState(() => !!window.__satUpdateAvailable);
   useEffect(() => {
@@ -3407,6 +3424,7 @@ function App() {
     setVaultUnlocked(false);
     setVaultEmergencyMode(false);
     setVaultPassphraseInput('');
+    setVaultCurrentPassphrase('');
     setVaultNewPassphrase('');
     setVaultNewPassphraseConfirm('');
     setVaultDraft(emptyVaultDraft());
@@ -4199,11 +4217,17 @@ function App() {
     }
   }, []);
 
-  function showToast(msg, dur=3000) {
+  // action: optional { label, run } rendered as a button in the toast (e.g. Undo)
+  function showToast(msg, dur=3000, action=null) {
     if(toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
-    toastTimer.current = setTimeout(() => { setToast(null); toastTimer.current = null; }, dur);
+    setToastAction(action);
+    toastTimer.current = setTimeout(() => { setToast(null); setToastAction(null); toastTimer.current = null; }, dur);
   }
+  const dismissToast = () => {
+    if(toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = null; setToast(null); setToastAction(null);
+  };
 
   const handleCreateVault = async () => {
     setVaultError('');
@@ -4284,6 +4308,9 @@ function App() {
   const handleChangeVaultPassphrase = async () => {
     setVaultError('');
     if(!vaultUnlocked || !vaultPassphraseRef.current) { setVaultError('Unlock the vault before changing the passphrase.'); return; }
+    // An unlocked vault on an unattended screen used to be enough to change the passphrase
+    // and lock the owner out. Knowing the current one is now required too.
+    if(vaultCurrentPassphrase !== vaultPassphraseRef.current) { setVaultError('The current passphrase is incorrect.'); return; }
     if(!vaultNewPassphrase || vaultNewPassphrase.length < VAULT_MIN_PASSPHRASE_LENGTH) { setVaultError(`Use a new passphrase with at least ${VAULT_MIN_PASSPHRASE_LENGTH} characters.`); return; }
     if(vaultNewPassphrase !== vaultNewPassphraseConfirm) { setVaultError('New vault passphrases do not match.'); return; }
     setVaultBusy(true);
@@ -4293,6 +4320,7 @@ function App() {
       vaultPassphraseRef.current = vaultNewPassphrase;
       setVaultNewPassphrase('');
       setVaultNewPassphraseConfirm('');
+      setVaultCurrentPassphrase('');
       save(transactionsRef.current, walletsRef.current, { vault: encryptedVault });
       replaceSnapshotVault(encryptedVault);
       showToast("Vault passphrase updated. Older backup files and Drive's revision history still open with the old passphrase.", 9000);
@@ -4595,26 +4623,94 @@ function App() {
     setEditId(tx.id ?? null);
     setShowModal(true);
   };
-  const handleDelete = tx => {
-    setConfirmDialog({
-      title: 'Delete Transaction',
-      message: `Delete the ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}? This cannot be undone — consider exporting a backup first.`,
-      confirmLabel: 'Delete',
-      danger: true,
-      onConfirm: () => {
-        // Live refs: the dialog may have sat open across a Drive pull. Checking this render's
-        // array could never catch that, and saving it would revert the pull.
-        const current = transactionsRef.current;
-        const filtered = current.filter(t => t.id !== tx.id);
-        if(filtered.length === current.length) {
-          showToast('That transaction no longer exists — it may have changed on another device.');
-          setConfirmDialog(null);
-          return;
-        }
-        setTransactions(filtered); save(filtered, walletsRef.current); showToast('Deleted'); setConfirmDialog(null);
-      },
-    });
+  // A new transaction pre-filled from an existing one: the next DCA buy is usually the same
+  // wallet and amount. Dated today; the txhash is cleared because it identifies one on-chain
+  // transaction and can't repeat.
+  const handleDuplicate = tx => {
+    const { id, txhash, ...rest } = tx;
+    const amtN = numOr(tx.amount, null), priceN = numOr(tx.price, null);
+    const totalUsd = tx.totalUsd || ((amtN !== null && priceN !== null) ? (amtN*priceN).toFixed(2) : '');
+    setForm({...emptyForm(), ...rest, totalUsd, txhash:'', date: todayLocal()});
+    setEditId(null);
+    setShowModal(true);
   };
+  // Delete at once and offer Undo, instead of a "cannot be undone" confirm on every row. The
+  // confirm made deleting several rows a chore and still couldn't save a mis-click on the
+  // confirm button itself. Undo puts the row back where it was, in the live list (a sync may
+  // have landed in between), and Ctrl/Cmd+Z works while the toast is up.
+  const UNDO_WINDOW_MS = 8000;
+  const undoRef = useRef(null);
+  const handleDelete = tx => {
+    const current = transactionsRef.current;
+    const index = current.findIndex(t => t.id === tx.id);
+    if(index === -1) {
+      showToast('That transaction no longer exists — it may have changed on another device.');
+      return;
+    }
+    const removed = current[index];
+    const filtered = current.filter(t => t.id !== tx.id);
+    setTransactions(filtered); save(filtered, walletsRef.current);
+    const undo = () => {
+      undoRef.current = null;
+      const live = transactionsRef.current;
+      if(live.some(t => t.id === removed.id)) return;
+      const restored = [...live];
+      restored.splice(Math.min(index, restored.length), 0, removed);
+      setTransactions(restored); save(restored, walletsRef.current);
+      showToast('Transaction restored');
+    };
+    undoRef.current = undo;
+    setTimeout(() => { if(undoRef.current === undo) undoRef.current = null; }, UNDO_WINDOW_MS);
+    showToast(`Deleted the ${removed.type} of ${fmtBTC(removed.amount)} ${btcUnit()} on ${fmtDate(removed.date)}`, UNDO_WINDOW_MS, { label: 'Undo', run: undo });
+  };
+
+  // ─── Keyboard shortcuts ───────────────────────────────────────────────────
+  //   n          new transaction          /   search transactions
+  //   g then d/t/w/v/e/s   go to a tab     ?   list these
+  //   Ctrl/Cmd+Z  undo the last delete (while its toast is up)
+  // Ignored while typing in a field or while any dialog is open, so they never fire into a
+  // form or behind a modal. A ref carries the latest render's values into the listener.
+  const shortcutRef = useRef({});
+  shortcutRef.current = {
+    openAdd: () => { setForm(emptyForm()); setEditId(null); setShowModal(true); },
+    vaultVisible: settings.showVault !== false,
+  };
+  useEffect(() => {
+    let gPressedAt = 0;
+    const TABS = { d:'dashboard', t:'transactions', w:'wallets', v:'vault', e:'export', s:'settings' };
+    const onKey = (e) => {
+      const t = e.target;
+      const typing = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+      const dialogOpen = !!document.querySelector('[role="dialog"]');
+      if((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+        if(typing || dialogOpen || !undoRef.current) return;
+        e.preventDefault();
+        const undo = undoRef.current; dismissToast(); undo();
+        return;
+      }
+      if(typing || dialogOpen || e.ctrlKey || e.metaKey || e.altKey) return;
+      if(gPressedAt && Date.now() - gPressedAt < 1500) {
+        gPressedAt = 0;
+        const key = TABS[e.key.toLowerCase()];
+        if(key && (key !== 'vault' || shortcutRef.current.vaultVisible)) { e.preventDefault(); setTab(key); }
+        return;
+      }
+      if(e.key === 'g') { gPressedAt = Date.now(); return; }
+      if(e.key === 'n') { e.preventDefault(); shortcutRef.current.openAdd(); return; }
+      if(e.key === '/') {
+        e.preventDefault();
+        setTab('transactions');
+        setTimeout(() => document.querySelector('input[aria-label="Search transactions"]')?.focus(), 50);
+        return;
+      }
+      if(e.key === '?') {
+        e.preventDefault();
+        showToast('Shortcuts: n new transaction · / search · g then d, t, w, e or s to switch tabs · Ctrl+Z undo a delete', 9000);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Wallet edits, matched by id (name for legacy rows without one) against the LIVE list.
   // The buttons used to splice by render-time index into render-time arrays, so a list that
@@ -4688,7 +4784,11 @@ function App() {
       // date: rows synced from Drive aren't date-checked on the way in.
       const day = normalizeDate(tx.date);
       if(!day) return;
-      const dateStr = day+' 00:00:00';
+      // CoinLedger reads this column as UTC, but the app stores only the local calendar day.
+      // Midnight put every row on the UTC boundary, so in any timezone east of UTC it meant the
+      // previous day — and a 1 January buy could land in the prior tax year. Noon is the same
+      // UTC calendar day for every offset from UTC−11 to UTC+11.
+      const dateStr = day+' 12:00:00';
 
       if(tx.type==='Buy') {
         const usd = numOr(tx.totalUsd, numOr(amt)*numOr(tx.price)).toFixed(2);
@@ -5243,6 +5343,7 @@ function App() {
                           </div>
                           <div style={{display:'flex',gap:'.25rem'}}>
                             <button className="btn-icon" style={{width:32,height:32}} onClick={()=>handleEdit(tx)} title="Edit" aria-label={`Edit ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Edit({width:13,height:13})}</button>
+                            <button className="btn-icon" style={{width:32,height:32}} onClick={()=>handleDuplicate(tx)} title="Duplicate" aria-label={`Duplicate ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Copy({width:13,height:13})}</button>
                             <button className="btn-icon btn-icon-danger" style={{width:32,height:32}} onClick={()=>handleDelete(tx)} title="Delete" aria-label={`Delete ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Trash({width:13,height:13})}</button>
                           </div>
                         </div>
@@ -5335,6 +5436,7 @@ function App() {
                             <td>
                               <div style={{display:'flex',gap:'.25rem'}}>
                                 <button className="btn-icon" onClick={()=>handleEdit(tx)} title="Edit" aria-label={`Edit ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Edit()}</button>
+                                <button className="btn-icon" onClick={()=>handleDuplicate(tx)} title="Duplicate" aria-label={`Duplicate ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Copy()}</button>
                                 <button className="btn-icon btn-icon-danger" onClick={()=>handleDelete(tx)} title="Delete" aria-label={`Delete ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Trash()}</button>
                               </div>
                             </td>
@@ -5632,6 +5734,10 @@ function App() {
                     <div className="card" style={{marginTop:'1.25rem',marginBottom:'1rem',borderStyle:'dashed'}}>
                       <div className="card-header"><div className="card-title">Change Vault Passphrase</div></div>
                       <div className="card-body" style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))',gap:'1rem'}}>
+                        <div className="form-group" style={{marginBottom:0}}>
+                          <label className="form-label" htmlFor="vault-current-pass">Current Passphrase</label>
+                          <input id="vault-current-pass" type="password" autoComplete="off" className="form-input" value={vaultCurrentPassphrase} onChange={e=>setVaultCurrentPassphrase(e.target.value)} placeholder="Current passphrase"/>
+                        </div>
                         <div className="form-group" style={{marginBottom:0}}>
                           <label className="form-label" htmlFor="vault-new-pass">New Passphrase</label>
                           <input id="vault-new-pass" type="password" autoComplete="off" className="form-input" value={vaultNewPassphrase} onChange={e=>setVaultNewPassphrase(e.target.value)} placeholder="New passphrase"/>
@@ -6257,7 +6363,7 @@ function App() {
                 <div className="form-grid">
                   <div className="form-group">
                     <label className="form-label" htmlFor="tx-date">Date</label>
-                    <input id="tx-date" type="date" max={todayLocal()} className="form-input" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} required/>
+                    <input id="tx-date" data-autofocus type="date" max={todayLocal()} className="form-input" value={form.date} onChange={e=>setForm({...form,date:e.target.value})} required/>
                   </div>
                   <div className="form-group">
                     <label className="form-label" htmlFor="tx-type">Type</label>
@@ -6366,7 +6472,7 @@ function App() {
               <div className="modal-body">
                 <div className="form-group" style={{marginBottom:'1rem'}}>
                   <label className="form-label" htmlFor="wallet-name">Name</label>
-                  <input id="wallet-name" className="form-input" placeholder="e.g. Bitkey Cold Storage" value={walletForm.name} onChange={e=>setWalletForm({...walletForm,name:e.target.value})} required/>
+                  <input id="wallet-name" data-autofocus className="form-input" placeholder="e.g. Bitkey Cold Storage" value={walletForm.name} onChange={e=>setWalletForm({...walletForm,name:e.target.value})} required/>
                 </div>
                 <div className="form-group" style={{marginBottom:'1rem'}}>
                   <label className="form-label" htmlFor="wallet-type">Type</label>
@@ -6658,7 +6764,14 @@ function App() {
       </nav>
 
       {/* Toast */}
-      {toast && <div className="toast" role="status" aria-live="polite">{toast}</div>}
+      {toast && (
+        <div className="toast" role="status" aria-live="polite" style={toastAction ? {display:'flex',alignItems:'center',gap:'.75rem'} : undefined}>
+          <span>{toast}</span>
+          {toastAction && (
+            <button type="button" className="btn btn-secondary btn-sm" onClick={()=>{ const a = toastAction; dismissToast(); a.run(); }}>{toastAction.label}</button>
+          )}
+        </div>
+      )}
       {updateAvailable && !toast && (
         <div className="toast" role="status" aria-live="polite" style={{display:'flex',alignItems:'center',gap:'.75rem'}}>
           <span>A new version of SatLedger is available.</span>
