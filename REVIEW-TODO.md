@@ -52,7 +52,7 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 
 ## Feature ideas
 - [x] Undo delete toast (also Ctrl/Cmd+Z)
-- [ ] Exchange CSV import presets: needs sample exports from each exchange to build against
+- [x] Exchange CSV import presets: not needed (CoinLedger is the only import/export path in use, and its round trip is fixed and tested)
 - [x] Duplicate transaction (DCA)
 - [x] Keyboard shortcuts: n, /, g+letter, ?, Ctrl/Cmd+Z
 
