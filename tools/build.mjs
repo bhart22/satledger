@@ -72,7 +72,10 @@ if (inline.length < 2) fail(`expected at least 2 inline scripts, found ${inline.
 const hashes = inline.map(s => `'sha256-${createHash('sha256').update(s, 'utf8').digest('base64')}'`);
 const cdn = [...html.matchAll(/<script[^>]*src="(https:\/\/unpkg\.com\/[^"]+)"/g)].map(m => m[1]);
 if (cdn.length !== 2) fail(`expected the 2 React CDN scripts, found ${cdn.length}`);
-const scriptSrc = ["'self'", ...hashes, ...cdn, 'https://accounts.google.com/gsi/client'].join(' ');
+// static.cloudflareinsights.com: the Cloudflare Web Analytics beacon, which Pages injects as
+// an external script carrying its own SRI. Cloudflare's per-request inline JS-detections
+// script can't be hashed and stays blocked.
+const scriptSrc = ["'self'", ...hashes, ...cdn, 'https://accounts.google.com/gsi/client', 'https://static.cloudflareinsights.com'].join(' ');
 const cspRe = /(<meta http-equiv="Content-Security-Policy" content="[^"]*?)script-src [^;]*;/;
 if (!cspRe.test(html)) fail('CSP script-src directive not found');
 html = html.replace(cspRe, `$1script-src ${scriptSrc};`);
