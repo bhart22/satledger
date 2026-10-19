@@ -343,6 +343,86 @@ check('every chart svg has a name', await evaluate(`
   const s=[...document.querySelectorAll('svg[role="img"]')];
   return s.length>0 && s.every(x=>(x.getAttribute('aria-label')||'').trim().length>0);`));
 
+// ── search tolerates numeric fields ──────────────────────────────────────────
+// A backup written by another tool stores amount as a number; `amount.includes` used to
+// throw inside the filter and drop the whole app to the error screen.
+console.log('\n[search with numeric fields]');
+await seed({ 'btc-tx-v2': [tx({ amount: 0.25, price: 40000, totalUsd: 10000 }), tx({ date:'2024-02-01', notes:'coffee' })],
+             'btc-wallets': WALLETS });
+await reload();
+await clickByText('Transactions');
+await wait(800);
+await evaluate(`
+  const el=document.querySelector('input[aria-label="Search transactions"]');
+  const set=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set;
+  set.call(el,'0.25'); el.dispatchEvent(new Event('input',{bubbles:true})); return 1;`);
+await wait(500);
+check('app still rendered after searching', await evaluate(
+  `return !!document.querySelector('input[aria-label="Search transactions"]') && !/Something went wrong/i.test(document.body.innerText);`));
+check('numeric amount is matched by search', /0\.25/.test(await evaluate(`return document.body.innerText;`)));
+
+// ── another tab's write is picked up, not overwritten ────────────────────────
+console.log('\n[cross-tab writes]');
+await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS, 'btc-last-modified': '2024-01-01T00:00:00.000Z' });
+await reload();
+await evaluate(`
+  const next=[...JSON.parse(localStorage.getItem('btc-tx-v2')), {id:'other-tab', date:'2024-06-01', type:'Buy', wallet:'Kraken', wallet2:'', amount:'0.3', price:'60000', fee:'', totalUsd:'18000', notes:'from tab 2', txhash:''}];
+  localStorage.setItem('btc-tx-v2', JSON.stringify(next));
+  localStorage.setItem('btc-last-modified', '2024-06-01T00:00:00.000Z');
+  window.dispatchEvent(new StorageEvent('storage', { key:'btc-last-modified', storageArea: localStorage }));
+  return 1;`);
+await wait(500);
+await clickByText('Transactions');
+await wait(800);
+check('the other tab\'s transaction appears here', /from tab 2|0\.3/.test(await evaluate(`return document.body.innerText;`)));
+
+// ── cost basis never goes negative ───────────────────────────────────────────
+// Included buy 1 BTC @ $50k, excluded buy 1 BTC, included sell 1.5 → used to show -$25,000.
+console.log('\n[oversell vs cost-basis pool]');
+await seed({ 'btc-tx-v2': [
+    tx({ amount:'1', price:'50000', totalUsd:'50000' }),
+    tx({ date:'2024-02-01', amount:'1', price:'40000', totalUsd:'40000', excludeStats:true }),
+    tx({ date:'2024-03-01', type:'Sell', amount:'1.5', price:'60000', totalUsd:'90000' }),
+  ], 'btc-wallets': WALLETS });
+await reload();
+await clickByText('Dashboard');
+await wait(1000);
+const basisText = await evaluate(`const c=[...document.querySelectorAll('.stat-card')].find(e=>/^\\s*Cost Basis/i.test(e.querySelector('.stat-label')?.textContent||'')); return c ? c.querySelector('.stat-value').textContent : 'not found';`);
+check('cost basis stat is shown', basisText !== 'not found', basisText);
+check('cost basis is not negative (was -$25,000.00)', !/-/.test(basisText), basisText);
+
+// ── an edit made while a push is in flight still reaches Drive ───────────────
+// The older push finishing used to clear pendingPushRef and btc-pending-push, so the newer
+// edit's debounce fired on nothing — never sent, and no longer even marked dirty.
+console.log('\n[edit during an in-flight push]');
+await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS });
+await reload();
+await evaluate(`
+  GDriveSync.accessToken = 'stub'; GDriveSync.tokenExpiry = Date.now() + 3600e3;
+  GDriveSync.ensureToken = async () => 'stub';
+  window.__pushes = [];
+  GDriveSync.push = (data) => new Promise(res => {
+    window.__pushes.push(data.lastModified);
+    setTimeout(() => { localStorage.setItem('btc-drive-seen-mtime', 'rev' + window.__pushes.length); res(true); }, 1000);
+  });
+  return 1;`);
+await clickByText('Wallets');
+await wait(900);
+const archiveNth = (n) => evaluate(`
+  const b=[...document.querySelectorAll('button[aria-label="Archive wallet"]')][${n}];
+  if(!b) return false; b.click(); return true;`);
+check('first edit made', await archiveNth(0));
+// Push #1 runs 1.5s→2.5s. Edit #2 at 1.8s arms its debounce for 3.3s — AFTER push #1 has
+// finished, which is exactly when the old code had already wiped the queue.
+await wait(1800);
+check('second edit made while push #1 is in flight', await archiveNth(0));
+await wait(6500);
+const pushes = await evaluate(`return window.__pushes;`);
+check('both edits were pushed', pushes.length === 2, JSON.stringify(pushes));
+check('the last push carries the latest commit stamp',
+  pushes[pushes.length - 1] === await evaluate(`return localStorage.getItem('btc-last-modified');`));
+check('nothing left marked dirty', !(await evaluate(`return localStorage.getItem('btc-pending-push');`)));
+
 // Offline price failures are expected in CI — they are warnings now, not errors
 const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e));
 if (unexpected.length) {

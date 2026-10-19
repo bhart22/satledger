@@ -25,6 +25,12 @@
     const GDRIVE_CLIENT_ID = '1022736433382-1iui89030rcghre1ml7je3of5tj5s5li.apps.googleusercontent.com';
     const GDRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.appdata';
     const GDRIVE_FILENAME = 'btc-tracker-data.json';
+    const driveUnreachable = (status) => {
+      const err = new Error('drive_unreachable');
+      err.code = 'drive_unreachable';
+      err.status = status;
+      return err;
+    };
 
     const GDriveSync = {
       tokenClient: null,
@@ -134,8 +140,12 @@
           try { this.fileId = localStorage.getItem('btc-gdrive-fileid') || null; } catch {}
         }
         const r = await this._fetch(
-          `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${GDRIVE_FILENAME}'&fields=files(id,name,modifiedTime)`
+          `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name%3D'${GDRIVE_FILENAME}'&orderBy=modifiedTime%20desc&fields=files(id,name,modifiedTime)`
         );
+        // A 403/429/5xx body has no `files`, which used to read as "no file on Drive" — the
+        // caller then created a duplicate file, or pushed local over data it never saw.
+        // "Couldn't ask" must stay distinct from "asked, and there is nothing".
+        if(!r.ok) { console.error('[GDrive] findFile failed:', r.status); throw driveUnreachable(r.status); }
         const data = await r.json();
         dlog('[GDrive] findFile response:', data);
         if(data.files && data.files.length > 0) {
@@ -160,7 +170,7 @@
         const r = await this._fetch(
           `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`
         );
-        if(!r.ok) { console.error('[GDrive] pull failed:', r.status); if(DEBUG) console.error(await r.text()); return null; }
+        if(!r.ok) { console.error('[GDrive] pull failed:', r.status); if(DEBUG) console.error(await r.text()); throw driveUnreachable(r.status); }
         const data = await r.json();
         dlog('[GDrive] pull: got data with', data?.transactions?.length, 'transactions');
         // Remember which server revision this content came from
@@ -212,6 +222,9 @@
           if(!r.ok) { console.error('[GDrive] push update failed:', r.status); if(DEBUG) console.error(await r.text()); throw new Error('push failed'); }
           const res = await r.json().catch(() => null);
           this.modifiedTime = res?.modifiedTime || null;
+          // Storing an empty revision would switch off conflict detection for the next push.
+          // Read it back instead; if even that fails, leave the previous marker in place.
+          if(!this.modifiedTime) { try { await this.findFile(); } catch {} }
         } else {
           dlog('[GDrive] push: creating new file');
           const boundary = 'btc_boundary_' + Date.now();
@@ -235,23 +248,32 @@
           dlog('[GDrive] push: created file', this.fileId);
         }
         // Record the revision we just produced so the next push can detect a foreign write
-        try { localStorage.setItem('btc-drive-seen-mtime', this.modifiedTime || ''); } catch {}
+        if(this.modifiedTime) { try { localStorage.setItem('btc-drive-seen-mtime', this.modifiedTime); } catch {} }
         return true;
       },
       
+      // Local cleanup runs whether or not a token is live: it used to sit inside
+      // `if(this.accessToken)`, so after a refused silent refresh Disconnect did nothing at all.
+      //
+      // btc-drive-seen-mtime and btc-pending-push are deliberately KEPT. They are this
+      // device's record of "which Drive revision my data is based on" and "I have changes
+      // Drive hasn't seen". Wiping them meant a reconnect could never notice that another
+      // device had written in the meantime, and fell back to comparing device clocks.
       async signOut() {
         if(this.accessToken) {
           try { google.accounts.oauth2.revoke(this.accessToken); } catch {}
-          this._clearToken();
-          this.fileId = null;
-          this.modifiedTime = null;
-          localStorage.removeItem('btc-gdrive-fileid');
-          localStorage.removeItem('btc-drive-seen-mtime');
-          localStorage.removeItem('btc-pending-push');
         }
+        this._clearToken();
+        this.fileId = null;
+        this.modifiedTime = null;
+        try { localStorage.removeItem('btc-gdrive-fileid'); } catch {}
       },
       
-      isSignedIn() { return this.isTokenValid(); }
+      isSignedIn() { return this.isTokenValid(); },
+
+      // Connected this session, even if the hour-long token has since lapsed. _clearToken()
+      // (sign-out, or a refused silent refresh) is what ends a session — not the clock.
+      hasSession() { return !!this.accessToken; }
     };
 
     // ─── Boot watchdog ──────────────────────────────────────────────────────
@@ -996,6 +1018,86 @@ const numOr = (value, fallback=0) => {
   const n = parseFloat(value);
   return Number.isFinite(n) ? n : fallback;
 };
+// CoinLedger CSV rows (already split into columns, header removed) → transactions.
+// Column order matches exportCSV: Date, Platform, Asset Sent, Amount Sent, Asset Received,
+// Amount Received, Fee Currency, Fee Amount, Type, Description, TxHash.
+//
+// The export writes one Transfer as TWO rows — a Withdrawal from the source and a Deposit to
+// the destination. Importing each row as its own outgoing Transfer meant a round trip took
+// the amount out of BOTH wallets. Rows are now paired back into one Transfer (same date,
+// amount and txhash, different platform); a lone Deposit becomes an inflow with no known
+// source, which the Fix Transfers wizard can complete.
+const CL_AUTO_NOTE = /^Transfer (to|from) /;
+const parseCoinLedgerRows = (rows) => {
+  const recs = [];
+  let bad = 0;
+  const ratio = (num, den) => {
+    const n = numOr(num, null), d = numOr(den, null);
+    return (n !== null && d !== null && d > 0) ? (n/d).toFixed(2) : '';
+  };
+  for(const cols of rows) {
+    if(cols.length < 9) { bad++; continue; }
+    const [dateStr,platformRaw,assetSent,amtSent,assetRecv,amtRecv,feeCurRaw,feeAmt,clType,desc,txhash] = cols;
+    const d = normalizeDate(String(dateStr||'').split(' ')[0]);
+    if(!d) { bad++; continue; }
+    const platform = (platformRaw||'').trim();
+    const feeCur = String(feeCurRaw||'').trim().toUpperCase();
+    const base = { date:d, wallet:platform, wallet2:'', price:'', fee:'', totalUsd:'', notes:desc||'', txhash:txhash||'' };
+    if(clType==='Trade' && (assetRecv==='BTC' || assetSent==='BTC')) {
+      const isBuy = assetRecv==='BTC';
+      const amount = isBuy ? amtRecv : amtSent, usd = isBuy ? amtSent : amtRecv;
+      const price = ratio(usd, amount);
+      // The tracker stores trade fees in USD. A BTC-denominated fee is converted at the
+      // trade's own price rather than being read as dollars.
+      let fee = feeAmt || '';
+      if(fee && feeCur === 'BTC') fee = price ? (numOr(fee)*numOr(price)).toFixed(2) : '';
+      recs.push({ kind:'tx', tx:{ ...base, type: isBuy ? 'Buy' : 'Sell', amount, price, fee, totalUsd: usd||'' } });
+    } else if(clType==='Withdrawal' || clType==='Transfer') {
+      // Transfer fees are BTC; a fiat fee here has no price to convert at, so it is dropped.
+      const fee = (feeCur === '' || feeCur === 'BTC') ? (feeAmt||'') : '';
+      recs.push({ kind:'out', tx:{ ...base, type:'Transfer', amount: amtSent||amtRecv, fee } });
+    } else if(clType==='Deposit') {
+      recs.push({ kind:'in', tx:{ ...base, type:'Transfer', wallet:'', wallet2:platform, amount: amtRecv||amtSent } });
+    } else {
+      const type = canonicalTxType(clType);
+      recs.push({ kind:'tx', tx:{ ...base, type, amount: amtRecv||amtSent } });
+    }
+  }
+  // Pair each Withdrawal with the first unused matching Deposit.
+  const sameAmt = (a, b) => Math.abs(numOr(a) - numOr(b)) < 5e-9;
+  const used = new Set();
+  const out = [];
+  recs.forEach((r, i) => {
+    if(used.has(i)) return;
+    if(r.kind === 'out') {
+      const j = recs.findIndex((s, k) => k !== i && !used.has(k) && s.kind === 'in'
+        && s.tx.date === r.tx.date && sameAmt(s.tx.amount, r.tx.amount)
+        && (s.tx.txhash||'') === (r.tx.txhash||'') && s.tx.wallet2 !== r.tx.wallet);
+      if(j !== -1) {
+        used.add(j);
+        out.push({ ...r.tx, wallet2: recs[j].tx.wallet2, notes: CL_AUTO_NOTE.test(r.tx.notes) ? '' : r.tx.notes });
+        return;
+      }
+      // exportCSV writes a Consolidation as a Withdrawal of just its fee
+      if(r.tx.notes === 'UTXO consolidation fee') {
+        out.push({ ...r.tx, type:'Consolidation', amount:'', fee: r.tx.amount, notes:'' });
+        return;
+      }
+      out.push({ ...r.tx, notes: CL_AUTO_NOTE.test(r.tx.notes) ? '' : r.tx.notes });
+      return;
+    }
+    if(r.kind === 'in') { out.push({ ...r.tx, notes: CL_AUTO_NOTE.test(r.tx.notes) ? '' : r.tx.notes }); return; }
+    out.push(r.tx);
+  });
+  // Validation shared with the plain-CSV path
+  const txs = [];
+  for(const tx of out) {
+    if(!tx.type || !VALID_TX_TYPES.includes(tx.type)) { bad++; continue; }
+    if(tx.type !== 'Consolidation' && !(numOr(tx.amount, 0) > 0)) { bad++; continue; }
+    txs.push({ id:newTxId(), ...tx });
+  }
+  return { txs, bad };
+};
 // Stable transaction ids. Time + sequence + random so a bulk import inside one
 // millisecond cannot collide.
 let _txIdSeq = 0;
@@ -1102,6 +1204,33 @@ const vaultSectionDefs = [
 const safeSetItem = (key, value) => {
   try { localStorage.setItem(key, value); return true; }
   catch(e) { console.error('localStorage write failed:', key, e); return false; }
+};
+// A fresh commit stamp that is never older than the one already stored. After pulling from a
+// device whose clock runs fast, a plain new Date() here would date this device's next edit
+// BEFORE the data it was made on — and the launch reconcile would then let the stale remote
+// copy win over the edit.
+const nextCommitStamp = () => {
+  const now = Date.now();
+  let prev = NaN;
+  try { prev = Date.parse(localStorage.getItem('btc-last-modified') || ''); } catch {}
+  return new Date(Number.isFinite(prev) && prev >= now ? prev + 1 : now).toISOString();
+};
+// Take a sell out of the average-cost pool. The pool only holds coins with a cost basis, so a
+// sell can exceed it — the rest came from excluded transactions. That excess used to be taken
+// out anyway: ratio > 1 drove cost basis negative, and the pool's BTC with it, after which
+// the next buy's average cost came out wildly high. Only the covered part carries basis and
+// realized P&L; the excess is excluded, consistent with the coins it came from.
+const sellFromCostPool = (poolBtc, poolCost, amt, proceeds) => {
+  const pool = Math.max(poolBtc, 0);
+  const take = Math.min(Math.max(amt, 0), pool);
+  const share = pool > 1e-8 ? take / pool : 0;
+  const costOfSold = poolCost * share;
+  const coveredProceeds = amt > 0 ? proceeds * (take / amt) : 0;
+  return {
+    poolBtc: pool - take,
+    poolCost: poolCost - costOfSold,
+    realized: take > 0 ? coveredProceeds - costOfSold : 0,
+  };
 };
 // Key-order-independent stringify, for comparing two settings objects that were built by
 // different code paths. Plain JSON.stringify would call {a:1,b:2} and {b:2,a:1} different.
@@ -1604,15 +1733,14 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           totalCost+=(numOr(tx.totalUsd, amt*price))+fee;
         } else if(tx.type==='Reward') { runningBTCForCost+=amt; }
         else if(tx.type==='Sell') {
-          const avgCostBasis = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : 0;
           // Net proceeds: USD exchange fee reduces what the sale actually returned
           const proceeds = (numOr(tx.totalUsd, amt*price)) - fee;
-          const costOfSold = amt * avgCostBasis;
-          realizedPL += proceeds - costOfSold;
-          const ratio = amt/Math.max(runningBTCForCost,0.00000001);
-          totalCost-=totalCost*ratio; runningBTCForCost-=amt;
-        } else if(tx.type==='Transfer') { runningBTCForCost-=fee; }
-        else if(tx.type==='Consolidation') { runningBTCForCost-=fee; }
+          const r = sellFromCostPool(runningBTCForCost, totalCost, amt, proceeds);
+          realizedPL += r.realized;
+          totalCost = r.poolCost; runningBTCForCost = r.poolBtc;
+        } else if(tx.type==='Transfer' || tx.type==='Consolidation') {
+          runningBTCForCost = Math.max(0, runningBTCForCost - fee);
+        }
       }
 
       // DCA tracking — Buy transactions only
@@ -2850,9 +2978,20 @@ const loadStoredArray = (key, fallback) => {
 };
 // Coerce, don't drop: a row with a non-string date would throw in .slice()/.localeCompare()
 // and blank the whole app, but discarding the row would be data loss.
+// Numeric fields arrive as numbers from hand-edited backups and other tools; the UI calls
+// string methods on them (search used to crash on `amount.includes`).
+const TX_STRING_FIELDS = ['amount','price','fee','totalUsd','wallet','wallet2','notes','txhash'];
 const sanitizeStoredTransactions = list => list.map(tx => {
   if(!tx || typeof tx !== 'object') return { date:'', type:'Buy', amount:'' };
-  return typeof tx.date === 'string' ? tx : {...tx, date: tx.date == null ? '' : String(tx.date)};
+  let out = tx;
+  if(typeof tx.date !== 'string') out = {...out, date: tx.date == null ? '' : String(tx.date)};
+  for(const k of TX_STRING_FIELDS) {
+    if(typeof out[k] === 'number' || typeof out[k] === 'boolean') {
+      if(out === tx) out = {...tx};
+      out[k] = String(out[k]);
+    }
+  }
+  return out;
 });
 
 function App() {
@@ -2939,7 +3078,7 @@ function App() {
     }
     if(GDriveSync.isSignedIn()) {
       const read = (key, fallback) => { try { return JSON.parse(localStorage.getItem(key) ?? fallback); } catch { return JSON.parse(fallback); } };
-      const mod = new Date().toISOString();
+      const mod = nextCommitStamp();
       safeSetItem('btc-last-modified', mod);
       queueDrivePush({
         transactions: read('btc-tx-v2','[]'),
@@ -3092,17 +3231,57 @@ function App() {
   const pendingPushRef = useRef(null);
   const retryTimerRef = useRef(null);
   const retryAttemptRef = useRef(0);
+  // Pushes are serialised. Two overlapping pushes used to race in two ways: the older one
+  // finishing cleared pendingPushRef and btc-pending-push even though a newer edit had been
+  // queued meanwhile (so that edit never left the device and wasn't even marked dirty), and the
+  // newer one's findFile could see the older one's fresh revision and cry drive_changed at a
+  // write that was our own.
+  const pushInFlightRef = useRef(0);
+  const pushAgainRef = useRef(false);
+  // Clears the queue only if nothing newer arrived while `payload` was in flight.
+  const settlePush = (payload) => {
+    retryAttemptRef.current = 0;
+    if(pendingPushRef.current !== payload) return false;
+    pendingPushRef.current = null;
+    localStorage.removeItem('btc-pending-push');
+    setSyncState('synced');
+    setLastSync(new Date());
+    return true;
+  };
   const performDrivePush = React.useCallback(async (payload, opts={}) => {
+    // An urgent (page-hide) push may overlap: the document is going away and waiting is not
+    // an option. Its skipped findFile means it can't trip the conflict check either.
+    if(pushInFlightRef.current > 0 && !opts.urgent) { pushAgainRef.current = true; return; }
+    pushInFlightRef.current++;
+    let followUp = false;
+    try {
+      // Only a clean success chains a follow-up. After a conflict or a refused token another
+      // attempt can only fail the same way, and transport failures own their retry ladder.
+      const ok = await performDrivePushOnce(payload, opts);
+      followUp = ok && (pushAgainRef.current || (pendingPushRef.current && pendingPushRef.current !== payload && !syncDebounce.current));
+    } finally {
+      pushInFlightRef.current--;
+      pushAgainRef.current = false;
+    }
+    if(followUp && !retryTimerRef.current && pendingPushRef.current) performDrivePush(pendingPushRef.current);
+  }, []);
+  const performDrivePushOnce = async (payload, opts) => {
     const expected = localStorage.getItem('btc-drive-seen-mtime') || '';
     if(retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     try {
       await GDriveSync.push(payload, expected || undefined, { urgent: !!opts.urgent });
-      pendingPushRef.current = null;
-      retryAttemptRef.current = 0;
-      localStorage.removeItem('btc-pending-push');
-      setSyncState('synced');
-      setLastSync(new Date());
+      settlePush(payload);
+      return true;
     } catch(e) {
+      if(e && e.message === 'token_expired') {
+        // The silent refresh was refused. Retrying can't help without the user; the dirty
+        // marker stays set, and the UI must stop claiming it is connected.
+        pushAgainRef.current = false;
+        retryAttemptRef.current = 0;
+        setSyncState('disconnected');
+        showToast('⚠ Google Drive sign-in expired. Your change is saved on this device — reconnect in Settings → Cloud Sync to sync it.', 9000);
+        return;
+      }
       if(e && e.code === 'drive_changed') {
         // A keepalive push can land without us ever seeing the response — the page was being
         // torn down. That leaves btc-drive-seen-mtime stale, so our OWN write looks foreign on
@@ -3112,18 +3291,15 @@ function App() {
           const remote = await GDriveSync.pull();
           if(remote && payload.lastModified && remote.lastModified === payload.lastModified) {
             dlog('[GDrive] drive_changed was our own completed keepalive push — adopting');
-            pendingPushRef.current = null;
-            retryAttemptRef.current = 0;
-            localStorage.removeItem('btc-pending-push');
             if(remote._driveModifiedTime) safeSetItem('btc-drive-seen-mtime', remote._driveModifiedTime);
-            setSyncState('synced');
-            setLastSync(new Date());
-            return;
+            settlePush(payload);
+            return true;
           }
         } catch(verifyErr) { console.warn('Could not verify drive_changed:', verifyErr); }
         // Another device really did write since we last saw this file. Refuse to clobber it and
         // leave btc-pending-push set, so the conflict is surfaced instead of resolved silently.
         console.warn('Drive changed since last sync — push aborted rather than overwriting');
+        pushAgainRef.current = false;
         retryAttemptRef.current = 0;
         setSyncState('error');
         showToast('⚠ Google Drive was changed on another device. Your edit is saved locally — open Settings → Cloud Sync to resolve.', 10000);
@@ -3144,18 +3320,22 @@ function App() {
         showToast('⚠ Could not reach Google Drive. Your change is saved on this device and will sync when you reconnect.', 8000);
       }
     }
-  }, []);
+  };
   const queueDrivePush = React.useCallback((payload) => {
     // The dirty marker is set even when signed out. It used to sit below the isSignedIn() bail,
     // so an edit made with no token left btc-last-modified advanced but nothing marked dirty —
     // and the conflict dialog, which keys off that marker, could never fire for it.
     pendingPushRef.current = payload;
     safeSetItem('btc-pending-push', payload.lastModified || new Date().toISOString());
-    if(!GDriveSync.isSignedIn()) return;
+    // hasSession, not isSignedIn: the token expires after ~1h, and gating on its validity made
+    // every later edit stop here while the UI still said Synced. push() → ensureToken()
+    // refreshes silently, and a refused refresh surfaces as token_expired.
+    if(!GDriveSync.hasSession()) return;
     if(syncDebounce.current) clearTimeout(syncDebounce.current);
     retryAttemptRef.current = 0;
     setSyncState('syncing');
     syncDebounce.current = setTimeout(() => {
+      syncDebounce.current = null;
       if(pendingPushRef.current) performDrivePush(pendingPushRef.current);
     }, 1500);
   }, [performDrivePush]);
@@ -3170,7 +3350,7 @@ function App() {
     // Coming back online, or back to the tab, is the natural moment to drain anything the
     // retry ladder gave up on — including an urgent push whose response never arrived.
     const resume = () => {
-      if(!pendingPushRef.current || !GDriveSync.isSignedIn()) return;
+      if(!pendingPushRef.current || !GDriveSync.hasSession()) return;
       if(retryTimerRef.current) return;
       retryAttemptRef.current = 0;
       performDrivePush(pendingPushRef.current);
@@ -3191,7 +3371,7 @@ function App() {
 
   // Persist — explicit saves only, no auto-write useEffects
   const save = React.useCallback((txs, wals, options={}) => {
-    const mod = options.mod || new Date().toISOString();
+    const mod = options.mod || nextCommitStamp();
     const vaultToStore = Object.prototype.hasOwnProperty.call(options, 'vault') ? options.vault : vault;
     // btc-last-modified is the COMMIT MARKER for the whole write, not just another key.
     // Stamping it after a partial write would leave stale transactions carrying a fresh
@@ -3443,11 +3623,15 @@ function App() {
     // An absent array means "this payload says nothing about transactions", so local is left
     // alone. Writing JSON.stringify(undefined) previously stored the literal string
     // "undefined", which threw on the next load and silently emptied the portfolio.
-    if(remoteTxs) { setTransactions(remoteTxs); safeSetItem('btc-tx-v2', JSON.stringify(remoteTxs)); }
-    if(remoteWals) { setWallets(remoteWals); safeSetItem('btc-wallets', JSON.stringify(remoteWals)); }
+    // `stored` tracks whether every key landed. Same commit-marker rule as save(): a partial
+    // write must not be stamped as if it were the remote revision, or the next edit would
+    // push the stale leftovers over Drive believing they were current.
+    let stored = true;
+    if(remoteTxs) { setTransactions(remoteTxs); stored = safeSetItem('btc-tx-v2', JSON.stringify(remoteTxs)) && stored; }
+    if(remoteWals) { setWallets(remoteWals); stored = safeSetItem('btc-wallets', JSON.stringify(remoteWals)) && stored; }
     if(hasVaultKey) {
       setVault(remote.vault || null);
-      if(remote.vault) safeSetItem(VAULT_STORAGE_KEY, JSON.stringify(remote.vault));
+      if(remote.vault) stored = safeSetItem(VAULT_STORAGE_KEY, JSON.stringify(remote.vault)) && stored;
       else localStorage.removeItem(VAULT_STORAGE_KEY);
       lockVault();
     }
@@ -3455,7 +3639,17 @@ function App() {
       const normalized = normalizeSettings(remote.settings);
       settingsRef.current = normalized;
       setSettings(normalized);
-      safeSetItem('btc-settings', JSON.stringify(normalized));
+      stored = safeSetItem('btc-settings', JSON.stringify(normalized)) && stored;
+    }
+    if(!stored) {
+      // The screen shows the remote copy; storage may not. The local stamp and seen-revision
+      // stay old so the next launch pulls again rather than trusting storage. The dirty
+      // marker IS cleared — what was pending has been superseded by the copy now on screen,
+      // and leaving it would make the next launch push the stale leftovers over Drive.
+      pendingPushRef.current = null;
+      localStorage.removeItem('btc-pending-push');
+      showToast('⚠ Browser storage is full — the Google Drive copy is shown but could not be saved on this device. Export a backup, then clear space.', 10000);
+      return true;
     }
     if(remote.lastModified) safeSetItem('btc-last-modified', remote.lastModified);
     // Record which Drive revision local now matches, and clear the dirty marker — whatever
@@ -3472,11 +3666,47 @@ function App() {
   const walletsRef = useRef(wallets); walletsRef.current = wallets;
   const vaultRef = useRef(vault); vaultRef.current = vault;
 
+  // Another tab of this app committed a write. Without this, a second tab kept its stale
+  // in-memory lists, and its next save overwrote localStorage — then pushed that over Drive
+  // with no conflict, because both tabs share btc-drive-seen-mtime. The `storage` event only
+  // fires in OTHER tabs, and btc-last-modified is the commit marker save() writes last, so
+  // by the time it changes the data keys are complete.
+  useEffect(() => {
+    const onStorage = (e) => {
+      if(e.storageArea !== localStorage) return;
+      const dataChanged = e.key === 'btc-last-modified' || e.key === null;
+      if(dataChanged) {
+        setTransactions(ensureTxIds(sanitizeStoredTransactions(loadStoredArray('btc-tx-v2', []))));
+        setWallets(loadStoredArray('btc-wallets', []));
+        let storedVault = null;
+        try { const s = localStorage.getItem(VAULT_STORAGE_KEY); storedVault = s ? JSON.parse(s) : null; } catch {}
+        if(JSON.stringify(storedVault) !== JSON.stringify(vaultRef.current ?? null)) {
+          setVault(storedVault);
+          lockVault();
+        }
+        // This tab's queued payload predates what the other tab just wrote (which already
+        // includes our earlier saves, since it was loaded from storage too). The writing tab
+        // owns the push now; ours would only send older data.
+        pendingPushRef.current = null;
+        if(syncDebounce.current) { clearTimeout(syncDebounce.current); syncDebounce.current = null; }
+        showToast('Updated with changes made in another tab');
+      }
+      if(dataChanged || e.key === 'btc-settings') {
+        try {
+          const s = localStorage.getItem('btc-settings');
+          if(s) { const next = normalizeSettings(JSON.parse(s)); settingsRef.current = next; setSettings(next); }
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [lockVault]);
+
   // Push local state up immediately (no debounce) and record the resulting Drive revision.
   // Passes no expectedModifiedTime: the caller has already decided local wins.
   const pushLocalToDrive = useCallback(async (successMessage) => {
     const settingsData = (() => { try { return JSON.parse(localStorage.getItem('btc-settings')||'{}'); } catch { return {}; } })();
-    const mod = new Date().toISOString();
+    const mod = nextCommitStamp();
     await GDriveSync.push({
       transactions: transactionsRef.current,
       wallets: walletsRef.current,
@@ -3485,7 +3715,11 @@ function App() {
       lastModified: mod,
     });
     safeSetItem('btc-last-modified', mod);
+    // This pushed the full current state, so anything still queued is superseded — and must
+    // not fire later carrying an older stamp than the one just written.
     pendingPushRef.current = null;
+    if(syncDebounce.current) { clearTimeout(syncDebounce.current); syncDebounce.current = null; }
+    if(retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = null; }
     localStorage.removeItem('btc-pending-push');
     if(successMessage) showToast(successMessage);
   }, []);
@@ -3605,7 +3839,18 @@ function App() {
         const seenMtime = localStorage.getItem('btc-drive-seen-mtime') || '';
         const remoteMoved = !!(remote._driveModifiedTime && seenMtime && remote._driveModifiedTime !== seenMtime);
 
-        if(localIsEmpty && !remoteIsEmpty) {
+        // With no recorded revision (first connection, or a cleared marker) we can't tell
+        // whether Drive moved, so an unpushed local change against it must be asked about.
+        const remoteMaybeMoved = remoteMoved || !seenMtime;
+        const alreadyLanded = remoteMod === localMod;
+
+        // The conflict check comes before the empty-side shortcuts: a deliberate local
+        // "Reset all data" made while disconnected is dirty-and-empty, and used to be
+        // silently undone by the "fresh device" pull below.
+        if(localDirty && remoteMaybeMoved && !alreadyLanded && (localHasData || remoteHasData)) {
+          resolveSyncConflict(remote);
+          return; // the dialog owns syncState from here
+        } else if(localIsEmpty && !remoteIsEmpty) {
           // Fresh device — always pull remote data down. No snapshot needed: there is
           // nothing local to lose.
           applyRemotePayload(remote);
@@ -3613,9 +3858,10 @@ function App() {
         } else if(!localIsEmpty && remoteIsEmpty) {
           // Remote is empty, local has data — push up
           await pushLocalToDrive('Backed up to Google Drive');
-        } else if(localDirty && remoteMoved) {
-          resolveSyncConflict(remote);
-          return; // the dialog owns syncState from here
+        } else if(localDirty && !alreadyLanded) {
+          // Unpushed edit, Drive unchanged since we last saw it. Checked before the stamps,
+          // which come from each device's own clock.
+          await pushLocalToDrive(`Synced to Google Drive — ${localTxCount} transactions`);
         } else if(remoteMod > localMod) {
           // Remote is newer — pull, keeping a local snapshot in case this overwrites unsynced work
           applyRemotePayload(remote, { stash: true });
@@ -3636,7 +3882,10 @@ function App() {
       console.error('Sign-in error:', e);
       setSyncState('error');
       localStorage.removeItem('btc-sync-enabled');
-      showToast('Sign-in failed');
+      // drive_unreachable: Drive answered with an error, so nothing was compared or written.
+      showToast(e && e.code === 'drive_unreachable'
+        ? `Couldn't reach Google Drive (${e.status}). Nothing was changed — try again shortly.`
+        : 'Sign-in failed');
     }
   }, [transactions, wallets, vault, applyRemotePayload, pushLocalToDrive, resolveSyncConflict]);
 
@@ -3677,9 +3926,9 @@ function App() {
           if(haveToken) {
             setSyncState('syncing');
             const remote = await GDriveSync.pull();
+            const localDirty = !!localStorage.getItem('btc-pending-push');
             if(remote && remote.lastModified) {
               const localMod = localStorage.getItem('btc-last-modified') || '0';
-              const localDirty = !!localStorage.getItem('btc-pending-push');
               const seenMtime = localStorage.getItem('btc-drive-seen-mtime') || '';
               const remoteMoved = !!(remote._driveModifiedTime && seenMtime && remote._driveModifiedTime !== seenMtime);
               // Our own last push may have landed without us seeing the response (keepalive on
@@ -3689,17 +3938,24 @@ function App() {
                 pendingPushRef.current = null;
                 localStorage.removeItem('btc-pending-push');
                 if(remote._driveModifiedTime) safeSetItem('btc-drive-seen-mtime', remote._driveModifiedTime);
-              } else if(localDirty && remoteMoved) {
-                // Two-sided conflict — ask, don't guess. Bail out before touching syncState
-                // so the dialog owns it.
+              } else if(localDirty && (remoteMoved || !seenMtime)) {
+                // Two-sided conflict — ask, don't guess. With no recorded revision we can't
+                // tell whether Drive moved, so that counts as a conflict too. Bail out before
+                // touching syncState so the dialog owns it.
                 resolveSyncConflict(remote);
                 return;
+              } else if(localDirty) {
+                // An edit that never reached Drive, and Drive hasn't moved since we last saw
+                // it — send it. This must come BEFORE the stamp comparison: stamps come from
+                // each device's own clock, so a fast-clocked device's older data could
+                // otherwise "win" and silently overwrite the edit.
+                await pushLocalToDrive(null);
               } else if(remote.lastModified > localMod) {
                 applyRemotePayload(remote, { stash: true });
-              } else if(localDirty) {
-                // We have an edit that never reached Drive and nothing else has moved — send it
-                await pushLocalToDrive(null);
               }
+            } else if(!remote && localDirty) {
+              // The Drive file is gone (deleted, or never created). Nothing remote to lose.
+              await pushLocalToDrive(null);
             }
             setSyncState('synced');
             setLastSync(new Date());
@@ -3828,18 +4084,13 @@ function App() {
     transactions.forEach(tx => {
       const amt = parseFloat(tx.amount)||0;
       const fee = parseFloat(tx.fee)||0;
-      const w1 = tx.wallet;
-      const w2 = tx.wallet2;
-      if(!w1) return;
-      if(!h[w1]) h[w1]=0;
-      if(tx.type==='Buy'||tx.type==='Reward') { h[w1]+=amt; }
-      else if(tx.type==='Sell') { h[w1]-=amt; }
-      else if(tx.type==='Transfer') {
-        h[w1]-=(amt+fee);
-        if(w2) { if(!h[w2]) h[w2]=0; h[w2]+=amt; }
-      } else if(tx.type==='Consolidation') {
-        h[w1]-=fee;
-      }
+      // A Transfer with no source wallet is an inflow from outside (e.g. an unpaired
+      // CoinLedger Deposit), so only the side that is named moves.
+      const add = (w, delta) => { if(!w) return; h[w] = (h[w]||0) + delta; };
+      if(tx.type==='Buy'||tx.type==='Reward') add(tx.wallet, amt);
+      else if(tx.type==='Sell') add(tx.wallet, -amt);
+      else if(tx.type==='Transfer') { add(tx.wallet, -(amt+fee)); add(tx.wallet2, amt); }
+      else if(tx.type==='Consolidation') add(tx.wallet, -fee);
     });
     return h;
   }, [transactions]);
@@ -3863,19 +4114,17 @@ function App() {
     chrono.forEach(({ tx }) => {
       const amt = toSats(tx.amount), fee = toSats(tx.fee);
       const w1 = tx.wallet, w2 = tx.wallet2;
-      if(!w1) return;
-      if(!bal[w1]) bal[w1] = 0;
-      if(tx.type==='Buy'||tx.type==='Reward') { bal[w1] += amt; }
-      else if(tx.type==='Sell') { bal[w1] -= amt; }
-      else if(tx.type==='Transfer') {
-        bal[w1] -= (amt + fee);
-        if(w2) { if(!bal[w2]) bal[w2] = 0; bal[w2] += amt; }
-      } else if(tx.type==='Consolidation') { bal[w1] -= fee; }
+      const add = (w, delta) => { if(!w) return; bal[w] = (bal[w]||0) + delta; };
+      if(tx.type==='Buy'||tx.type==='Reward') add(w1, amt);
+      else if(tx.type==='Sell') add(w1, -amt);
+      else if(tx.type==='Transfer') { add(w1, -(amt + fee)); add(w2, amt); }
+      else if(tx.type==='Consolidation') add(w1, -fee);
       // Both sides of a transfer are recorded so the column can follow whichever wallet the
       // user is filtering on, rather than always reporting the source.
-      const after = { [w1]: bal[w1] };
+      const after = {};
+      if(w1) after[w1] = bal[w1] || 0;
       if(w2 && tx.type==='Transfer') after[w2] = bal[w2];
-      out[tx.id] = after;
+      if(Object.keys(after).length) out[tx.id] = after;
     });
     return out;
   }, [transactions]);
@@ -3927,11 +4176,11 @@ function App() {
         costBasis+=(numOr(tx.totalUsd, amt*price))+fee;
       } else if(tx.type==='Sell') {
         totalSold+=amt;
-        const ratio = runningBTC > 0.00000001 ? amt / runningBTC : 0;
-        costBasis -= costBasis * ratio;
-        runningBTC -= amt;
-      } else if(tx.type==='Transfer') { totalFeesBTC+=fee; runningBTC-=fee; }
-      else if(tx.type==='Consolidation') { totalFeesBTC+=fee; runningBTC-=fee; }
+        const r = sellFromCostPool(runningBTC, costBasis, amt, 0);
+        costBasis = r.poolCost; runningBTC = r.poolBtc;
+      } else if(tx.type==='Transfer' || tx.type==='Consolidation') {
+        totalFeesBTC+=fee; runningBTC = Math.max(0, runningBTC - fee);
+      }
       else if(tx.type==='Reward') { totalBought+=amt; runningBTC+=amt; rewardsIncome+=amt; }
     });
     // Use trackedHoldings (wallet-based) for market value — it correctly handles transfers
@@ -3952,9 +4201,11 @@ function App() {
       if(filterDateTo && tx.date > filterDateTo) return false;
       if(search) {
         const q = search.toLowerCase();
-        if(!( tx.wallet?.toLowerCase().includes(q) || tx.wallet2?.toLowerCase().includes(q) ||
-              tx.notes?.toLowerCase().includes(q) || tx.txhash?.toLowerCase().includes(q) ||
-              tx.type?.toLowerCase().includes(q) || tx.amount?.includes(q) )) return false;
+        // String() on every field: rows are sanitized on load, but one bad value here used to
+        // take the whole app down to the error screen.
+        const has = v => v != null && String(v).toLowerCase().includes(q);
+        if(!( has(tx.wallet) || has(tx.wallet2) || has(tx.notes) || has(tx.txhash) ||
+              has(tx.type) || has(tx.amount) )) return false;
       }
       return true;
     // Newest first. Date alone left same-day rows in insertion order, so each day's block
@@ -4284,7 +4535,10 @@ function App() {
               if(importedVault) safeSetItem(VAULT_STORAGE_KEY, JSON.stringify(importedVault));
               else localStorage.removeItem(VAULT_STORAGE_KEY);
               lockVault();
-              save(importedTransactions, importedWallets, { vault: importedVault, mod: parsed.lastModified || new Date().toISOString() });
+              // Fresh stamp, as in restorePreSyncSnapshot: the file's own lastModified is older
+              // than other devices' copies, so they would skip pulling the restore — and a
+              // far-future one would make this device refuse every pull afterwards.
+              save(importedTransactions, importedWallets, { vault: importedVault });
               const notes = [];
               if(skippedCount > 0) notes.push(`${skippedCount} invalid row${skippedCount===1?'':'s'} skipped`);
               if(mergedWalletCount > 0) notes.push(`${mergedWalletCount} duplicate wallet${mergedWalletCount===1?'':'s'} merged`);
@@ -4338,29 +4592,13 @@ function App() {
       const existingKeys = new Set(transactions.map(txKey));
       let dupeCount = 0;
       let badCount = 0;
+      const clRows = [];
       for(let i=1;i<lines.length;i++) {
         const line=lines[i].trim(); if(!line) continue;
         const cols=parseCSVLine(line);
         if(isCL) {
-          if(cols.length<9) { badCount++; continue; }
-          const [dateStr,platform,assetSent,amtSent,assetRecv,amtRecv,feeCur,feeAmt,clType,desc,,txhash]=cols;
-          const d = normalizeDate(String(dateStr||'').split(' ')[0]);
-          if(!d) { badCount++; continue; }
-          let type='', amount='', price='', fee='', totalUsd='';
-          const safeRatio = (num, den) => {
-            const n = numOr(num, null), dd = numOr(den, null);
-            return (n !== null && dd !== null && dd > 0) ? (n/dd).toFixed(2) : '';
-          };
-          if(clType==='Trade'&&assetRecv==='BTC') { type='Buy'; amount=amtRecv; totalUsd=amtSent||''; price=safeRatio(amtSent, amtRecv); fee=feeAmt; }
-          else if(clType==='Trade'&&assetSent==='BTC') { type='Sell'; amount=amtSent; totalUsd=amtRecv||''; price=safeRatio(amtRecv, amtSent); fee=feeAmt; }
-          else if(['Withdrawal','Transfer','Deposit'].includes(clType)) { type='Transfer'; amount=amtSent||amtRecv; fee=feeAmt; }
-          else { type = canonicalTxType(clType); amount = amtRecv||amtSent; }
-          if(!type || !VALID_TX_TYPES.includes(type)) { badCount++; continue; }
-          if(type!=='Consolidation' && !(numOr(amount, 0) > 0)) { badCount++; continue; }
-          const newTx = {id:newTxId(),date:d,type,wallet:(platform||'').trim(),wallet2:'',amount,price,fee,totalUsd,notes:desc||'',txhash:txhash||''};
-          if(existingKeys.has(txKey(newTx))) { dupeCount++; continue; }
-          existingKeys.add(txKey(newTx));
-          imported.push(newTx);
+          // Collected and parsed as a whole below: Withdrawal/Deposit pairs span two rows.
+          clRows.push(cols);
         } else {
           if(cols.length<6) { badCount++; continue; }
           // Same gate as the JSON path. Previously this branch stored date/type/amount
@@ -4379,6 +4617,15 @@ function App() {
             newTx.txhash = cols[8]||'';
             newTx.excludeStats = false;
           }
+          if(existingKeys.has(txKey(newTx))) { dupeCount++; continue; }
+          existingKeys.add(txKey(newTx));
+          imported.push(newTx);
+        }
+      }
+      if(isCL) {
+        const { txs, bad } = parseCoinLedgerRows(clRows);
+        badCount += bad;
+        for(const newTx of txs) {
           if(existingKeys.has(txKey(newTx))) { dupeCount++; continue; }
           existingKeys.add(txKey(newTx));
           imported.push(newTx);
@@ -5363,11 +5610,8 @@ function App() {
                             setConfirmDialog(null);
                             setSyncState('syncing');
                             try {
-                              const settingsData = JSON.parse(localStorage.getItem('btc-settings')||'{}');
-                              const mod = new Date().toISOString();
-                              await GDriveSync.push({ transactions, wallets, settings: settingsData, vault, lastModified: mod });
-                              safeSetItem('btc-last-modified', mod);
-                              setSyncState('synced'); setLastSync(new Date()); showToast('Pushed to Google Drive');
+                              await pushLocalToDrive('Pushed to Google Drive');
+                              setSyncState('synced'); setLastSync(new Date());
                             } catch { setSyncState('error'); showToast('Push failed'); }
                           },
                         });

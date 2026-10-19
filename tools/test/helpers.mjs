@@ -25,7 +25,8 @@ globalThis.crypto ??= (await import('node:crypto')).webcrypto;
 const exported = ['normalizeDate','isRealDate','numOr','newTxId','ensureTxIds','toBase64',
   'fromBase64','canonicalTxType','renameWalletInTransactions','countWalletReferences',
   'fmtDate','todayLocal','fillDailyPriceGaps','safeSetItem','VALID_TX_TYPES',
-  'addDaysUTC','listDaysUTC','toEpochDay','fromEpochDay','dayKeyUTC','rangeCutoff'];
+  'addDaysUTC','listDaysUTC','toEpochDay','fromEpochDay','dayKeyUTC','rangeCutoff',
+  'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp'];
 const fn = new Function(`${src}\nreturn {${exported.join(',')}};`);
 const H = fn();
 
@@ -174,6 +175,60 @@ ok(H.rangeCutoff('3M') < H.todayLocal(), '3M cutoff is in the past');
 const d = new Date();
 eq(H.todayLocal(), `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`, 'todayLocal uses local parts');
 ok(/^\d{4}-\d{2}-\d{2}$/.test(H.todayLocal()), 'todayLocal shape');
+
+// ── sellFromCostPool ────────────────────────────────────────────────────────
+{
+  const r = H.sellFromCostPool(2, 100000, 1, 60000);
+  eq([r.poolBtc, r.poolCost, r.realized], [1, 50000, 10000], 'sell half the pool at a profit');
+  // Pool of 1 BTC @ $50k; sell 1.5 — the extra 0.5 came from an excluded buy
+  const over = H.sellFromCostPool(1, 50000, 1.5, 90000);
+  eq([over.poolBtc, over.poolCost], [0, 0], 'oversell empties the pool, never goes negative');
+  eq(over.realized, 60000 - 50000, 'oversell: only the covered 1 BTC carries P&L');
+  const empty = H.sellFromCostPool(0, 0, 0.5, 30000);
+  eq([empty.poolBtc, empty.poolCost, empty.realized], [0, 0, 0], 'sell from an empty pool is a no-op');
+  const neg = H.sellFromCostPool(-0.2, 0, 0.1, 5000);
+  eq(neg.poolBtc, 0, 'a negative pool is clamped');
+}
+
+// ── parseCoinLedgerRows: export → import round trip ─────────────────────────
+{
+  // Rows exactly as exportCSV writes them (header removed)
+  const rows = [
+    ['2024-01-01 00:00:00','Kraken','USD','4000.00','BTC','0.1','USD','5.00','Trade','',''],
+    ['2024-02-01 00:00:00','Kraken','BTC','0.05','','','BTC','0.0001','Withdrawal','Transfer to Ledger','abc123'],
+    ['2024-02-01 00:00:00','Ledger','','','BTC','0.05','','','Deposit','Transfer from Kraken','abc123'],
+    ['2024-03-01 00:00:00','Ledger','BTC','0.0002','','','','','Withdrawal','UTXO consolidation fee',''],
+    ['2024-04-01 00:00:00','River','','','BTC','0.02','','','Deposit','from friend',''],
+    ['2024-05-01 00:00:00','Kraken','BTC','0.01','USD','700.00','BTC','0.0001','Trade','',''],
+  ];
+  const { txs, bad } = H.parseCoinLedgerRows(rows);
+  eq(bad, 0, 'CL: no bad rows');
+  eq(txs.length, 5, 'CL: withdrawal+deposit pair collapses into one transfer');
+  const t = txs[1];
+  eq([t.type, t.wallet, t.wallet2, t.amount, t.fee, t.txhash, t.notes],
+     ['Transfer','Kraken','Ledger','0.05','0.0001','abc123',''], 'CL: paired transfer restored with txhash');
+  eq([txs[2].type, txs[2].fee, txs[2].wallet], ['Consolidation','0.0002','Ledger'], 'CL: consolidation restored');
+  eq([txs[3].type, txs[3].wallet, txs[3].wallet2, txs[3].notes], ['Transfer','','River','from friend'], 'CL: lone deposit is an inflow');
+  eq([txs[4].type, txs[4].fee], ['Sell','7.00'], 'CL: BTC trade fee converted to USD at the trade price');
+  eq(txs[0].fee, '5.00', 'CL: USD trade fee kept');
+  ok(txs.every(x => x.id), 'CL: ids assigned');
+  eq(H.parseCoinLedgerRows([['bad']]).bad, 1, 'CL: short row counted as bad');
+  // A USD fee on a withdrawal has no price to convert at — must not be read as BTC
+  eq(H.parseCoinLedgerRows([['2024-01-01','A','BTC','0.1','','','USD','2.50','Withdrawal','','']]).txs[0].fee, '',
+     'CL: fiat withdrawal fee is not stored as BTC');
+}
+
+// ── nextCommitStamp ─────────────────────────────────────────────────────────
+{
+  const future = new Date(Date.now() + 10 * 60000).toISOString();
+  localStorage.setItem('btc-last-modified', future);
+  ok(H.nextCommitStamp() > future, 'stamp after a fast-clock pull is still newer than it');
+  localStorage.setItem('btc-last-modified', '2020-01-01T00:00:00.000Z');
+  ok(Math.abs(Date.parse(H.nextCommitStamp()) - Date.now()) < 5000, 'normal case uses the current time');
+  localStorage.setItem('btc-last-modified', 'garbage');
+  ok(H.isRealDate(H.nextCommitStamp().slice(0,10)), 'unparseable stored stamp is ignored');
+  localStorage.removeItem('btc-last-modified');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
