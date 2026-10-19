@@ -1305,20 +1305,83 @@ const sellFromCostPool = (poolBtc, poolCost, amt, proceeds) => {
     realized: take > 0 ? coveredProceeds - costOfSold : 0,
   };
 };
-// The BTC a transaction moves into (+) or out of (−) one named wallet. Same rules as
-// walletHoldings.
-const txEffectOnWallet = (tx, wallet) => {
-  if(!tx || !wallet) return 0;
-  const amt = numOr(tx.amount), fee = numOr(tx.fee);
-  let d = 0;
-  if(tx.wallet === wallet) {
-    if(tx.type==='Buy' || tx.type==='Reward') d += amt;
-    else if(tx.type==='Sell') d -= amt;
-    else if(tx.type==='Transfer') d -= amt + fee;
-    else if(tx.type==='Consolidation') d -= fee;
+// ─── Balance rules: the ONE place that says what a transaction does to BTC balances ─────
+// These used to be written out five times (wallet holdings, running balances, the edit check,
+// the dashboard stats and the chart series), and the copies had already drifted: a Transfer
+// with no destination took the amount out of wallet holdings but only the fee out of the
+// charts and cost basis.
+//
+// A Transfer's meaning depends on which ends are named:
+//   both      → internal move; only the network fee leaves the portfolio
+//   from only → outflow; amount + fee leave the portfolio (sent somewhere untracked)
+//   to only   → inflow from outside (e.g. an unpaired CoinLedger Deposit)
+
+// [walletName, delta] for each named wallet the transaction touches. `toUnits` converts the
+// stored strings — numOr for BTC floats, or an integer-satoshi converter.
+const txWalletDeltas = (tx, toUnits = numOr) => {
+  if(!tx) return [];
+  const amt = toUnits(tx.amount), fee = toUnits(tx.fee);
+  const w1 = tx.wallet, w2 = tx.wallet2;
+  if(tx.type==='Buy' || tx.type==='Reward') return w1 ? [[w1, amt]] : [];
+  if(tx.type==='Sell') return w1 ? [[w1, -amt]] : [];
+  if(tx.type==='Consolidation') return w1 ? [[w1, -fee]] : [];
+  if(tx.type==='Transfer') {
+    const out = [];
+    if(w1) out.push([w1, -(amt + fee)]);
+    if(w2) out.push([w2, amt]);
+    return out;
   }
-  if(tx.type==='Transfer' && tx.wallet2 === wallet) d += amt;
-  return d;
+  return [];
+};
+// The BTC a transaction moves into (+) or out of (−) one named wallet
+const txEffectOnWallet = (tx, wallet) => {
+  if(!wallet) return 0;
+  return txWalletDeltas(tx).reduce((d, [w, delta]) => w === wallet ? d + delta : d, 0);
+};
+// Change in total BTC held. Buy/Sell/Reward/Consolidation count even with a blank wallet
+// name, as they always have in the charts.
+const txPortfolioDelta = (tx) => {
+  const amt = numOr(tx.amount), fee = numOr(tx.fee);
+  if(tx.type==='Buy' || tx.type==='Reward') return amt;
+  if(tx.type==='Sell') return -amt;
+  if(tx.type==='Consolidation') return -fee;
+  if(tx.type==='Transfer') {
+    if(tx.wallet && !tx.wallet2) return -(amt + fee);
+    if(!tx.wallet && tx.wallet2) return amt;
+    return -fee;
+  }
+  return 0;
+};
+// USD per BTC to value a Reward at: its own price when one was entered, else that day's close.
+// Rewards are income at market value on receipt (and exported to CoinLedger that way), so they
+// carry that value as cost basis. At $0 they diluted average cost and overstated every gain.
+const rewardPriceFor = (tx, historicalPrices) => {
+  const own = numOr(tx.price, 0);
+  if(own > 0) return own;
+  return numOr(historicalPrices && historicalPrices[normalizeDate(tx.date)], 0);
+};
+// One transaction applied to the average-cost pool, which holds only coins WITH a cost basis.
+// Callers skip excludeStats rows. Returns the new pool and the realized P&L this step produced.
+const applyTxToCostPool = ({ btc, cost }, tx, historicalPrices) => {
+  const amt = numOr(tx.amount), fee = numOr(tx.fee), price = numOr(tx.price);
+  if(tx.type==='Buy') return { btc: btc + amt, cost: cost + numOr(tx.totalUsd, amt*price) + fee, realized: 0 };
+  if(tx.type==='Reward') return { btc: btc + amt, cost: cost + amt * rewardPriceFor(tx, historicalPrices), realized: 0 };
+  if(tx.type==='Sell') {
+    // Net proceeds: a USD exchange fee reduces what the sale actually returned
+    const r = sellFromCostPool(btc, cost, amt, numOr(tx.totalUsd, amt*price) - fee);
+    return { btc: r.poolBtc, cost: r.poolCost, realized: r.realized };
+  }
+  if(tx.type==='Transfer' && tx.wallet && !tx.wallet2) {
+    // Outflow: the coins leave with their share of the basis. Not a sale, so no realized P&L.
+    const r = sellFromCostPool(btc, cost, amt, 0);
+    return { btc: Math.max(0, r.poolBtc - fee), cost: r.poolCost, realized: 0 };
+  }
+  // An inflow from outside has no known basis, so it stays out of the pool, like an excluded
+  // buy (and its fee was paid outside). Internal transfers and consolidations only burn the
+  // fee, whose value folds into the average cost of what remains.
+  if(tx.type==='Transfer' && !tx.wallet && tx.wallet2) return { btc, cost, realized: 0 };
+  if(tx.type==='Transfer' || tx.type==='Consolidation') return { btc: Math.max(0, btc - fee), cost, realized: 0 };
+  return { btc, cost, realized: 0 };
 };
 // Key-order-independent stringify, for comparing two settings objects that were built by
 // different code paths. Plain JSON.stringify would call {a:1,b:2} and {b:2,a:1} different.
@@ -1846,26 +1909,12 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       const matchesSelected = !hasWalletFilter || selectedWalletSet.has(w1) || selectedWalletSet.has(w2);
 
       // Always track BTC balance (all transactions, including excluded)
-      if(tx.type==='Buy'||tx.type==='Reward') { runningBTC+=amt; }
-      else if(tx.type==='Sell') { runningBTC-=amt; }
-      else if(tx.type==='Transfer') { runningBTC-=fee; }
-      else if(tx.type==='Consolidation') { runningBTC-=fee; }
+      runningBTC += txPortfolioDelta(tx);
 
       // Cost basis — only non-excluded transactions
       if(!tx.excludeStats) {
-        if(tx.type==='Buy') {
-          runningBTCForCost+=amt;
-          totalCost+=(numOr(tx.totalUsd, amt*price))+fee;
-        } else if(tx.type==='Reward') { runningBTCForCost+=amt; }
-        else if(tx.type==='Sell') {
-          // Net proceeds: USD exchange fee reduces what the sale actually returned
-          const proceeds = (numOr(tx.totalUsd, amt*price)) - fee;
-          const r = sellFromCostPool(runningBTCForCost, totalCost, amt, proceeds);
-          realizedPL += r.realized;
-          totalCost = r.poolCost; runningBTCForCost = r.poolBtc;
-        } else if(tx.type==='Transfer' || tx.type==='Consolidation') {
-          runningBTCForCost = Math.max(0, runningBTCForCost - fee);
-        }
+        const r = applyTxToCostPool({ btc: runningBTCForCost, cost: totalCost }, tx, historicalPrices);
+        runningBTCForCost = r.btc; totalCost = r.cost; realizedPL += r.realized;
       }
 
       // DCA tracking — Buy transactions only
@@ -1911,16 +1960,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       // is the real source for those. Removed so this block stops advertising a total it
       // doesn't actually produce.)
       if(matchesSelected) {
-        if(tx.type==='Buy'||tx.type==='Reward') {
-          if(selectedWalletSet.has(w1)) filteredRunningBTC += amt;
-        } else if(tx.type==='Sell') {
-          if(selectedWalletSet.has(w1)) filteredRunningBTC -= amt;
-        } else if(tx.type==='Transfer') {
-          if(selectedWalletSet.has(w1)) filteredRunningBTC -= (amt + fee);
-          if(selectedWalletSet.has(w2)) filteredRunningBTC += amt;
-        } else if(tx.type==='Consolidation') {
-          if(selectedWalletSet.has(w1)) filteredRunningBTC -= fee;
-        }
+        for(const [w, delta] of txWalletDeltas(tx)) if(selectedWalletSet.has(w)) filteredRunningBTC += delta;
       }
       const totalBTC = runningBTC;
       const avgCost = runningBTCForCost>0.00000001 ? totalCost/runningBTCForCost : null;
@@ -1942,7 +1982,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
     }
     const dcaPts = Object.entries(dcaMap).sort((a,b)=>a[0].localeCompare(b[0])).map(([date,buyUsd])=>({date,buyUsd:+buyUsd.toFixed(2)}));
     return { chartData: points, accumulatedData: accumulatedPoints, dcaData: dcaPts, feeBurnData: feePoints, rewardData: rewardPoints, plData: plPoints };
-  }, [transactions, wallets, hasWalletFilter, selectedWalletSet]);
+  }, [transactions, wallets, hasWalletFilter, selectedWalletSet, historicalPrices]); // historicalPrices: reward basis
 
   const chartCutoff = React.useMemo(
     () => rangeCutoff(settings.chartRange, settings.chartRangeCustom),
@@ -2047,26 +2087,27 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
       .sort((a,b) => a.normalizedDate.localeCompare(b.normalizedDate));
     // Compute starting BTC (all transactions before cutoff)
     let startBTC = 0;
-    let buys = 0, rewards = 0, sells = 0, fees = 0;
+    let buys = 0, rewards = 0, sells = 0, fees = 0, received = 0, sentOut = 0;
     sorted.forEach(tx => {
       const amt = numOr(tx.amount);
       const fee = numOr(tx.fee);
       if(tx.normalizedDate < cutoff) {
         // Before range — accumulate into starting balance
-        if(tx.type==='Buy') startBTC += amt;
-        else if(tx.type==='Reward') startBTC += amt;
-        else if(tx.type==='Sell') startBTC -= amt;
-        else if(tx.type==='Transfer'||tx.type==='Consolidation') startBTC -= fee;
+        startBTC += txPortfolioDelta(tx);
       } else {
-        // In range — track each category
+        // In range — track each category. Transfers to or from an untracked wallet move the
+        // total too (see txPortfolioDelta), so they get bars of their own.
         if(tx.type==='Buy') buys += amt;
         else if(tx.type==='Reward') rewards += amt;
         else if(tx.type==='Sell') sells += amt;
-        if(fee > 0 && (tx.type==='Transfer'||tx.type==='Consolidation')) fees += fee;
+        else if(tx.type==='Transfer' && tx.wallet && !tx.wallet2) sentOut += amt;
+        else if(tx.type==='Transfer' && !tx.wallet && tx.wallet2) received += amt;
+        const paysFee = tx.type==='Consolidation' || (tx.type==='Transfer' && (tx.wallet || !tx.wallet2));
+        if(fee > 0 && paysFee) fees += fee;
       }
     });
-    const endBTC = startBTC + buys + rewards - sells - fees;
-    return { startBTC: +startBTC.toFixed(8), buys: +buys.toFixed(8), rewards: +rewards.toFixed(8), sells: +sells.toFixed(8), fees: +fees.toFixed(8), endBTC: +endBTC.toFixed(8) };
+    const endBTC = startBTC + buys + rewards + received - sells - sentOut - fees;
+    return { startBTC: +startBTC.toFixed(8), buys: +buys.toFixed(8), rewards: +rewards.toFixed(8), received: +received.toFixed(8), sells: +sells.toFixed(8), sentOut: +sentOut.toFixed(8), fees: +fees.toFixed(8), endBTC: +endBTC.toFixed(8) };
   }, [transactions, settings.chartRange, settings.chartRangeCustom]);
 
   // Price overlay data for Accumulated BTC chart
@@ -2314,7 +2355,7 @@ function DashboardCharts({ transactions, wallets, btcPrice, historicalPrices, hi
           formatTooltip={v => (v>=0?'+':'-')+'$'+Math.round(Math.abs(v)).toLocaleString()}
           refLine={0} refLineColor="var(--text-tertiary)" refLineLabel="Break even"
         /> : null,
-        waterfall: () => (_waterfall.buys > 0 || _waterfall.rewards > 0 || _waterfall.sells > 0 || _waterfall.fees > 0 || _waterfall.startBTC > 0) ? <WaterfallChart data={_waterfall} btcPrice={btcPrice} sampleData={S} scopeLabel={globalScopeLabel} /> : null,
+        waterfall: () => (_waterfall.buys > 0 || _waterfall.rewards > 0 || _waterfall.sells > 0 || _waterfall.fees > 0 || _waterfall.received > 0 || _waterfall.sentOut > 0 || _waterfall.startBTC > 0) ? <WaterfallChart data={_waterfall} btcPrice={btcPrice} sampleData={S} scopeLabel={globalScopeLabel} /> : null,
         feeBurn: () => _fees.length > 0 ? <SVGChart sampleData={S}
           data={_fees} dataKey="fees" title="Cumulative Fee Burn"
           subtitle={_fees[_fees.length-1]?.fees.toFixed(8)+' BTC in fees'}
@@ -2386,11 +2427,15 @@ function WaterfallChart({ data, btcPrice, sampleData, scopeLabel }) {
   const [expanded, setExpanded] = React.useState(false);
   const handleMove = useThrottledCallback((e) => setMouse({x:e.clientX,y:e.clientY}), 32);
   const { startBTC, buys, rewards, sells, fees, endBTC } = data;
+  const received = data.received || 0, sentOut = data.sentOut || 0;
   const bars = [
     { key:'start', label:'Start', value: startBTC, color:'#6b7280', isTotal: true },
     { key:'buys', label:'Buys', value: buys, color:'#16a34a', direction: 1 },
     { key:'rewards', label:'Rewards', value: rewards, color:'#8b5cf6', direction: 1 },
+    // Transfers to/from untracked wallets: only shown when there are any
+    ...(received > 0 ? [{ key:'received', label:'Received', value: received, color:'#0891b2', direction: 1 }] : []),
     { key:'sells', label:'Sells', value: sells, color:'#dc2626', direction: -1 },
+    ...(sentOut > 0 ? [{ key:'sentOut', label:'Sent out', value: sentOut, color:'#b45309', direction: -1 }] : []),
     { key:'fees', label:'Fees', value: fees, color:'#ef4444', direction: -1 },
     { key:'end', label:'End', value: endBTC, color:'#f7931a', isTotal: true },
   ];
@@ -4278,15 +4323,7 @@ function App() {
   const walletHoldings = useMemo(() => {
     const h = Object.create(null); // wallet names are user text — '__proto__' must be just a name
     transactions.forEach(tx => {
-      const amt = parseFloat(tx.amount)||0;
-      const fee = parseFloat(tx.fee)||0;
-      // A Transfer with no source wallet is an inflow from outside (e.g. an unpaired
-      // CoinLedger Deposit), so only the side that is named moves.
-      const add = (w, delta) => { if(!w) return; h[w] = (h[w]||0) + delta; };
-      if(tx.type==='Buy'||tx.type==='Reward') add(tx.wallet, amt);
-      else if(tx.type==='Sell') add(tx.wallet, -amt);
-      else if(tx.type==='Transfer') { add(tx.wallet, -(amt+fee)); add(tx.wallet2, amt); }
-      else if(tx.type==='Consolidation') add(tx.wallet, -fee);
+      for(const [w, delta] of txWalletDeltas(tx)) h[w] = (h[w]||0) + delta;
     });
     return h;
   }, [transactions]);
@@ -4295,7 +4332,7 @@ function App() {
   // tx id → { walletName: satsAfterThatTransaction }. Built from ALL transactions in
   // chronological order — the exact reverse of the list's own sort — so the figure a row
   // shows is its true balance at that point in history and never shifts when a filter,
-  // search or page changes. Type semantics mirror walletHoldings above; keep the two in step.
+  // search or page changes. Balance rules come from txWalletDeltas, shared with walletHoldings.
   //
   // Accumulated in whole satoshis, not floats: summing hundreds of 0.0000xxxx rewards leaves
   // residue in the low decimals, and a column whose whole job is making a mistyped reward
@@ -4308,18 +4345,13 @@ function App() {
     const bal = Object.create(null);
     const out = {};
     chrono.forEach(({ tx }) => {
-      const amt = toSats(tx.amount), fee = toSats(tx.fee);
-      const w1 = tx.wallet, w2 = tx.wallet2;
-      const add = (w, delta) => { if(!w) return; bal[w] = (bal[w]||0) + delta; };
-      if(tx.type==='Buy'||tx.type==='Reward') add(w1, amt);
-      else if(tx.type==='Sell') add(w1, -amt);
-      else if(tx.type==='Transfer') { add(w1, -(amt + fee)); add(w2, amt); }
-      else if(tx.type==='Consolidation') add(w1, -fee);
-      // Both sides of a transfer are recorded so the column can follow whichever wallet the
-      // user is filtering on, rather than always reporting the source.
+      const deltas = txWalletDeltas(tx, toSats);
+      for(const [w, delta] of deltas) bal[w] = (bal[w]||0) + delta;
+      // Every wallet the row touches is recorded (both ends of a transfer), so the column can
+      // follow whichever wallet the user is filtering on rather than always the source.
       const after = Object.create(null);
-      if(w1) after[w1] = bal[w1] || 0;
-      if(w2 && tx.type==='Transfer') after[w2] = bal[w2];
+      if(tx.wallet) after[tx.wallet] = bal[tx.wallet] || 0;
+      for(const [w] of deltas) after[w] = bal[w];
       if(Object.keys(after).length) out[tx.id] = after;
     });
     return out;
@@ -4364,26 +4396,22 @@ function App() {
       .filter(tx => tx._nd)
       .sort((a,b) => a._nd.localeCompare(b._nd));
     sorted.forEach(tx => {
-      const amt = parseFloat(tx.amount)||0;
-      const price = parseFloat(tx.price)||0;
-      const fee = parseFloat(tx.fee)||0;
-      if(tx.type==='Buy') {
-        totalBought+=amt; runningBTC+=amt;
-        costBasis+=(numOr(tx.totalUsd, amt*price))+fee;
-      } else if(tx.type==='Sell') {
-        totalSold+=amt;
-        const r = sellFromCostPool(runningBTC, costBasis, amt, 0);
-        costBasis = r.poolCost; runningBTC = r.poolBtc;
-      } else if(tx.type==='Transfer' || tx.type==='Consolidation') {
-        totalFeesBTC+=fee; runningBTC = Math.max(0, runningBTC - fee);
-      }
-      else if(tx.type==='Reward') { totalBought+=amt; runningBTC+=amt; rewardsIncome+=amt; }
+      const amt = numOr(tx.amount), fee = numOr(tx.fee);
+      if(tx.type==='Buy') totalBought+=amt;
+      else if(tx.type==='Sell') totalSold+=amt;
+      else if(tx.type==='Transfer' || tx.type==='Consolidation') totalFeesBTC+=fee;
+      else if(tx.type==='Reward') { totalBought+=amt; rewardsIncome+=amt; }
+      const r = applyTxToCostPool({ btc: runningBTC, cost: costBasis }, tx, historicalPrices);
+      runningBTC = r.btc; costBasis = r.cost;
     });
-    // Use trackedHoldings (wallet-based) for market value — it correctly handles transfers
+    // Portfolio value is wallet-based (trackedHoldings), so it includes excluded coins.
     const currentValue = trackedHoldings * (btcPrice||0);
-    const unrealized = currentValue - costBasis;
-    return { totalBought, totalSold, totalFeesBTC, costBasis, rewardsIncome, currentValue, unrealized };
-  }, [transactions, btcPrice, trackedHoldings]);
+    // Unrealized P&L only on coins that carry a cost basis. It used to be currentValue −
+    // costBasis, which counted excluded coins (and inflows of unknown origin) as pure profit
+    // and disagreed with the P&L chart, which already used the pool.
+    const unrealized = runningBTC * (btcPrice||0) - costBasis;
+    return { totalBought, totalSold, totalFeesBTC, costBasis, costPoolBtc: runningBTC, rewardsIncome, currentValue, unrealized };
+  }, [transactions, btcPrice, trackedHoldings, historicalPrices]);
 
   // ─── Filtered transactions ────────────────────────────────────────────────
   const filtered = useMemo(() => {
@@ -5028,7 +5056,8 @@ function App() {
             })()}
             {(() => {
               const hs = settings.hiddenStats || {};
-              const breakEvenPrice = trackedHoldings > 0.00000001 ? stats.costBasis / trackedHoldings : null;
+              // Average cost of the coins that carry a basis: the price at which unrealized P&L is zero
+              const breakEvenPrice = stats.costPoolBtc > 0.00000001 ? stats.costBasis / stats.costPoolBtc : null;
               const statCards = {
                 holdings: () => (
                   <div className="stat-card stat-hero" key="holdings">

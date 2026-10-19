@@ -26,7 +26,8 @@ const exported = ['normalizeDate','isRealDate','numOr','newTxId','ensureTxIds','
   'fromBase64','canonicalTxType','renameWalletInTransactions','countWalletReferences',
   'fmtDate','todayLocal','fillDailyPriceGaps','safeSetItem','VALID_TX_TYPES',
   'addDaysUTC','listDaysUTC','toEpochDay','fromEpochDay','dayKeyUTC','rangeCutoff',
-  'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp','txEffectOnWallet'];
+  'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp','txEffectOnWallet',
+  'txWalletDeltas','txPortfolioDelta','applyTxToCostPool','rewardPriceFor'];
 const fn = new Function(`${src}\nreturn {${exported.join(',')}};`);
 const H = fn();
 
@@ -228,6 +229,41 @@ ok(/^\d{4}-\d{2}-\d{2}$/.test(H.todayLocal()), 'todayLocal shape');
   eq(H.txEffectOnWallet(xfer, 'B'), 0.5, 'transfer destination receives amount');
   eq(H.txEffectOnWallet({ type:'Buy', wallet:'A', amount:'2' }, 'A'), 2, 'buy credits');
   eq(H.txEffectOnWallet({ type:'Consolidation', wallet:'A', fee:'0.0002' }, 'A'), -0.0002, 'consolidation costs only its fee');
+}
+
+// ── shared balance rules ────────────────────────────────────────────────────
+{
+  const out = { type:'Transfer', wallet:'A', wallet2:'', amount:'1', fee:'0.001' };
+  const inn = { type:'Transfer', wallet:'', wallet2:'B', amount:'0.5', fee:'0.001' };
+  const internal = { type:'Transfer', wallet:'A', wallet2:'B', amount:'1', fee:'0.001' };
+  eq(H.txWalletDeltas(out), [['A', -1.001]], 'outflow: only the source moves');
+  eq(H.txWalletDeltas(inn), [['B', 0.5]], 'inflow: only the destination moves');
+  eq(H.txWalletDeltas(internal, v => Math.round(Number(v||0)*1e8)), [['A', -100100000], ['B', 100000000]], 'deltas in sats');
+  eq(H.txPortfolioDelta(out), -1.001, 'outflow leaves the portfolio (was: only the fee, in the charts)');
+  eq(H.txPortfolioDelta(inn), 0.5, 'inflow joins the portfolio');
+  eq(+H.txPortfolioDelta(internal).toFixed(8), -0.001, 'internal transfer costs only the fee');
+  // The two views must agree whenever every end is named
+  for (const t of [out, internal, { type:'Buy', wallet:'A', amount:'2' }, { type:'Sell', wallet:'A', amount:'1' }, { type:'Consolidation', wallet:'A', fee:'0.0003' }]) {
+    const sum = H.txWalletDeltas(t).reduce((s, [, d]) => s + d, 0);
+    eq(+sum.toFixed(8), +H.txPortfolioDelta(t).toFixed(8), `wallet deltas sum to portfolio delta (${t.type} ${t.wallet}→${t.wallet2||''})`);
+  }
+
+  const prices = { '2024-03-01': 60000 };
+  eq(H.rewardPriceFor({ date:'2024-03-01' }, prices), 60000, 'reward valued at that day\'s close');
+  eq(H.rewardPriceFor({ date:'2024-03-01', price:'55000' }, prices), 55000, 'an entered price wins');
+  eq(H.rewardPriceFor({ date:'2010-01-01' }, prices), 0, 'no price known → 0, not NaN');
+
+  let p = { btc:0, cost:0 };
+  p = H.applyTxToCostPool(p, { type:'Buy', amount:'1', price:'50000', totalUsd:'50000', fee:'10' }, prices);
+  eq([p.btc, p.cost], [1, 50010], 'buy adds coins and cost incl. USD fee');
+  p = H.applyTxToCostPool(p, { type:'Reward', date:'2024-03-01', amount:'0.01' }, prices);
+  eq([p.btc, +p.cost.toFixed(2)], [1.01, 50610], 'reward adds its market value as basis');
+  const sold = H.applyTxToCostPool(p, { type:'Sell', amount:'0.01', price:'60000', totalUsd:'600' }, prices);
+  ok(Math.abs(sold.realized - (600 - 50610 * 0.01 / 1.01)) < 1e-6, 'sell realizes against the average cost');
+  const sent = H.applyTxToCostPool({ btc:2, cost:100000 }, out, prices);
+  eq([+sent.btc.toFixed(8), sent.cost, sent.realized], [0.999, 50000, 0], 'outflow takes its share of basis, realizes nothing');
+  eq(H.applyTxToCostPool({ btc:1, cost:50000 }, inn, prices), { btc:1, cost:50000, realized:0 }, 'inflow of unknown origin stays out of the pool');
+  eq(H.applyTxToCostPool({ btc:1, cost:50000 }, internal, prices).cost, 50000, 'internal transfer keeps the basis');
 }
 
 // ── nextCommitStamp ─────────────────────────────────────────────────────────

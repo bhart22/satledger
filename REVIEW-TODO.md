@@ -30,9 +30,9 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 - [x] CoinLedger import ignores fee currency
 
 ## Decisions needed
-- [ ] Unrealized P&L values excluded coins at $0 cost (value includes them, basis doesn't)
-- [ ] Rewards carry $0 cost basis but export as income at FMV
-- [ ] Transfer with no destination: holdings subtract amount, charts subtract only fee — pick one rule (and consolidate the 5 copies of balance logic)
+- [x] Unrealized P&L values excluded coins at $0 cost → decided: P&L only on coins with a cost basis; break-even uses the same pool
+- [x] Rewards carry $0 cost basis → decided: basis = market value on the day (entered price, else that day's close)
+- [x] Transfer with no destination → decided: outflow everywhere (pro-rata basis out, no realized P&L); balance rules consolidated into txWalletDeltas / txPortfolioDelta / applyTxToCostPool
 - [ ] Export "Date (UTC)" column is really local date
 
 ## Security
@@ -57,7 +57,7 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 - [ ] Keyboard shortcuts
 
 ## Tests to add
-- [~] Cost basis / P&L / holdings tests (sell-from-pool unit tests + oversell browser test added; P&L, holdings, stats still untested)
+- [x] Cost basis / P&L / holdings tests (shared balance-rule unit tests, oversell + excluded-P&L browser checks)
 - [x] CoinLedger export → import round-trip
 
 ## Progress log

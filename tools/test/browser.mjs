@@ -495,6 +495,26 @@ await wait(300);
 check('a transfer to the same wallet is refused', /two different wallets/i.test(await toastText()), await toastText());
 check('nothing was saved', await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).length === 1;`));
 
+// ── excluded coins are not counted as profit ─────────────────────────────────
+// Included buy 1 BTC @ $50k + excluded buy 1 BTC. Unrealized P&L used to be
+// (2 BTC × price) − $50k, treating the excluded coin as free money.
+console.log('\n[unrealized P&L ignores excluded coins]');
+await seed({ 'btc-tx-v2': [
+    tx({ amount:'1', price:'50000', totalUsd:'50000' }),
+    tx({ date:'2024-02-01', amount:'1', price:'40000', totalUsd:'40000', excludeStats:true }),
+  ], 'btc-wallets': WALLETS, 'btc-last-spot': { price: 70000, at: Date.now() } });
+await reload();
+await clickByText('Dashboard');
+await wait(1200);
+const pl = await evaluate(`
+  const money = s => Number(String(s).replace(/[^0-9.-]/g,''));
+  const pill = document.querySelector('.price-pill');
+  const c=[...document.querySelectorAll('.stat-card')].find(e=>/^\\s*Total P&L/i.test(e.querySelector('.stat-label')?.textContent||''));
+  return { price: pill ? money(pill.textContent) : null, pl: c ? money(c.querySelector('.stat-value').textContent) : null };`);
+check('price and P&L are shown', pl.price > 0 && pl.pl !== null, JSON.stringify(pl));
+check('P&L = 1 BTC × price − $50,000 (excluded coin not counted)',
+  Math.abs(pl.pl - (pl.price - 50000)) < 1, JSON.stringify(pl));
+
 // Offline price failures are expected in CI — they are warnings now, not errors
 const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e));
 if (unexpected.length) {
