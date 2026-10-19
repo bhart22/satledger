@@ -1,11 +1,11 @@
-// Extracts the pure-JS helper region from app.html — everything between the React hook
+// Extracts the pure-JS helper region from app.dev.html — everything between the React hook
 // destructuring and the SVG Icons block — and exercises it. There is no JSX in that range, so
 // it evaluates directly in node with no transpile step.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/harness.mjs';
 
-const html = readFileSync(join(REPO_ROOT, 'app.html'), 'utf8');
+const html = readFileSync(join(REPO_ROOT, 'app.dev.html'), 'utf8');
 const lines = html.split(/\r?\n/);
 const startIdx = lines.findIndex(l => l.includes('const { useState, useEffect'));
 const endIdx = lines.findIndex(l => l.includes('─── SVG Icons'));

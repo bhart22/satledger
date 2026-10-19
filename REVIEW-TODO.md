@@ -36,14 +36,14 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
 - [ ] Export "Date (UTC)" column is really local date
 
 ## Security
-- [ ] Tighten CSP (needs build step to drop `unsafe-inline`/`unsafe-eval`/all-of-unpkg)
-- [~] Clickjacking: frame-buster added; an HTTP `frame-ancestors 'none'` header is still the stronger fix if the host allows it
+- [x] Tighten CSP: built app.html pins script-src to inline-script hashes + exact CDN files (no unsafe-inline/unsafe-eval). Note: this blocks Cloudflare's injected "JavaScript detections" script (harmless unless a WAF rule uses js_detection)
+- [x] Clickjacking: frame-buster + `_headers` (Cloudflare Pages) with `frame-ancestors 'none'` and X-Frame-Options
 - [~] Vault: snapshot copy now replaced on change/delete and the UI says old backups and Drive revisions remain; change-passphrase still doesn't ask for the current one
 - [x] Load Google Identity script only when sync is used
 - [x] Wallet names as plain-object keys (`__proto__`); CSV Date column unguarded; vault inputs lack `autocomplete`
 
 ## Performance / mobile / a11y
-- [ ] Build step (esbuild) to drop in-browser Babel (~3 MB, ~2.5 s transform); boot watchdog can fire on slow phones
+- [x] Build step (esbuild): app.dev.html → app.html (273 KB, no Babel); version.json drives the update prompt
 - [x] iOS input zoom (<16px inputs). `viewport-fit=cover` deliberately not added: without it iOS already keeps content out of the unsafe areas
 - [~] Labels linked, toggles named, toast `aria-live` done; small touch targets and initial focus on Date still open
 - [x] Charts re-render on every keystroke in the transaction modal (DashboardCharts memoised, stable updateSettings)
@@ -86,3 +86,7 @@ Findings from the full-project review on 2026-10-18. `[x]` done, `[~]` partly do
   transfer needs two different wallets); all 20 form labels linked to their controls; toggles named;
   vault snapshot copy replaced on passphrase change and delete. New browser checks: label wiring,
   future-date and same-wallet refusal.
+- **2026-10-19**: `008b60b` memoised charts, `f4d1f91` calculation decisions, `7df9cc8` urgent service-worker
+  fix. Cloudflare Pages 308-redirects /app.html → /app, and SW v4 (from `dde93fd`) broke navigation to
+  /app.html. v5 is live and tools/test/sw.mjs reproduces the redirect. Then the build step: app.html is
+  now generated (edit app.dev.html), with `_headers` for Cloudflare and version.json for the update prompt.

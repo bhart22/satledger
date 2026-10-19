@@ -47,8 +47,8 @@ A personal Bitcoin portfolio tracker that runs entirely in your browser. No serv
 
 ## Tech Stack
 
-- **React 18** with Babel in-browser transpilation (version-pinned CDN scripts with SRI)
-- **Single HTML file** — No build step, no bundler, nothing to install to run it
+- **React 18** from version-pinned CDN scripts with SRI
+- **Single HTML file** — `app.dev.html` runs as-is (in-browser Babel); `npm run build` compiles it into the deployed `app.html`
 - **SVG charts** — Custom-built charting with no library dependencies
 - **Coinbase API** — Daily BTC-USD candles for historical price data
 - **Google Identity Services** — OAuth for optional Drive sync
@@ -56,15 +56,22 @@ A personal Bitcoin portfolio tracker that runs entirely in your browser. No serv
 
 ### Tests & optional tooling
 
-`app.html` runs as-is with no build step — nothing in `tools/` is needed to run or deploy the
-app. It exists so the money maths can be checked and the assets regenerated:
+**Edit `app.dev.html`, never `app.html`.** `app.dev.html` is the source and runs as-is in a browser
+(JSX is transpiled in-page by Babel), so day-to-day editing still needs no build. `app.html` is
+generated from it by `npm run build`: esbuild compiles the JSX ahead of time, so visitors skip the
+~3 MB Babel download and the multi-second transpile on every cold start, and the CSP can pin
+`script-src` to hashes instead of allowing `'unsafe-eval'`/`'unsafe-inline'`. The build also writes
+`version.json`, which lets open tabs offer a reload after a deploy. Commit `app.html` and
+`version.json` with every change; `npm test` fails if they are stale.
 
 ```bash
 npm install          # devDependencies only
 
+npm run build        # app.dev.html → app.html + version.json (commit both)
 npm run check        # parse the JSX block (a syntax error = blank page, so check first)
-npm test             # check + pure-function tests (dates, cost basis inputs, base64, MA oracle)
-npm run test:browser # end-to-end smoke test in headless Chrome
+npm test             # check + build is current + pure-function tests (balances, cost basis, CSV, MA oracle)
+npm run test:browser # end-to-end smoke test in headless Chrome (SATLEDGER_PAGE=app.dev.html for the source)
+npm run test:sw      # service worker behind Cloudflare-style redirects, online and offline
 npm run test:all     # everything
 
 npm run images       # regenerate the small logo variants from the full-res masters
@@ -72,14 +79,14 @@ npm run qr           # regenerate the Tip Jar QR PNGs (re-run if a tip address c
 ```
 
 `npm test` needs no browser and takes a couple of seconds. It extracts the pure helpers
-straight out of `app.html`, so there is no duplicated copy to drift, and it keeps the original
+straight out of `app.dev.html`, so there is no duplicated copy to drift, and it keeps the original
 naive moving-average implementation as an oracle to prove the fast version returns identical
 numbers. `npm run test:browser` drives real Chrome over the DevTools protocol — no Puppeteer —
 and skips cleanly if no browser is installed (set `CHROME_PATH` to point at one).
 
 ## Getting Started
 
-1. Open `index.html` in any modern browser — that's it
+1. Open `index.html` (or `app.dev.html`) in any modern browser — that's it
 2. Create your wallets in the **Wallets** tab
 3. Log transactions in the **Transactions** tab
 4. View your portfolio on the **Dashboard**
@@ -94,7 +101,12 @@ Click the **Sign in with Google** button in the header to enable cloud backup. Y
 
 SatLedger is currently hosted at [satledger.com](https://satledger.com).
 
-Since it's a single HTML file, you can also host it anywhere:
+It deploys automatically: Cloudflare Pages publishes the repository root from GitHub on every push
+to `main`, with no build command (the built `app.html` is committed). `_headers` sets the HTTP
+headers a `<meta>` tag can't, notably `frame-ancestors 'none'`. Pages also redirects `/app.html`
+to `/app`; the service worker is written for that, and `npm run test:sw` covers it.
+
+Since it's a static site, you can also host it anywhere:
 - GitHub Pages
 - Any static file host
 - Open locally from your filesystem

@@ -5,7 +5,9 @@
 //   npm run test:browser
 //
 // Skips cleanly (exit 0) if no Chrome/Edge is installed — set CHROME_PATH to point at one.
-import { launch, createChecks, findChrome } from './lib/harness.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { launch, createChecks, findChrome, REPO_ROOT } from './lib/harness.mjs';
 
 if (!(await findChrome())) {
   console.log('No Chrome/Edge found — skipping browser tests. Set CHROME_PATH to enable them.');
@@ -13,7 +15,7 @@ if (!(await findChrome())) {
 }
 
 const { evaluate, reload, wait, seed, press, close, errors } =
-  await launch({ page: 'app.html', port: 8791, debugPort: 9291, label: 'browser' });
+  await launch({ page: process.env.SATLEDGER_PAGE || 'app.html', port: 8791, debugPort: 9291, label: 'browser' });
 const { check, report } = createChecks();
 
 const tx = (o) => Object.assign({
@@ -514,6 +516,39 @@ const pl = await evaluate(`
 check('price and P&L are shown', pl.price > 0 && pl.pl !== null, JSON.stringify(pl));
 check('P&L = 1 BTC × price − $50,000 (excluded coin not counted)',
   Math.abs(pl.pl - (pl.price - 50000)) < 1, JSON.stringify(pl));
+
+// ── the built page's CSP blocks nothing it needs ─────────────────────────────
+// app.html pins script-src to hashes and exact URLs. A violation at boot would leave a blank
+// page (caught by every check above); this catches ones that only happen later, such as the
+// on-demand Google sign-in script.
+console.log('\n[content security policy]');
+await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS });
+await reload();
+await evaluate(`window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI)); return 1;`);
+for (const t of ['Transactions', 'Wallets', 'Export', 'Settings', 'Dashboard']) { await clickByText(t); await wait(300); }
+await evaluate(`GDriveSync.loadScript(); return 1;`);
+await wait(2500);
+const csp = await evaluate(`return window.__csp;`);
+check('no CSP violations after boot', csp.length === 0, JSON.stringify(csp));
+
+// ── a new deploy is announced ────────────────────────────────────────────────
+// Built page only: app.dev.html has no build id and skips the check.
+if (!process.env.SATLEDGER_PAGE || process.env.SATLEDGER_PAGE === 'app.html') {
+  console.log('\n[update available prompt]');
+  const versionPath = join(REPO_ROOT, 'version.json');
+  const original = readFileSync(versionPath, 'utf8');
+  await reload();
+  check('no prompt when version.json matches this build',
+    !/new version of SatLedger/i.test(await evaluate(`return document.body.innerText;`)));
+  try {
+    writeFileSync(versionPath, JSON.stringify({ build: 'a-newer-deploy' }) + '\n');
+    await reload();
+    check('prompt shown when a different build is deployed',
+      /new version of SatLedger/i.test(await evaluate(`return document.body.innerText;`)));
+  } finally {
+    writeFileSync(versionPath, original);
+  }
+}
 
 // Offline price failures are expected in CI — they are warnings now, not errors
 const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e));

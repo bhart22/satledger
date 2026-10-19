@@ -1,0 +1,18 @@
+# Cloudflare Pages response headers (https://developers.cloudflare.com/pages/configuration/headers/).
+# Pages reads this file at deploy time and does not serve it.
+
+/*
+  # A <meta> CSP cannot set frame-ancestors, so this is the only real protection against the
+  # app being framed and clicks steered through Force Push or Delete Vault. Combined with
+  # (not replacing) the page's own meta CSP. X-Frame-Options covers older browsers.
+  Content-Security-Policy: frame-ancestors 'none'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+
+# The service worker and the deploy-version probe must never be served stale
+/sw.js
+  Cache-Control: no-cache
+/version.json
+  Cache-Control: no-store

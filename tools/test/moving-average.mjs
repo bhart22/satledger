@@ -1,10 +1,10 @@
-// Extracts the rolling-sum buildMovingAverageSeries from app.html and compares it against a
+// Extracts the rolling-sum buildMovingAverageSeries from app.dev.html and compares it against a
 // verbatim copy of the original naive implementation, which is kept here as the oracle.
 // If you ever change the MA maths, this is what proves you didn't change the numbers.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { REPO_ROOT } from './lib/harness.mjs';
-const html = readFileSync(join(REPO_ROOT, 'app.html'), 'utf8');
+const html = readFileSync(join(REPO_ROOT, 'app.dev.html'), 'utf8');
 const m = html.match(/function buildMovingAverageSeries\(allDays\) \{[\s\S]*?\n\}/);
 if(!m) throw new Error('could not extract buildMovingAverageSeries');
 const rolling = new Function(`${m[0]}; return buildMovingAverageSeries;`)();
