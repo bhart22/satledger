@@ -28,7 +28,8 @@ const exported = ['normalizeDate','isRealDate','numOr','newTxId','ensureTxIds','
   'addDaysUTC','listDaysUTC','toEpochDay','fromEpochDay','dayKeyUTC','rangeCutoff',
   'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp','txEffectOnWallet',
   'txWalletDeltas','txPortfolioDelta','applyTxToCostPool','rewardPriceFor',
-  'compareTx','txInstant','migrateTxTimestamps','nextSequenceAt','localPartsToUtcIso','txToLocalParts','fmtTxDate','fmtUtcStamp'];
+  'compareTx','txInstant','migrateTxTimestamps','nextSequenceAt','localPartsToUtcIso','txToLocalParts','fmtTxDate','fmtUtcStamp',
+  'backfillRewardUsd','migrateRewardCategory','rewardUsdFromPrice','dailyClose','hasUsdValue','REWARD_CATEGORIES'];
 const fn = new Function(`${src}\nreturn {${exported.join(',')}};`);
 const H = fn();
 
@@ -322,6 +323,57 @@ ok(/^\d{4}-\d{2}-\d{2}$/.test(H.todayLocal()), 'todayLocal shape');
   eq(H.txToLocalParts(m[0]), { date:'2024-03-05', time:'' }, 'placeholder rows show their stored day and no time');
   eq(H.fmtTxDate(m[0]), '03/05/2024', 'placeholder rows display date only');
   eq(H.fmtTxDate({ date:'2025-06-15', datetimeUtc: iso }), '06/15/2025 08:07', 'timed rows display local date and time');
+}
+
+// ── Reward USD value: backfill, category default ────────────────────────────
+{
+  const prices = { '2025-01-01': 90000, '2025-01-02': 100000, '2025-01-03': 110000 };
+  const reward = (id, date, amount, extra = {}) => ({ id, date, type:'Reward', wallet:'Gemini', amount, ...extra });
+  eq(H.rewardUsdFromPrice('0.0001', 100000), '10.000000', 'amount × price, 6 decimals');
+  eq(H.rewardUsdFromPrice('0.00000180', 90000), '0.162000', 'tiny rewards keep their precision');
+  eq(H.rewardUsdFromPrice('0', 100000), '', 'zero amount has no value');
+  eq(H.rewardUsdFromPrice('0.1', 0), '', 'no price means no value');
+  eq(H.dailyClose(prices, '2025-01-02'), 100000, 'daily close lookup');
+  eq(H.dailyClose(prices, '2030-01-01'), 0, 'unknown day has no close');
+
+  const list = [
+    reward('a', '2025-01-01', '0.0001'),
+    reward('b', '2025-01-02', '0.0002', { usdValueAtReceipt:'25.00', usdValueSource:'manual' }),   // manual value
+    reward('c', '2025-01-03', '0.0001', { usdValueAtReceipt:'', usdValueSource:'manual' }),       // manual, left blank
+    reward('d', '2025-01-02', '0.0001', { usdValueAtReceipt:'7.00', usdValueSource:'price_lookup' }),
+    reward('e', '2025-06-01', '0.0001'),                                                         // no price that day
+    { id:'f', date:'2025-01-01', type:'Buy', amount:'1', price:'90000' },
+    reward('g', '2025-01-03', '0.0002'),
+  ];
+  const before = JSON.parse(JSON.stringify(list));
+  const r1 = H.backfillRewardUsd(list, prices);
+  eq(list, before, 'backfill does not mutate its input');
+  eq(r1.summary, { count:2, totalUsd:31, firstDate:'2025-01-01', lastDate:'2025-01-03', skippedHasValue:1, skippedManual:2, skippedNoPrice:1 }, 'dry-run summary: count, total USD, date range');
+  eq(r1.txs.filter(t => t.usdValueSource === 'estimated_backfill').map(t => t.id), ['a','g'], 'only the unvalued rewards are filled');
+  eq([r1.txs[0].usdValueAtReceipt, r1.txs[6].usdValueAtReceipt], ['9.000000','22.000000'], 'value = amount × that day\'s close');
+  eq([r1.txs[1], r1.txs[2], r1.txs[3]], [list[1], list[2], list[3]], 'manual and existing values are never overwritten');
+  eq(r1.txs[4], list[4], 'a reward with no price is left as it was');
+  eq(r1.txs[5], list[5], 'non-reward rows are untouched');
+  // idempotent
+  const r2 = H.backfillRewardUsd(r1.txs, prices);
+  ok(r2.txs === r1.txs, 'second run returns the same array');
+  eq(r2.summary.count, 0, 'second run fills nothing');
+  // a later run with different prices still can't move an estimated value or a manual one
+  const r3 = H.backfillRewardUsd(r1.txs, { ...prices, '2025-01-01': 1, '2025-01-03': 1 });
+  ok(r3.txs === r1.txs, 'changed prices do not rewrite estimated values');
+  // a price that arrives later fills only the row that was missing it
+  const r4 = H.backfillRewardUsd(r1.txs, { ...prices, '2025-06-01': 50000 });
+  eq(r4.txs.filter(t => t.usdValueSource === 'estimated_backfill').map(t => t.id), ['a','e','g'], 'a newly priced day is filled on a later run');
+  eq([r4.txs[0], r4.txs[6]], [r1.txs[0], r1.txs[6]], '...without touching the rows already filled');
+  // reward rows with a numeric stored value count as having one
+  ok(H.hasUsdValue({ usdValueAtReceipt:'0' }), 'a stored zero is a value, not a blank');
+  ok(!H.hasUsdValue({ usdValueAtReceipt:'' }) && !H.hasUsdValue({}), 'blank and missing are not values');
+
+  // category default
+  const cat = H.migrateRewardCategory([reward('a','2025-01-01','1'), reward('b','2025-01-01','1',{ rewardCategory:'interest' }),
+    reward('c','2025-01-01','1',{ rewardCategory:'bogus' }), { id:'d', date:'2025-01-01', type:'Buy', amount:'1' }]);
+  eq(cat.map(t => t.rewardCategory), ['cash_back','interest','cash_back', undefined], 'existing rewards default to cash_back; a chosen category is kept; non-rewards get none');
+  ok(H.migrateRewardCategory(cat) === cat, 'category migration is idempotent');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

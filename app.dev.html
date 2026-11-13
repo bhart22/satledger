@@ -1269,6 +1269,57 @@ const migrateTxTimestamps = list => {
     return { ...tx, sequence: next };
   });
 };
+// ─── Reward USD value and category ──────────────────────────────────────────────────────
+// Reward rows (the "Income" rows of the CoinLedger export) carry the USD value they were worth
+// when received, how that value was arrived at, and a category. These fields feed the app's own
+// lot math only: CoinLedger's income import has no USD column, so the export is unchanged.
+const REWARD_CATEGORIES = ['cash_back','referral','interest','other'];
+const USD_VALUE_SOURCES = ['manual','price_lookup','estimated_backfill'];
+const REWARD_CATEGORY_LABELS = { cash_back:'Cash back', referral:'Referral', interest:'Interest', other:'Other' };
+const USD_VALUE_SOURCE_LABELS = { manual:'entered by hand', price_lookup:'daily close at receipt', estimated_backfill:'estimated (backfilled from the daily close)' };
+const hasUsdValue = tx => !!tx && String(tx.usdValueAtReceipt ?? '').trim() !== '' && Number.isFinite(parseFloat(tx.usdValueAtReceipt));
+// Stored with 6 decimals: a reward is often a few hundred sats, so cent rounding would
+// distort the basis by a visible share of the row.
+const rewardUsdFromPrice = (amount, price) => {
+  const a = numOr(amount, 0), p = numOr(price, 0);
+  return a > 0 && p > 0 ? (a * p).toFixed(6) : '';
+};
+// The one price source: Coinbase Exchange BTC-USD daily close, keyed by UTC day, as the app's
+// price cache already holds it. The prices argument is that day → close map.
+const dailyClose = (prices, day) => { const p = numOr(prices && prices[day], 0); return p > 0 ? p : 0; };
+// Existing Reward rows default to cash_back (exceptions are fixed by hand). Returns the SAME
+// array when every Reward row already has a valid category.
+const migrateRewardCategory = list => {
+  if(!Array.isArray(list)) return [];
+  const needs = tx => tx && tx.type === 'Reward' && !REWARD_CATEGORIES.includes(tx.rewardCategory);
+  if(!list.some(needs)) return list;
+  return list.map(tx => needs(tx) ? { ...tx, rewardCategory: 'cash_back' } : tx);
+};
+// One-time, idempotent backfill. Fills usdValueAtReceipt = amount × that UTC day's close, with
+// source estimated_backfill, ONLY on Reward rows that have no value. Never touches a row that
+// already has a value, and never a row whose source is 'manual' (even one left blank).
+// Pure: returns { txs, summary }; txs is the same array when nothing was filled, so a second
+// run is a no-op. The summary is what a dry run prints.
+const backfillRewardUsd = (list, prices) => {
+  const summary = { count: 0, totalUsd: 0, firstDate: null, lastDate: null, skippedHasValue: 0, skippedManual: 0, skippedNoPrice: 0 };
+  if(!Array.isArray(list)) return { txs: [], summary };
+  const out = list.map(tx => {
+    if(!tx || tx.type !== 'Reward') return tx;
+    if(tx.usdValueSource === 'manual') { summary.skippedManual++; return tx; }
+    if(hasUsdValue(tx)) { summary.skippedHasValue++; return tx; }
+    const t = txInstant(tx);
+    const day = Number.isFinite(t) ? dayKeyUTC(t) : '';
+    const value = rewardUsdFromPrice(tx.amount, day ? dailyClose(prices, day) : 0);
+    if(!value) { summary.skippedNoPrice++; return tx; }
+    summary.count++;
+    summary.totalUsd += parseFloat(value);
+    if(summary.firstDate === null || day < summary.firstDate) summary.firstDate = day;
+    if(summary.lastDate === null || day > summary.lastDate) summary.lastDate = day;
+    return { ...tx, usdValueAtReceipt: value, usdValueSource: 'estimated_backfill' };
+  });
+  summary.totalUsd = Math.round(summary.totalUsd * 100) / 100;
+  return { txs: summary.count ? out : list, summary };
+};
 // Form ↔ storage. The form edits LOCAL date and time; storage keeps UTC to the minute.
 const localPartsToUtcIso = (date, time) => {
   const d = normalizeDate(date);
@@ -3265,7 +3316,7 @@ const loadStoredArray = (key, fallback) => {
 // and blank the whole app, but discarding the row would be data loss.
 // Numeric fields arrive as numbers from hand-edited backups and other tools; the UI calls
 // string methods on them (search used to crash on `amount.includes`).
-const TX_STRING_FIELDS = ['amount','price','fee','totalUsd','wallet','wallet2','notes','txhash'];
+const TX_STRING_FIELDS = ['amount','price','fee','totalUsd','wallet','wallet2','notes','txhash','usdValueAtReceipt'];
 const sanitizeStoredTransactions = list => list.map(tx => {
   if(!tx || typeof tx !== 'object') return { date:'', type:'Buy', amount:'' };
   let out = tx;
@@ -3279,8 +3330,8 @@ const sanitizeStoredTransactions = list => list.map(tx => {
   return out;
 });
 
-// Sanitize, de-duplicate ids, then fill datetimeUtc/sequence on rows that predate them
-const prepareTransactions = list => migrateTxTimestamps(ensureTxIds(sanitizeStoredTransactions(list)));
+// Sanitize, de-duplicate ids, fill datetimeUtc/sequence on rows that predate them, and default reward categories
+const prepareTransactions = list => migrateRewardCategory(migrateTxTimestamps(ensureTxIds(sanitizeStoredTransactions(list))));
 
 // Every keystroke in the transaction modal re-renders App (the form state lives there), and
 // with it every chart: RSI segments and MA paths over thousands of points, rebuilt per key.
@@ -3418,7 +3469,7 @@ function App() {
   const [wizardEdits, setWizardEdits] = useState({}); // idx -> {wallet, wallet2, skip}
   const [form, setForm] = useState(() => {
     const defType = (() => { try { const s=localStorage.getItem('btc-settings'); return s ? JSON.parse(s).defaultTxType||'Buy' : 'Buy'; } catch { return 'Buy'; } })();
-    return { date: todayLocal(), time: nowTimeLocal(), sequence:'', type:defType, wallet:'', wallet2:'', amount:'', price:'', fee:'', totalUsd:'', notes:'', txhash:'', excludeStats:false };
+    return { date: todayLocal(), time: nowTimeLocal(), sequence:'', usdValueAtReceipt:'', usdValueSource:'', rewardCategory:'cash_back', type:defType, wallet:'', wallet2:'', amount:'', price:'', fee:'', totalUsd:'', notes:'', txhash:'', excludeStats:false };
   });
   const [editId, setEditId] = useState(null); // a transaction id, not an array index
   const [editWalletTarget, setEditWalletTarget] = useState(null);
@@ -3517,7 +3568,7 @@ function App() {
   const hasDashboardWalletFilter = selectedDashboardWallets.length > 0;
 
   function emptyForm() {
-    return { date: todayLocal(), time: nowTimeLocal(), sequence:'', type:settings.defaultTxType||'Buy', wallet:'', wallet2:'', amount:'', price:'', fee:'', totalUsd:'', notes:'', txhash:'', excludeStats:false };
+    return { date: todayLocal(), time: nowTimeLocal(), sequence:'', usdValueAtReceipt:'', usdValueSource:'', rewardCategory:'cash_back', type:settings.defaultTxType||'Buy', wallet:'', wallet2:'', amount:'', price:'', fee:'', totalUsd:'', notes:'', txhash:'', excludeStats:false };
   }
   const lockVault = React.useCallback(() => {
     vaultPassphraseRef.current = '';
@@ -4587,6 +4638,20 @@ function App() {
   const paged = filtered.slice((page-1)*PAGE_SIZE, page*PAGE_SIZE);
   const totalPages = Math.max(1, Math.ceil(filtered.length/PAGE_SIZE));
 
+  // Reward USD value: filled from the daily close at the entered date unless it was typed by hand.
+  // A saved value is only recomputed when its inputs change, and never replaced by an empty
+  // lookup, so opening an old row to edit it can't alter what it already holds.
+  useEffect(() => {
+    if(!showModal || form.type !== 'Reward' || form.usdValueSource === 'manual') return;
+    const iso = localPartsToUtcIso(form.date, form.time);
+    if(!iso) return;
+    const day = iso.slice(0,10);
+    const price = dailyClose(historicalPrices, day) || (day === dayKeyUTC(Date.now()) ? numOr(btcPrice, 0) : 0);
+    const v = rewardUsdFromPrice(form.amount, price);
+    if(v && v !== (form.usdValueAtReceipt||'')) setForm(f => ({ ...f, usdValueAtReceipt: v, usdValueSource: 'price_lookup' }));
+    else if(!v && editId === null && form.usdValueAtReceipt) setForm(f => ({ ...f, usdValueAtReceipt: '', usdValueSource: '' }));
+  }, [showModal, form.type, form.date, form.time, form.amount, form.usdValueSource, historicalPrices, btcPrice, editId]);
+
   // ─── CRUD ─────────────────────────────────────────────────────────────────
   const handleSubmit = () => {
     const formDate = normalizeDate(form.date);
@@ -4618,15 +4683,24 @@ function App() {
     const feeN = parseOptional(form.fee, 'Fee');       if(feeN === undefined) return;
     const priceN = parseOptional(form.price, 'Price'); if(priceN === undefined) return;
     const usdN = parseOptional(form.totalUsd, 'Total USD'); if(usdN === undefined) return;
+    if(form.type==='Reward') { const rv = parseOptional(form.usdValueAtReceipt, 'USD value'); if(rv === undefined) return; }
     if((form.type==='Buy'||form.type==='Sell') && priceN === null && usdN === null) {
       showToast('Price or Total USD is required for Buy/Sell'); return;
     }
 
-    const { time: _formTime, sequence: _formSeq, ...formRest } = form;
+    const { time: _formTime, sequence: _formSeq, usdValueAtReceipt: _fUsd, usdValueSource: _fSrc, rewardCategory: _fCat, ...formRest } = form;
     const finalForm = {
       ...formRest,
       date,
       datetimeUtc,
+      ...(form.type === 'Reward' ? (() => {
+        const hasValue = String(form.usdValueAtReceipt ?? '').trim() !== '';
+        return {
+          rewardCategory: REWARD_CATEGORIES.includes(form.rewardCategory) ? form.rewardCategory : 'cash_back',
+          usdValueAtReceipt: hasValue ? String(form.usdValueAtReceipt).trim() : '',
+          usdValueSource: hasValue ? (USD_VALUE_SOURCES.includes(form.usdValueSource) ? form.usdValueSource : 'manual') : '',
+        };
+      })() : {}),
       sequence: (() => {
         const typed = String(form.sequence ?? '').trim();
         const n = typed === '' ? NaN : parseInt(typed, 10);
@@ -4706,12 +4780,12 @@ function App() {
 
   // Closing the transaction modal used to silently throw away a half-filled form — including
   // via a stray backdrop click. Confirm first, but only when there's actually something to lose.
-  const TX_FORM_FIELDS = ['date','time','sequence','type','wallet','wallet2','amount','price','fee','totalUsd','notes','txhash'];
+  const TX_FORM_FIELDS = ['date','time','sequence','usdValueAtReceipt','rewardCategory','type','wallet','wallet2','amount','price','fee','totalUsd','notes','txhash'];
   const isTxFormDirty = () => {
     if(editId !== null) {
       const orig = transactions.find(t => t.id === editId);
       if(!orig) return false;
-      const origForm = { ...orig, ...txToLocalParts(orig), sequence: Number.isFinite(parseInt(orig.sequence,10)) ? String(parseInt(orig.sequence,10)) : '' };
+      const origForm = { ...orig, ...txToLocalParts(orig), usdValueAtReceipt: orig.usdValueAtReceipt||'', rewardCategory: REWARD_CATEGORIES.includes(orig.rewardCategory) ? orig.rewardCategory : 'cash_back', sequence: Number.isFinite(parseInt(orig.sequence,10)) ? String(parseInt(orig.sequence,10)) : '' };
       return TX_FORM_FIELDS.some(k => String(form[k] ?? '') !== String(origForm[k] ?? ''))
         || !!form.excludeStats !== !!orig.excludeStats;
     }
@@ -4736,7 +4810,7 @@ function App() {
     const amtN = numOr(tx.amount, null), priceN = numOr(tx.price, null);
     const totalUsd = tx.totalUsd || ((amtN !== null && priceN !== null) ? (amtN*priceN).toFixed(2) : '');
     const parts = txToLocalParts(tx);
-    setForm({...tx, ...parts, sequence: Number.isFinite(parseInt(tx.sequence,10)) ? String(parseInt(tx.sequence,10)) : '', totalUsd});
+    setForm({...tx, ...parts, usdValueAtReceipt: tx.usdValueAtReceipt||'', usdValueSource: tx.usdValueSource||'', rewardCategory: REWARD_CATEGORIES.includes(tx.rewardCategory) ? tx.rewardCategory : 'cash_back', sequence: Number.isFinite(parseInt(tx.sequence,10)) ? String(parseInt(tx.sequence,10)) : '', totalUsd});
     setEditId(tx.id ?? null);
     setShowModal(true);
   };
@@ -4744,10 +4818,10 @@ function App() {
   // wallet and amount. Dated today; the txhash is cleared because it identifies one on-chain
   // transaction and can't repeat.
   const handleDuplicate = tx => {
-    const { id, txhash, datetimeUtc: _dt, sequence: _sq, ...rest } = tx;
+    const { id, txhash, datetimeUtc: _dt, sequence: _sq, usdValueAtReceipt: _uv, usdValueSource: _us, ...rest } = tx;
     const amtN = numOr(tx.amount, null), priceN = numOr(tx.price, null);
     const totalUsd = tx.totalUsd || ((amtN !== null && priceN !== null) ? (amtN*priceN).toFixed(2) : '');
-    setForm({...emptyForm(), ...rest, totalUsd, txhash:'', date: todayLocal(), time: nowTimeLocal(), sequence: ''});
+    setForm({...emptyForm(), ...rest, totalUsd, txhash:'', date: todayLocal(), time: nowTimeLocal(), sequence: '', usdValueAtReceipt:'', usdValueSource:'', rewardCategory: REWARD_CATEGORIES.includes(tx.rewardCategory) ? tx.rewardCategory : 'cash_back'});
     setEditId(null);
     setShowModal(true);
   };
@@ -4889,6 +4963,31 @@ function App() {
   // ─── Export CoinLedger CSV ────────────────────────────────────────────────
   // Wallets tracked via external API (e.g. Coinbase) — skip Withdrawal row for these,
   // only emit the Deposit on the receiving side. Configurable in Settings.
+  // Dry run first: the confirm dialog IS the dry-run summary, and nothing changes until Apply.
+  const handleBackfillRewards = () => {
+    if(historicalPriceLoading || !Object.keys(historicalPrices).length) { showToast('BTC price history is still loading — try again in a moment'); return; }
+    const { summary } = backfillRewardUsd(transactionsRef.current, historicalPrices);
+    if(!summary.count) {
+      showToast(summary.skippedNoPrice ? `Nothing to fill — ${summary.skippedNoPrice} reward${summary.skippedNoPrice===1?'':'s'} have no price for their date yet` : 'Every reward already has a USD value');
+      return;
+    }
+    setConfirmDialog({
+      title: 'Backfill reward USD values?',
+      message: `${summary.count} reward${summary.count===1?'':'s'} with no USD value would be filled from the daily close, ${fmtDate(summary.firstDate)} – ${fmtDate(summary.lastDate)}, totalling ${fmtUSD(summary.totalUsd)}, marked as estimated. Values you entered yourself (${summary.skippedManual + summary.skippedHasValue} row${summary.skippedManual + summary.skippedHasValue===1?'':'s'}) are never changed.`,
+      confirmLabel: 'Apply',
+      danger: false,
+      confirmIcon: false,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        // Recompute on the live list: a sync may have landed since the summary was shown
+        const live = backfillRewardUsd(transactionsRef.current, historicalPrices);
+        if(live.txs === transactionsRef.current) { showToast('Nothing to fill'); return; }
+        setTransactions(live.txs); save(live.txs, walletsRef.current);
+        showToast(`Filled ${live.summary.count} reward USD value${live.summary.count===1?'':'s'}`);
+      },
+    });
+  };
+
   const exportCSV = (yearFilter) => {
     const headers = ['Date (UTC)','Platform (Optional)','Asset Sent','Amount Sent','Asset Received','Amount Received','Fee Currency (Optional)','Fee Amount (Optional)','Type','Description (Optional)','TxHash (Optional)'];
     const src = [...(yearFilter ? transactions.filter(t=>t.date.startsWith(yearFilter)) : transactions)];
@@ -5932,6 +6031,15 @@ function App() {
                     {Icon.Download({width:14,height:14})} Download Full Backup
                   </button>
                 </div>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:'1rem',marginTop:'1.25rem',paddingTop:'1.25rem',borderTop:'1px solid var(--border-color)'}}>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontSize:'.9375rem',fontWeight:600,marginBottom:'.25rem'}}>Backfill Reward USD Values</div>
+                    <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',lineHeight:1.6}}>
+                      Fill the USD value at receipt on rewards that have none, from the daily close, marked as estimated. Shows a summary first. Values you entered are never overwritten.
+                    </div>
+                  </div>
+                  <button className="btn btn-secondary" onClick={handleBackfillRewards}>Backfill…</button>
+                </div>
               </div>
             </div>
 
@@ -6567,6 +6675,22 @@ function App() {
                       </div>
                     </div>
                   )}
+                  {form.type==='Reward' && (<>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="tx-usd-value">USD value at receipt</label>
+                      <input id="tx-usd-value" className="form-input" type="number" min="0" step="any" placeholder="auto" value={form.usdValueAtReceipt||''}
+                        onChange={e=>setForm({...form, usdValueAtReceipt:e.target.value, usdValueSource: e.target.value==='' ? '' : 'manual'})}/>
+                      <div style={{fontSize:'.6875rem',color:'var(--text-tertiary)',marginTop:'.25rem'}}>
+                        {form.usdValueSource ? USD_VALUE_SOURCE_LABELS[form.usdValueSource] : 'Filled from the daily close once the date and amount are set'}
+                      </div>
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label" htmlFor="tx-reward-cat">Reward category</label>
+                      <select id="tx-reward-cat" className="form-select" value={form.rewardCategory||'cash_back'} onChange={e=>setForm({...form,rewardCategory:e.target.value})}>
+                        {REWARD_CATEGORIES.map(c => <option key={c} value={c}>{REWARD_CATEGORY_LABELS[c]}</option>)}
+                      </select>
+                    </div>
+                  </>)}
                   <div className="form-group full">
                     <label className="form-label" htmlFor="tx-hash">TxHash (optional)</label>
                     <input id="tx-hash" className="form-input" placeholder="On-chain transaction hash" value={form.txhash} onChange={e=>setForm({...form,txhash:e.target.value})} style={{fontFamily:'JetBrains Mono',fontSize:'.75rem'}}/>
