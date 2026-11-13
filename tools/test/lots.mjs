@@ -2,7 +2,7 @@
 import { loadAppHelpers } from '../lib/app-helpers.mjs';
 
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
-  'txWalletDeltas','toSatsInt','backfillRewardUsd']);
+  'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -140,6 +140,52 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   ok(H.isLongTerm(acq, Date.parse('2024-03-10T08:00:00.001Z')), 'one millisecond past a year is long term');
   ok(!H.isLongTerm(acq, Date.parse('2023-12-31T00:00:00.000Z')), 'under a year is short term');
   ok(!H.isLongTerm(Date.parse('2024-02-29T00:00:00.000Z'), Date.parse('2025-02-28T23:59:59.000Z')), 'a leap-day acquisition rolls to 1 March');
+}
+
+// ── harvest view ─────────────────────────────────────────────────────────────
+{
+  const NOW = Date.parse('2026-11-13T00:00:00.000Z');
+  const txs = [
+    buy('2023-01-10T10:00:00.000Z', 'Bitkey', '1', 70000),                                   // $70k/BTC, long term
+    buy('2026-05-01T10:00:00.000Z', 'Bitkey', '0.5', 40000),                                 // $80k/BTC, short term
+    reward('2026-06-01T10:00:00.000Z', 'Bitkey', '0.001', { usdValueAtReceipt: '90', usdValueSource: 'estimated_backfill' }),  // $90k/BTC, estimated
+    buy('2026-07-01T10:00:00.000Z', 'Bitkey', '1', 60000),                                   // exactly the price: not a loss
+    buy('2026-07-02T10:00:00.000Z', 'Bitkey', '1', 30000),                                   // below the price
+    buy('2026-08-01T10:00:00.000Z', 'Bitkey', '3', 900000, { excludeStats: true }),          // no basis: never listed
+    buy('2024-01-01T10:00:00.000Z', 'Cold', '0.25', 20000),                                  // $80k/BTC, moves to Bitkey
+    buy('2025-01-01T10:00:00.000Z', 'Cold', '1', 500000),                                    // other wallet, stays
+    xfer('2024-02-01T10:00:00.000Z', 'Cold', 'Bitkey', '0.25', '', { sequence: 1 }),
+  ];
+  // HIFO in Cold would move the $500k lot, so make Cold FIFO to move the $80k one
+  const built = H.buildLots(txs, { methodFor: w => w === 'Cold' ? 'FIFO' : 'HIFO' });
+  const { rows, summary } = H.harvestLots(built.lots, { wallet: 'Bitkey', price: 60000, nowMs: NOW });
+  eq(rows.map(r => r.basisPerBtc), [90000, 80000, 80000, 70000], 'sorted by cost per BTC, highest first; the lot AT the price and below it are left out');
+  eq(rows.map(r => r.type), ['Reward', 'Buy', 'Buy', 'Buy'], 'lot type');
+  eq(rows[1].platform, 'Cold', 'a transferred lot keeps its original platform');
+  eq(rows[1].acquiredAt < rows[2].acquiredAt, true, 'equal cost: older lot first');
+  eq(rows.map(r => r.longTerm), [false, true, false, true], 'LT/ST from the acquisition datetime (the transferred lot stays long term)');
+  eq(rows.map(r => r.estimated), [true, false, false, false], 'estimated flag carries through');
+  eq(rows.map(r => r.sats), [100000, 25000000, 50000000, 100000000], 'sats');
+  eq(rows.map(r => r.runningSats), [100000, 25100000, 75100000, 175100000], 'running BTC total, in sats');
+  eq(rows.map(r => Math.round(r.lossUsd * 100) / 100), [30, 5000, 10000, 10000], 'est. loss at the price');
+  eq(summary, {
+    lotCount: 4, totalSats: 175100000, totalBtc: 1.751, totalBasisUsd: 130090, totalLossUsd: 25030,
+    longTerm: { lots: 2, sats: 125000000, lossUsd: 15000 }, shortTerm: { lots: 2, sats: 50100000, lossUsd: 10030 }, estimatedLots: 1,
+  }, 'summary: lot count, BTC/sats, basis, loss split LT/ST');
+  eq(H.harvestLots(built.lots, { wallet: 'Bitkey', price: 50000, nowMs: NOW }).summary.lotCount, 5, 'a lower price lists more lots (the no-basis lot still never appears)');
+  eq(H.harvestLots(built.lots, { wallet: 'Bitkey', price: 0, nowMs: NOW }).rows, [], 'no price, no list');
+  eq(H.harvestLots(built.lots, { wallet: 'Nowhere', price: 60000, nowMs: NOW }).summary.lotCount, 0, 'an empty wallet lists nothing');
+  eq(H.harvestLots(built.lots, { wallet: 'Bitkey', price: 60000, nowMs: Date.parse('2024-01-10T10:00:00.000Z') }).rows.find(r => r.sats === 1e8 && r.basisPerBtc === 70000).longTerm, false,
+    'long/short term is judged as of "now"');
+
+  // CSV
+  const csv = H.harvestCsv(rows, { wallet: 'Bitkey', price: 60000, generatedAtMs: NOW }).split('\r\n');
+  eq(csv[0], '"Wallet: Bitkey","BTC price (USD): 60000.00","Generated (UTC): 2026-11-13 00:00:00"', 'header line: wallet, price, generated-at (UTC)');
+  eq(csv[1].split('","').length, 11, 'column header row has the 11 columns');
+  eq(csv.length, 2 + rows.length, 'one row per lot');
+  eq(csv[2], '"2026-06-01 10:00:00","Bitkey","Reward","0.00100000","100000","90000.00","90.00","30.00","ST","0.00100000","yes"', 'a row: UTC acquired time, platform, type, BTC, sats, basis/BTC, basis, loss, term, running BTC, estimated');
+  const evil = H.harvestCsv([{ ...rows[0], platform: '=HYPERLINK("x")' }], { wallet: 'Bitkey', price: 60000, generatedAtMs: NOW }).split('\r\n')[2];
+  ok(evil.includes(`,"'=HYPERLINK(""x"")",`), 'a formula-looking platform name is neutralised in the CSV');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

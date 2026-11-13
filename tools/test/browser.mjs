@@ -577,6 +577,40 @@ check('"n" opens the Add Transaction form', await evaluate(`return /Add/.test(do
 await press('Escape', 'Escape');
 await wait(400);
 
+// ── harvest view and the new transaction fields ──────────────────────────────
+console.log('\n[harvest]');
+await seed({
+  'btc-tx-v2': [
+    tx({ id:'h1', date:'2024-01-01', datetimeUtc:'2024-01-01T12:00:00.000Z', sequence:1, wallet:'Bitkey', amount:'1', price:'100000', totalUsd:'100000' }),
+    tx({ id:'h2', date:'2024-02-01', datetimeUtc:'2024-02-01T12:00:00.000Z', sequence:1, wallet:'Bitkey', amount:'1', price:'30000', totalUsd:'30000' }),
+  ],
+  'btc-wallets': [{ id:'w9', name:'Bitkey', type:'Wallet', address:'' }, ...WALLETS],
+  'btc-last-modified': '2024-01-01T00:00:00.000Z',
+});
+await reload();
+await clickByText('Harvest');
+await wait(600);
+check('Harvest defaults to the Bitkey wallet', await evaluate(`return document.getElementById('harvest-wallet')?.value === 'Bitkey';`));
+await setField('harvest-price', '60000');
+await wait(300);
+const harvestRows = await evaluate(`return [...document.querySelectorAll('.table-wrap tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
+check('only the lot costing more than the price is listed', harvestRows.length === 1 && /100,000\.00/.test(harvestRows[0]), JSON.stringify(harvestRows));
+check('its loss at the price is shown', /\$40,000\.00/.test(harvestRows[0] || ''), JSON.stringify(harvestRows));
+check('the summary counts one lot', await evaluate(`return /lots to sell\\s*1\\b/i.test(document.body.innerText.replace(/\\n+/g,' '));`));
+await setField('harvest-price', '20000');
+await wait(300);
+check('a lower price lists both lots', (await evaluate(`return document.querySelectorAll('.table-wrap tbody tr').length;`)) === 2);
+// the transaction form has the new fields
+await evaluate(`document.activeElement && document.activeElement.blur(); window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',bubbles:true})); return 1;`);
+await wait(500);
+check('the form has Time and Sequence', await evaluate(`return !!document.getElementById('tx-time') && !!document.getElementById('tx-seq');`));
+check('time defaults to now (hh:mm)', await evaluate(`return /^\\d{2}:\\d{2}$/.test(document.getElementById('tx-time').value);`));
+await setField('tx-type', 'Reward');
+await wait(300);
+check('Reward shows the USD value and category fields', await evaluate(`return !!document.getElementById('tx-usd-value') && !!document.getElementById('tx-reward-cat');`));
+await press('Escape', 'Escape');
+await wait(400);
+
 // ── a new deploy is announced ────────────────────────────────────────────────
 // Built page only: app.dev.html has no build id and skips the check.
 if (!process.env.SATLEDGER_PAGE || process.env.SATLEDGER_PAGE === 'app.html') {

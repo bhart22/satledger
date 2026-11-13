@@ -1467,6 +1467,59 @@ const buildLots = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_ME
   }
   return { lots, balancesSats, disposals, warnings };
 };
+// ─── Harvest ─────────────────────────────────────────────────────────────────────────
+// The lots in one wallet whose basis per BTC is above a price, highest cost first: the coins
+// that would realize a loss if sold at that price. Lots with no known basis are never listed.
+// Long/short term is judged as of `nowMs` (the sale would happen now).
+const harvestLots = (lots, { wallet, price, nowMs }) => {
+  const p = numOr(price, 0);
+  const rows = (lots || [])
+    .filter(l => l.wallet === wallet && l.sats > 0 && !l.noBasis && p > 0 && l.basisUsd / (l.sats / 1e8) > p)
+    .map(l => {
+      const btc = l.sats / 1e8;
+      return {
+        lotId: l.id, acquiredAt: l.acquiredAt, platform: l.platform || '', type: l.type, rewardCategory: l.rewardCategory,
+        sats: l.sats, btc, basisPerBtc: l.basisUsd / btc, basisUsd: l.basisUsd,
+        lossUsd: l.basisUsd - btc * p, longTerm: isLongTerm(l.acquiredAt, nowMs), estimated: !!l.estimated,
+      };
+    })
+    .sort((a, b) => b.basisPerBtc - a.basisPerBtc || a.acquiredAt - b.acquiredAt);
+  let running = 0;
+  for(const r of rows) { running += r.sats; r.runningSats = running; r.runningBtc = running / 1e8; }
+  const cents = n => Math.round(n * 100) / 100;
+  const sum = (list, f) => list.reduce((n, r) => n + f(r), 0);
+  const lt = rows.filter(r => r.longTerm), st = rows.filter(r => !r.longTerm);
+  return {
+    rows,
+    summary: {
+      lotCount: rows.length, totalSats: running, totalBtc: running / 1e8,
+      totalBasisUsd: cents(sum(rows, r => r.basisUsd)), totalLossUsd: cents(sum(rows, r => r.lossUsd)),
+      longTerm: { lots: lt.length, sats: sum(lt, r => r.sats), lossUsd: cents(sum(lt, r => r.lossUsd)) },
+      shortTerm: { lots: st.length, sats: sum(st, r => r.sats), lossUsd: cents(sum(st, r => r.lossUsd)) },
+      estimatedLots: rows.filter(r => r.estimated).length,
+    },
+  };
+};
+// "Export identification list": a header line (wallet, price, generated-at in UTC), the column
+// names, then one row per lot. The free-text Platform cell is guarded against spreadsheet formulas.
+const HARVEST_CSV_COLUMNS = ['Acquired (UTC)','Original Platform','Lot Type','BTC','Sats','Basis per BTC (USD)','Basis (USD)','Est. Loss at Price (USD)','Term','Running BTC','Estimated'];
+const harvestCsv = (rows, { wallet, price, generatedAtMs }) => {
+  const cell = (v, guard) => {
+    let t = v == null ? '' : String(v);
+    if(guard && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
+  const lines = [
+    [cell('Wallet: ' + wallet), cell('BTC price (USD): ' + numOr(price).toFixed(2)), cell('Generated (UTC): ' + fmtUtcStamp(generatedAtMs))].join(','),
+    HARVEST_CSV_COLUMNS.map(c => cell(c)).join(','),
+    ...rows.map(r => [
+      cell(fmtUtcStamp(r.acquiredAt)), cell(r.platform, true), cell(r.type), cell(r.btc.toFixed(8)), cell(r.sats),
+      cell(r.basisPerBtc.toFixed(2)), cell(r.basisUsd.toFixed(2)), cell(r.lossUsd.toFixed(2)),
+      cell(r.longTerm ? 'LT' : 'ST'), cell(r.runningBtc.toFixed(8)), cell(r.estimated ? 'yes' : 'no'),
+    ].join(',')),
+  ];
+  return lines.join('\r\n');
+};
 // Form ↔ storage. The form edits LOCAL date and time; storage keeps UTC to the minute.
 const localPartsToUtcIso = (date, time) => {
   const d = normalizeDate(date);
@@ -1851,6 +1904,7 @@ const NAV_ITEMS = [
   { key:'dashboard', label:'Dashboard', icon:'Home' },
   { key:'transactions', label:'Transactions', icon:'List' },
   { key:'wallets', label:'Wallets', icon:'Wallet' },
+  { key:'harvest', label:'Harvest', icon:'Zap' },
   { key:'vault', label:'Vault', icon:'Lock' },
   { key:'export', label:'Export', icon:'Download' },
   { key:'settings', label:'Settings', icon:'Settings' },
@@ -3603,6 +3657,10 @@ function App() {
     const hash = location.hash.slice(1);
     return NAV_ITEMS.some(n => n.key === hash) ? hash : 'dashboard';
   });
+  // Harvest view: wallet and price are the user's choice; until they touch them the wallet is
+  // Bitkey (else the first active wallet) and the price is the current one.
+  const [harvestWalletPick, setHarvestWalletPick] = useState('');
+  const [harvestPricePick, setHarvestPricePick] = useState(null);
   const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth <= 768);
   const [moreStats, setMoreStats] = useState(false);
   const [walletsOpen, setWalletsOpen] = useState(false);
@@ -6157,6 +6215,97 @@ function App() {
             </div>
           </>
         )}
+
+        {/* ── HARVEST ── */}
+        {tab==='harvest' && (() => {
+          const names = wallets.map(w => w.name);
+          const wallet = names.includes(harvestWalletPick) ? harvestWalletPick
+            : (names.includes('Bitkey') ? 'Bitkey' : (wallets.find(w => !w.archived)||wallets[0]||{}).name || '');
+          const priceText = harvestPricePick !== null ? harvestPricePick : (btcPrice ? String(Math.round(btcPrice*100)/100) : '');
+          const price = numOr(priceText, 0);
+          const nowMs = Date.now();
+          const built = buildLots(transactions, { prices: historicalPrices, methodFor: w => lotMethodFor(wallets, w) });
+          const { rows, summary } = harvestLots(built.lots, { wallet, price, nowMs });
+          const fmtLotAt = ms => { const iso = new Date(ms).toISOString(); return fmtTxDate({ date: iso.slice(0,10), datetimeUtc: iso }); };
+          const exportList = () => {
+            const csv = harvestCsv(rows, { wallet, price, generatedAtMs: Date.now() });
+            downloadBlob(new Blob([csv], {type:'text/csv'}), `harvest-${String(wallet).replace(/[^\w-]+/g,'_')}-${todayLocal()}.csv`);
+            showToast(`Exported ${rows.length} lot${rows.length===1?'':'s'}`);
+          };
+          const lossColor = v => v > 0 ? 'var(--red)' : undefined;
+          return (<>
+            <div className="card">
+              <div className="card-header"><div className="card-title">Tax-loss harvest</div></div>
+              <div className="card-body">
+                <div className="form-grid">
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="harvest-wallet">Wallet</label>
+                    <select id="harvest-wallet" className="form-select" value={wallet} onChange={e=>setHarvestWalletPick(e.target.value)}>
+                      {wallets.map(w => <option key={w.id||w.name} value={w.name}>{w.name}{w.archived?' (archived)':''}</option>)}
+                    </select>
+                  </div>
+                  <div className="form-group">
+                    <label className="form-label" htmlFor="harvest-price">BTC price (USD)</label>
+                    <input id="harvest-price" className="form-input" type="number" min="0" step="any" value={priceText} onChange={e=>setHarvestPricePick(e.target.value)}/>
+                    {harvestPricePick !== null && btcPrice ? <button type="button" className="btn btn-secondary btn-sm" style={{marginTop:'.375rem'}} onClick={()=>setHarvestPricePick(null)}>Use current price</button> : null}
+                  </div>
+                </div>
+                <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,marginTop:'.5rem'}}>
+                  Lots in this wallet that cost more per BTC than the price above, highest cost first. Lots with no known basis are left out.
+                  Long term means held more than one year from the acquisition time, as of now.
+                  {' '}{wallet} disposes lots {lotMethodFor(wallets, wallet)}.
+                </div>
+              </div>
+            </div>
+            <div className="stats-grid">
+              <div className="stat-card"><div className="stat-label">Lots to sell</div><div className="stat-value" style={{fontSize:'1.375rem'}}>{summary.lotCount}</div>
+                <div className="stat-sub">{summary.estimatedLots ? `${summary.estimatedLots} with an estimated basis` : 'no estimated lots'}</div></div>
+              <div className="stat-card"><div className="stat-label">BTC to sell</div><div className="stat-value btc" style={{fontSize:'1.375rem'}}>{summary.totalBtc.toFixed(8)}</div>
+                <div className="stat-sub">{summary.totalSats.toLocaleString('en-US')} sats</div></div>
+              <div className="stat-card"><div className="stat-label">Total basis</div><div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(summary.totalBasisUsd)}</div></div>
+              <div className="stat-card"><div className="stat-label">Est. loss</div><div className="stat-value" style={{fontSize:'1.375rem',color:lossColor(summary.totalLossUsd)}}>{fmtUSD(summary.totalLossUsd)}</div>
+                <div className="stat-sub">LT {fmtUSD(summary.longTerm.lossUsd)} · ST {fmtUSD(summary.shortTerm.lossUsd)}</div></div>
+            </div>
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Lots in {wallet||'—'}</div>
+                <button className="btn btn-primary btn-sm" disabled={!rows.length} onClick={exportList} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
+                  {Icon.Download({width:13,height:13})} Export identification list
+                </button>
+              </div>
+              <div className="card-body" style={{padding:0}}>
+                {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see which lots are under water.</div>
+                : !rows.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No lots in {wallet} cost more than {fmtUSD(price)} per BTC.</div>
+                : (
+                  <div className="table-wrap">
+                    <table>
+                      <thead><tr>
+                        <th>Acquired</th><th>Platform</th><th>Lot</th><th>BTC</th><th>Sats</th><th>Basis / BTC</th><th>Basis</th><th>Est. loss</th><th>Term</th><th>Running BTC</th><th></th>
+                      </tr></thead>
+                      <tbody>
+                        {rows.map(r => (
+                          <tr key={r.lotId}>
+                            <td style={{whiteSpace:'nowrap',fontSize:'.8125rem'}}>{fmtLotAt(r.acquiredAt)}</td>
+                            <td>{r.platform||'—'}</td>
+                            <td><span className={`badge badge-${r.type.toLowerCase()}`}>{r.type}</span></td>
+                            <td className="mono">{r.btc.toFixed(8)}</td>
+                            <td className="mono">{r.sats.toLocaleString('en-US')}</td>
+                            <td className="mono">{fmtUSD(r.basisPerBtc)}</td>
+                            <td className="mono">{fmtUSD(r.basisUsd)}</td>
+                            <td className="mono" style={{color:lossColor(r.lossUsd)}}>{fmtUSD(r.lossUsd)}</td>
+                            <td>{r.longTerm ? 'LT' : 'ST'}</td>
+                            <td className="mono">{r.runningBtc.toFixed(8)}</td>
+                            <td>{r.estimated && <span title="Basis is estimated: from a daily close rather than a value you entered" style={{fontSize:'.5625rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',padding:'.1rem .3rem',borderRadius:3,background:'var(--bg-tertiary)',color:'var(--text-secondary)'}}>est.</span>}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          </>);
+        })()}
 
         {/* ── EXPORT ── */}
         {tab==='export' && (
