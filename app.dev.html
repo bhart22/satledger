@@ -1320,6 +1320,153 @@ const backfillRewardUsd = (list, prices) => {
   summary.totalUsd = Math.round(summary.totalUsd * 100) / 100;
   return { txs: summary.count ? out : list, summary };
 };
+// ─── Lot engine ──────────────────────────────────────────────────────────────────────
+// Per-wallet tax lots, built by replaying every transaction in (datetimeUtc, sequence) order.
+// This is ADDITIVE: the dashboard keeps its average-cost pool (applyTxToCostPool); lots feed
+// the Harvest view and nothing else. All BTC is integer satoshis.
+//
+//   Buy        new lot, basis = USD spent + USD fee
+//   Reward     new lot, basis = usdValueAtReceipt; if missing, a price lookup, flagged estimated
+//   Sell       disposes lots in the wallet by that wallet's method (HIFO default, or FIFO)
+//   Transfer   the sending wallet gives up amount + BTC fee. The amount MOVES the chosen lots to
+//              the receiving wallet with their original acquisition time and basis (split
+//              pro-rata when a lot is only partly moved). The fee is the next sats in the same
+//              ranking and is burned, which is what "a fee reduces the sending wallet's lots"
+//              means. No destination → the coins leave. No source → an inflow of unknown basis.
+//   Consolidation  burns its BTC fee from the wallet's lots.
+//
+// A lot with no known basis (excluded rows, inflows from outside, a reward with no value and no
+// price) is kept so BTC totals still add up, but is flagged noBasis and never harvested.
+const LOT_METHODS = ['FIFO','HIFO'];
+const DEFAULT_LOT_METHOD = 'HIFO';
+const toSatsInt = v => Math.round(numOr(v) * 1e8);
+const lotMethodFor = (wallets, name) => {
+  const w = (wallets || []).find(x => x && x.name === name);
+  return w && LOT_METHODS.includes(w.lotMethod) ? w.lotMethod : DEFAULT_LOT_METHOD;
+};
+// Held MORE than one year from acquisition: strictly after the same UTC moment a year later
+const isLongTerm = (acquiredMs, atMs) => {
+  const d = new Date(acquiredMs);
+  const anniversary = Date.UTC(d.getUTCFullYear() + 1, d.getUTCMonth(), d.getUTCDate(),
+    d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds(), d.getUTCMilliseconds());
+  return atMs > anniversary;
+};
+const buildLots = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_METHOD } = {}) => {
+  const txs = (transactions || [])
+    .map((tx, i) => ({ tx, i }))
+    .filter(({ tx }) => tx && Number.isFinite(txInstant(tx)))
+    .sort((a, b) => compareTx(a.tx, b.tx) || a.i - b.i)
+    .map(o => o.tx);
+  const byWallet = new Map();
+  const disposals = [], warnings = [];
+  let counter = 0;
+  const lotsOf = w => { if(!byWallet.has(w)) byWallet.set(w, []); return byWallet.get(w); };
+  const addLot = (wallet, props) => {
+    const lot = { id: 'L' + (++counter), order: counter, wallet, ...props };
+    lotsOf(wallet).push(lot);
+    return lot;
+  };
+  const perSat = l => l.noBasis || l.sats <= 0 ? 0 : l.basisUsd / l.sats;
+  const fifo = (a, b) => a.acquiredAt - b.acquiredAt || a.order - b.order;
+  const hifo = (a, b) => perSat(b) - perSat(a) || fifo(a, b);
+  // Take `sats` out of a wallet in method order. Returns the slices taken, in order.
+  const take = (wallet, sats, tx) => {
+    const lots = lotsOf(wallet);
+    const ranked = [...lots].sort(methodFor(wallet) === 'FIFO' ? fifo : hifo);
+    const slices = [];
+    let remaining = sats;
+    for(const lot of ranked) {
+      if(remaining <= 0) break;
+      const t = Math.min(lot.sats, remaining);
+      const share = t === lot.sats ? lot.basisUsd : lot.basisUsd * t / lot.sats;
+      slices.push({ lot: { ...lot }, sats: t, basisUsd: share });
+      lot.sats -= t; lot.basisUsd -= share; remaining -= t;
+    }
+    byWallet.set(wallet, lots.filter(l => l.sats > 0));
+    if(remaining > 0) warnings.push({ txId: tx.id, wallet, shortfallSats: remaining, type: tx.type });
+    return slices;
+  };
+  const record = (kind, tx, wallet, slices, proceedsTotal, totalSats) => {
+    const at = txInstant(tx);
+    for(const sl of slices) {
+      disposals.push({
+        kind, txId: tx.id, wallet, atMs: at, sats: sl.sats, basisUsd: sl.basisUsd,
+        proceedsUsd: proceedsTotal === null ? null : proceedsTotal * sl.sats / totalSats,
+        acquiredAt: sl.lot.acquiredAt, longTerm: isLongTerm(sl.lot.acquiredAt, at),
+        estimated: !!sl.lot.estimated, noBasis: !!sl.lot.noBasis, excluded: !!tx.excludeStats,
+      });
+    }
+  };
+
+  for(const tx of txs) {
+    const at = txInstant(tx);
+    const amt = toSatsInt(tx.amount), feeSats = toSatsInt(tx.fee);
+    const w1 = tx.wallet, w2 = tx.wallet2;
+
+    if(tx.type === 'Buy' || tx.type === 'Reward') {
+      if(!w1 || amt === 0) continue;
+      if(amt < 0) { record('adjustment', tx, w1, take(w1, -amt, tx), null, -amt); continue; }  // e.g. a −1 sat holdings fix
+      let basisUsd = 0, estimated = false, noBasis = false;
+      if(tx.excludeStats) noBasis = true;
+      else if(tx.type === 'Buy') {
+        basisUsd = numOr(tx.totalUsd, numOr(tx.amount) * numOr(tx.price)) + numOr(tx.fee);
+        if(!(basisUsd > 0)) noBasis = true;
+      } else if(hasUsdValue(tx)) {
+        basisUsd = parseFloat(tx.usdValueAtReceipt);
+        estimated = tx.usdValueSource === 'estimated_backfill';
+      } else {
+        basisUsd = numOr(tx.amount) * rewardPriceFor(tx, prices);   // fall back to a price lookup
+        estimated = true;
+        if(!(basisUsd > 0)) noBasis = true;
+      }
+      addLot(w1, { platform: w1, type: tx.type, rewardCategory: tx.type === 'Reward' ? (tx.rewardCategory || 'cash_back') : undefined,
+        acquiredAt: at, sats: amt, basisUsd: noBasis ? 0 : basisUsd, estimated, noBasis, originTxId: tx.id });
+    } else if(tx.type === 'Sell') {
+      if(!w1 || amt <= 0) continue;
+      const slices = take(w1, amt, tx);
+      const net = tx.excludeStats ? null : numOr(tx.totalUsd, numOr(tx.amount) * numOr(tx.price)) - numOr(tx.fee);
+      record('sell', tx, w1, slices, net, amt);
+    } else if(tx.type === 'Consolidation') {
+      if(w1 && feeSats > 0) record('fee', tx, w1, take(w1, feeSats, tx), null, feeSats);
+    } else if(tx.type === 'Transfer') {
+      if(!w1 && w2) {   // inflow from outside: real basis unknown
+        if(amt > 0) addLot(w2, { platform: '', type: 'Transfer in', acquiredAt: at, sats: amt, basisUsd: 0, estimated: true, noBasis: true, originTxId: tx.id });
+        continue;
+      }
+      if(!w1) continue;
+      const slices = take(w1, amt + feeSats, tx);
+      // The first `amt` sats of the ranking move (or leave); the rest is the burned fee
+      let toMove = amt;
+      const moved = [], burned = [];
+      for(const sl of slices) {
+        const m = Math.min(sl.sats, toMove);
+        if(m > 0) { moved.push({ lot: sl.lot, sats: m, basisUsd: m === sl.sats ? sl.basisUsd : sl.basisUsd * m / sl.sats }); toMove -= m; }
+        const rest = sl.sats - m;
+        if(rest > 0) burned.push({ lot: sl.lot, sats: rest, basisUsd: m === 0 ? sl.basisUsd : sl.basisUsd * rest / sl.sats });
+      }
+      if(burned.length) record('fee', tx, w1, burned, null, burned.reduce((n, b) => n + b.sats, 0));
+      if(w2) {
+        for(const m of moved) {
+          const { id, order, wallet, sats, basisUsd, ...keep } = m.lot;
+          addLot(w2, { ...keep, sats: m.sats, basisUsd: m.basisUsd });
+        }
+        const short = amt - moved.reduce((n, m) => n + m.sats, 0);
+        // The sending wallet didn't hold enough tracked lots; the receiver still gets the coins
+        // (the balance rules say so), with unknown basis
+        if(short > 0) addLot(w2, { platform: '', type: 'Transfer in', acquiredAt: at, sats: short, basisUsd: 0, estimated: true, noBasis: true, originTxId: tx.id });
+      } else if(moved.length) {
+        record('out', tx, w1, moved, null, moved.reduce((n, m) => n + m.sats, 0));
+      }
+    }
+  }
+  const lots = [];
+  const balancesSats = {};
+  for(const [wallet, list] of byWallet) {
+    balancesSats[wallet] = list.reduce((n, l) => n + l.sats, 0);
+    for(const l of list) lots.push(l);
+  }
+  return { lots, balancesSats, disposals, warnings };
+};
 // Form ↔ storage. The form edits LOCAL date and time; storage keeps UTC to the minute.
 const localPartsToUtcIso = (date, time) => {
   const d = normalizeDate(date);
@@ -3545,7 +3692,7 @@ function App() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
 
-  const [walletForm, setWalletForm] = useState({name:'',type:'Exchange',address:''});
+  const [walletForm, setWalletForm] = useState({name:'',type:'Exchange',address:'',lotMethod:DEFAULT_LOT_METHOD});
   const [showArchived, setShowArchived] = useState(false);
   const [showTypeMapping, setShowTypeMapping] = useState(false);
   const firstTransactionDate = useMemo(() => {
@@ -4932,7 +5079,7 @@ function App() {
     }
     const collides = wals.some((w,i) => i!==editIdx && String(w.name||'').trim().toLowerCase() === name.toLowerCase());
     if(collides) { showToast(`A wallet named "${name}" already exists`); return; }
-    const cleanForm = {...walletForm, name, address: String(walletForm.address||'').trim()};
+    const cleanForm = {...walletForm, name, address: String(walletForm.address||'').trim(), lotMethod: LOT_METHODS.includes(walletForm.lotMethod) ? walletForm.lotMethod : DEFAULT_LOT_METHOD};
 
     if(editWalletTarget!==null) {
       const oldName = String(wals[editIdx]?.name||'');
@@ -4957,7 +5104,7 @@ function App() {
     } else {
       const nw=[...wals,{id:'w'+Date.now(),...cleanForm}]; setWallets(nw); save(txs, nw);
     }
-    setShowWalletModal(false); setEditWalletTarget(null); setWalletForm({name:'',type:'Exchange',address:''});
+    setShowWalletModal(false); setEditWalletTarget(null); setWalletForm({name:'',type:'Exchange',address:'',lotMethod:DEFAULT_LOT_METHOD});
   };
 
   // ─── Export CoinLedger CSV ────────────────────────────────────────────────
@@ -5696,7 +5843,7 @@ function App() {
                     </button>
                   )}
                 </div>
-                <button className="btn btn-primary btn-sm" onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletTarget(null);setShowWalletModal(true);}}>+ Add Wallet</button>
+                <button className="btn btn-primary btn-sm" onClick={()=>{setWalletForm({name:'',type:'Exchange',address:'',lotMethod:DEFAULT_LOT_METHOD});setEditWalletTarget(null);setShowWalletModal(true);}}>+ Add Wallet</button>
               </div>
               <div className="card-body">
                 {wallets.filter(w => showArchived ? true : !w.archived).length === 0 && (
@@ -5705,7 +5852,7 @@ function App() {
                     <div className="empty-text">{wallets.length===0 ? 'No wallets yet' : 'No active wallets'}</div>
                     <div className="empty-sub">{wallets.length===0 ? 'Add an exchange, hardware wallet, or cold storage wallet to start tracking' : 'All wallets are archived — use Show Archived to view them'}</div>
                     {wallets.length===0 && (
-                      <button className="btn btn-primary" style={{marginTop:'1rem'}} onClick={()=>{setWalletForm({name:'',type:'Exchange',address:''});setEditWalletTarget(null);setShowWalletModal(true);}}>+ Add Wallet</button>
+                      <button className="btn btn-primary" style={{marginTop:'1rem'}} onClick={()=>{setWalletForm({name:'',type:'Exchange',address:'',lotMethod:DEFAULT_LOT_METHOD});setEditWalletTarget(null);setShowWalletModal(true);}}>+ Add Wallet</button>
                     )}
                   </div>
                 )}
@@ -5723,7 +5870,7 @@ function App() {
                           </div>
                           <div style={{display:'flex',gap:'.25rem'}}>
                             {!w.archived && (
-                              <button className="btn-icon" style={{width:36,height:36}} onClick={()=>{setWalletForm({name:w.name,type:w.type,address:w.address});setEditWalletTarget(w);setShowWalletModal(true);}} title="Edit" aria-label={`Edit wallet ${w.name}`}>{Icon.Edit({width:14,height:14})}</button>
+                              <button className="btn-icon" style={{width:36,height:36}} onClick={()=>{setWalletForm({name:w.name,type:w.type,address:w.address,lotMethod:lotMethodFor([w], w.name)});setEditWalletTarget(w);setShowWalletModal(true);}} title="Edit" aria-label={`Edit wallet ${w.name}`}>{Icon.Edit({width:14,height:14})}</button>
                             )}
                             {!w.archived ? (
                               <button className="btn-icon" style={{width:36,height:36}} title="Archive wallet" aria-label="Archive wallet" onClick={()=>{patchWallet(w,{archived:true});showToast(`${w.name} archived`);}}>{Icon.Archive({width:14,height:14})}</button>
@@ -5770,7 +5917,7 @@ function App() {
                         </div>
                         <div style={{display:'flex',gap:'.5rem'}}>
                           <button className="btn btn-secondary btn-sm" onClick={()=>{
-                            setWalletForm({name, type:'Exchange', address:''});
+                            setWalletForm({name, type:'Exchange', address:'', lotMethod:DEFAULT_LOT_METHOD});
                             setEditWalletTarget(null);
                             setShowWalletModal(true);
                           }}>Add as wallet</button>
@@ -6729,6 +6876,13 @@ function App() {
                   <select id="wallet-type" className="form-select" value={walletForm.type} onChange={e=>setWalletForm({...walletForm,type:e.target.value})}>
                     <option>Exchange</option><option>Wallet</option><option>Cold Storage</option><option>Other</option>
                   </select>
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="wallet-lot-method">Lot disposal method</label>
+                  <select id="wallet-lot-method" className="form-select" value={walletForm.lotMethod||DEFAULT_LOT_METHOD} onChange={e=>setWalletForm({...walletForm,lotMethod:e.target.value})}>
+                    <option value="HIFO">HIFO — highest cost first</option><option value="FIFO">FIFO — oldest first</option>
+                  </select>
+                  <div style={{fontSize:'.6875rem',color:'var(--text-tertiary)',marginTop:'.25rem'}}>Which lots a sale or transfer takes from this wallet first. Used by the Harvest view.</div>
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="wallet-address">Bitcoin Address (optional)</label>
