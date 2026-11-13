@@ -6263,33 +6263,45 @@ function App() {
         {/* ── HARVEST ── */}
         {tab==='harvest' && (() => {
           const names = wallets.map(w => w.name);
-          const wallet = names.includes(harvestWalletPick) ? harvestWalletPick
-            : (names.includes('Bitkey') ? 'Bitkey' : (wallets.find(w => !w.archived)||wallets[0]||{}).name || '');
+          // '' is the overview of every wallet; picking a wallet drills into its lots
+          const wallet = names.includes(harvestWalletPick) ? harvestWalletPick : '';
           const priceText = harvestPricePick !== null ? harvestPricePick : (btcPrice ? String(Math.round(btcPrice*100)/100) : '');
           const price = numOr(priceText, 0);
           const nowMs = Date.now();
           const built = buildLots(transactions, { prices: historicalPrices, methodFor: w => lotMethodFor(wallets, w) });
-          const { rows, summary } = harvestLots(built.lots, { wallet, price, nowMs });
+          const all = harvestSummaryAll(built.lots, { price, nowMs, methodFor: w => lotMethodFor(wallets, w) });
+          const { rows, summary } = wallet ? harvestLots(built.lots, { wallet, price, nowMs }) : { rows: [], summary: null };
           const fmtLotAt = ms => { const iso = new Date(ms).toISOString(); return fmtTxDate({ date: iso.slice(0,10), datetimeUtc: iso }); };
           const exportList = () => {
             const csv = harvestCsv(rows, { wallet, price, generatedAtMs: Date.now() });
             downloadBlob(new Blob([csv], {type:'text/csv'}), `harvest-${String(wallet).replace(/[^\w-]+/g,'_')}-${todayLocal()}.csv`);
             showToast(`Exported ${rows.length} lot${rows.length===1?'':'s'}`);
           };
-          const all = harvestSummaryAll(built.lots, { price, nowMs, methodFor: w => lotMethodFor(wallets, w) });
           const exportSummary = () => {
             downloadBlob(new Blob([harvestSummaryCsv(all, { price, generatedAtMs: Date.now() })], {type:'text/csv'}), `harvest-summary-all-wallets-${todayLocal()}.csv`);
             showToast('Exported the total summary');
           };
           const lossColor = v => v > 0 ? 'var(--red)' : undefined;
+          const stat = s => (
+            <div className="stats-grid">
+              <div className="stat-card"><div className="stat-label">Lots to sell</div><div className="stat-value" style={{fontSize:'1.375rem'}}>{s.lotCount}</div>
+                <div className="stat-sub">{s.estimatedLots ? `${s.estimatedLots} with an estimated basis` : 'no estimated lots'}</div></div>
+              <div className="stat-card"><div className="stat-label">BTC to sell</div><div className="stat-value btc" style={{fontSize:'1.375rem'}}>{(s.totalSats/1e8).toFixed(8)}</div>
+                <div className="stat-sub">{s.totalSats.toLocaleString('en-US')} sats</div></div>
+              <div className="stat-card"><div className="stat-label">Total basis</div><div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(s.totalBasisUsd)}</div></div>
+              <div className="stat-card"><div className="stat-label">Est. loss</div><div className="stat-value" style={{fontSize:'1.375rem',color:lossColor(s.totalLossUsd)}}>{fmtUSD(s.totalLossUsd)}</div>
+                <div className="stat-sub">LT {fmtUSD(s.ltLossUsd)} · ST {fmtUSD(s.stLossUsd)}</div></div>
+            </div>
+          );
           return (<>
             <div className="card">
               <div className="card-header"><div className="card-title">Tax-loss harvest</div></div>
               <div className="card-body">
                 <div className="form-grid">
                   <div className="form-group">
-                    <label className="form-label" htmlFor="harvest-wallet">Wallet</label>
+                    <label className="form-label" htmlFor="harvest-wallet">View</label>
                     <select id="harvest-wallet" className="form-select" value={wallet} onChange={e=>setHarvestWalletPick(e.target.value)}>
+                      <option value="">All wallets — summary</option>
                       {wallets.map(w => <option key={w.id||w.name} value={w.name}>{w.name}{w.archived?' (archived)':''}</option>)}
                     </select>
                   </div>
@@ -6300,108 +6312,110 @@ function App() {
                   </div>
                 </div>
                 <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,marginTop:'.5rem'}}>
-                  Lots in this wallet that cost more per BTC than the price above, highest cost first. Lots with no known basis are left out.
-                  Long term means held more than one year from the acquisition time, as of now.
-                  {' '}{wallet} disposes lots {lotMethodFor(wallets, wallet)}.
+                  {wallet
+                    ? <>Lots in {wallet} that cost more per BTC than the price above, highest cost first. Lots with no known basis are left out. {wallet} disposes lots {lotMethodFor(wallets, wallet)}. Long term means held more than one year from the acquisition time, as of now.</>
+                    : <>Every wallet at the price above. Pick a wallet to see its lots and export an identification list. Lots with no known basis are left out; long term means held more than one year, as of now.</>}
                 </div>
               </div>
             </div>
-            <div className="stats-grid">
-              <div className="stat-card"><div className="stat-label">Lots to sell</div><div className="stat-value" style={{fontSize:'1.375rem'}}>{summary.lotCount}</div>
-                <div className="stat-sub">{summary.estimatedLots ? `${summary.estimatedLots} with an estimated basis` : 'no estimated lots'}</div></div>
-              <div className="stat-card"><div className="stat-label">BTC to sell</div><div className="stat-value btc" style={{fontSize:'1.375rem'}}>{summary.totalBtc.toFixed(8)}</div>
-                <div className="stat-sub">{summary.totalSats.toLocaleString('en-US')} sats</div></div>
-              <div className="stat-card"><div className="stat-label">Total basis</div><div className="stat-value" style={{fontSize:'1.375rem'}}>{fmtUSD(summary.totalBasisUsd)}</div></div>
-              <div className="stat-card"><div className="stat-label">Est. loss</div><div className="stat-value" style={{fontSize:'1.375rem',color:lossColor(summary.totalLossUsd)}}>{fmtUSD(summary.totalLossUsd)}</div>
-                <div className="stat-sub">LT {fmtUSD(summary.longTerm.lossUsd)} · ST {fmtUSD(summary.shortTerm.lossUsd)}</div></div>
-            </div>
-            <div className="card">
-              <div className="card-header">
-                <div className="card-title">Lots in {wallet||'—'}</div>
-                <button className="btn btn-primary btn-sm" disabled={!rows.length} onClick={exportList} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
-                  {Icon.Download({width:13,height:13})} Export identification list
-                </button>
-              </div>
-              <div className="card-body" style={{padding:0}}>
-                {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see which lots are under water.</div>
-                : !rows.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No lots in {wallet} cost more than {fmtUSD(price)} per BTC.</div>
-                : (
-                  <div className="table-wrap" id="harvest-lots-table">
-                    <table>
-                      <thead><tr>
-                        <th>Acquired</th><th>Platform</th><th>Lot</th><th>BTC</th><th>Sats</th><th>Basis / BTC</th><th>Basis</th><th>Est. loss</th><th>Term</th><th>Running BTC</th><th></th>
-                      </tr></thead>
-                      <tbody>
-                        {rows.map(r => (
-                          <tr key={r.lotId}>
-                            <td style={{whiteSpace:'nowrap',fontSize:'.8125rem'}}>{fmtLotAt(r.acquiredAt)}</td>
-                            <td>{r.platform||'—'}</td>
-                            <td><span className={`badge badge-${r.type.toLowerCase()}`}>{r.type}</span></td>
-                            <td className="mono">{r.btc.toFixed(8)}</td>
-                            <td className="mono">{r.sats.toLocaleString('en-US')}</td>
-                            <td className="mono">{fmtUSD(r.basisPerBtc)}</td>
-                            <td className="mono">{fmtUSD(r.basisUsd)}</td>
-                            <td className="mono" style={{color:lossColor(r.lossUsd)}}>{fmtUSD(r.lossUsd)}</td>
-                            <td>{r.longTerm ? 'LT' : 'ST'}</td>
-                            <td className="mono">{r.runningBtc.toFixed(8)}</td>
-                            <td>{r.estimated && <span title="Basis is estimated: from a daily close rather than a value you entered" style={{fontSize:'.5625rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',padding:'.1rem .3rem',borderRadius:3,background:'var(--bg-tertiary)',color:'var(--text-secondary)'}}>est.</span>}</td>
+
+            {!wallet ? (<>
+              {stat(all.total)}
+              <div className="card">
+                <div className="card-header">
+                  <div className="card-title">Total summary — all wallets</div>
+                  <button className="btn btn-secondary btn-sm" disabled={!all.wallets.length || !price} onClick={exportSummary} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
+                    {Icon.Download({width:13,height:13})} Export summary
+                  </button>
+                </div>
+                <div className="card-body" style={{padding:0}}>
+                  {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see the summary.</div>
+                  : !all.wallets.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No wallet holds any BTC.</div>
+                  : (
+                    <div className="table-wrap" id="harvest-total-table">
+                      <table>
+                        <thead><tr>
+                          <th>Wallet</th><th>Method</th><th>Held BTC</th><th>Lots under water</th><th>BTC to sell</th><th>Basis</th><th>Est. loss</th><th>LT loss</th><th>ST loss</th><th></th>
+                        </tr></thead>
+                        <tbody>
+                          {all.wallets.map(w => (
+                            <tr key={w.wallet} onClick={()=>setHarvestWalletPick(w.wallet)} style={{cursor:'pointer',opacity:w.lotCount?1:.6}}>
+                              <td style={{fontWeight:600}}>{w.wallet}</td><td>{w.method}</td>
+                              <td className="mono">{(w.heldSats/1e8).toFixed(8)}</td>
+                              <td className="mono">{w.lotCount}</td>
+                              <td className="mono">{(w.totalSats/1e8).toFixed(8)}</td>
+                              <td className="mono">{fmtUSD(w.totalBasisUsd)}</td>
+                              <td className="mono" style={{color:lossColor(w.totalLossUsd)}}>{fmtUSD(w.totalLossUsd)}</td>
+                              <td className="mono">{fmtUSD(w.ltLossUsd)}</td>
+                              <td className="mono">{fmtUSD(w.stLossUsd)}</td>
+                              <td><button type="button" className="btn btn-secondary btn-sm" onClick={e=>{e.stopPropagation();setHarvestWalletPick(w.wallet);}}>View lots</button></td>
+                            </tr>
+                          ))}
+                          <tr style={{fontWeight:700}}>
+                            <td>Total</td><td></td>
+                            <td className="mono">{(all.total.heldSats/1e8).toFixed(8)}</td>
+                            <td className="mono">{all.total.lotCount}</td>
+                            <td className="mono">{(all.total.totalSats/1e8).toFixed(8)}</td>
+                            <td className="mono">{fmtUSD(all.total.totalBasisUsd)}</td>
+                            <td className="mono" style={{color:lossColor(all.total.totalLossUsd)}}>{fmtUSD(all.total.totalLossUsd)}</td>
+                            <td className="mono">{fmtUSD(all.total.ltLossUsd)}</td>
+                            <td className="mono">{fmtUSD(all.total.stLossUsd)}</td>
+                            <td></td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,padding:'.75rem 1rem'}}>
+                    Lots are tracked per wallet, so each row uses its own wallet's method; this is a summary, not one combined pool.
+                    {all.total.noBasisSats > 0 ? ` ${(all.total.noBasisSats/1e8).toFixed(8)} BTC across all wallets has no known basis and is never counted as a loss.` : ''}
                   </div>
-                )}
-              </div>
-            </div>
-            <div className="card">
-              <div className="card-header">
-                <div className="card-title">Total summary — all wallets</div>
-                <button className="btn btn-secondary btn-sm" disabled={!all.wallets.length || !price} onClick={exportSummary} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
-                  {Icon.Download({width:13,height:13})} Export summary
-                </button>
-              </div>
-              <div className="card-body" style={{padding:0}}>
-                {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see the summary.</div>
-                : !all.wallets.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No wallet holds any BTC.</div>
-                : (
-                  <div className="table-wrap" id="harvest-total-table">
-                    <table>
-                      <thead><tr>
-                        <th>Wallet</th><th>Method</th><th>Held BTC</th><th>Lots under water</th><th>BTC to sell</th><th>Basis</th><th>Est. loss</th><th>LT loss</th><th>ST loss</th>
-                      </tr></thead>
-                      <tbody>
-                        {all.wallets.map(w => (
-                          <tr key={w.wallet}>
-                            <td>{w.wallet}</td><td>{w.method}</td>
-                            <td className="mono">{(w.heldSats/1e8).toFixed(8)}</td>
-                            <td className="mono">{w.lotCount}</td>
-                            <td className="mono">{(w.totalSats/1e8).toFixed(8)}</td>
-                            <td className="mono">{fmtUSD(w.totalBasisUsd)}</td>
-                            <td className="mono" style={{color:lossColor(w.totalLossUsd)}}>{fmtUSD(w.totalLossUsd)}</td>
-                            <td className="mono">{fmtUSD(w.ltLossUsd)}</td>
-                            <td className="mono">{fmtUSD(w.stLossUsd)}</td>
-                          </tr>
-                        ))}
-                        <tr style={{fontWeight:700}}>
-                          <td>Total</td><td></td>
-                          <td className="mono">{(all.total.heldSats/1e8).toFixed(8)}</td>
-                          <td className="mono">{all.total.lotCount}</td>
-                          <td className="mono">{(all.total.totalSats/1e8).toFixed(8)}</td>
-                          <td className="mono">{fmtUSD(all.total.totalBasisUsd)}</td>
-                          <td className="mono" style={{color:lossColor(all.total.totalLossUsd)}}>{fmtUSD(all.total.totalLossUsd)}</td>
-                          <td className="mono">{fmtUSD(all.total.ltLossUsd)}</td>
-                          <td className="mono">{fmtUSD(all.total.stLossUsd)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-                <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,padding:'.75rem 1rem'}}>
-                  The same lots as above, for every wallet at the price above. Lots are still tracked per wallet, so each row uses its own wallet's method; this is a summary, not one combined pool.
-                  {all.total.noBasisSats > 0 ? ` ${(all.total.noBasisSats/1e8).toFixed(8)} BTC across all wallets has no known basis and is never counted as a loss.` : ''}
                 </div>
               </div>
-            </div>
+            </>) : (<>
+              <div>
+                <button type="button" id="harvest-back" className="btn btn-secondary btn-sm" onClick={()=>setHarvestWalletPick('')}>← All wallets</button>
+              </div>
+              {stat({ ...summary, totalBasisUsd: summary.totalBasisUsd, totalLossUsd: summary.totalLossUsd, ltLossUsd: summary.longTerm.lossUsd, stLossUsd: summary.shortTerm.lossUsd })}
+              <div className="card">
+                <div className="card-header">
+                  <div className="card-title">Lots in {wallet}</div>
+                  <button className="btn btn-primary btn-sm" disabled={!rows.length} onClick={exportList} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
+                    {Icon.Download({width:13,height:13})} Export identification list
+                  </button>
+                </div>
+                <div className="card-body" style={{padding:0}}>
+                  {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see which lots are under water.</div>
+                  : !rows.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No lots in {wallet} cost more than {fmtUSD(price)} per BTC.</div>
+                  : (
+                    <div className="table-wrap" id="harvest-lots-table">
+                      <table>
+                        <thead><tr>
+                          <th>Acquired</th><th>Platform</th><th>Lot</th><th>BTC</th><th>Sats</th><th>Basis / BTC</th><th>Basis</th><th>Est. loss</th><th>Term</th><th>Running BTC</th><th></th>
+                        </tr></thead>
+                        <tbody>
+                          {rows.map(r => (
+                            <tr key={r.lotId}>
+                              <td style={{whiteSpace:'nowrap',fontSize:'.8125rem'}}>{fmtLotAt(r.acquiredAt)}</td>
+                              <td>{r.platform||'—'}</td>
+                              <td><span className={`badge badge-${r.type.toLowerCase()}`}>{r.type}</span></td>
+                              <td className="mono">{r.btc.toFixed(8)}</td>
+                              <td className="mono">{r.sats.toLocaleString('en-US')}</td>
+                              <td className="mono">{fmtUSD(r.basisPerBtc)}</td>
+                              <td className="mono">{fmtUSD(r.basisUsd)}</td>
+                              <td className="mono" style={{color:lossColor(r.lossUsd)}}>{fmtUSD(r.lossUsd)}</td>
+                              <td>{r.longTerm ? 'LT' : 'ST'}</td>
+                              <td className="mono">{r.runningBtc.toFixed(8)}</td>
+                              <td>{r.estimated && <span title="Basis is estimated: from a daily close rather than a value you entered" style={{fontSize:'.5625rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',padding:'.1rem .3rem',borderRadius:3,background:'var(--bg-tertiary)',color:'var(--text-secondary)'}}>est.</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>)}
           </>);
         })()}
 

@@ -590,21 +590,29 @@ await seed({
 await reload();
 await clickByText('Harvest');
 await wait(600);
-check('Harvest defaults to the Bitkey wallet', await evaluate(`return document.getElementById('harvest-wallet')?.value === 'Bitkey';`));
+check('Harvest opens on the all-wallets summary', await evaluate(`return document.getElementById('harvest-wallet')?.value === '' && !!document.getElementById('harvest-total-table') && !document.getElementById('harvest-lots-table');`));
 await setField('harvest-price', '60000');
 await wait(300);
+const totalRows = await evaluate(`return [...document.querySelectorAll('#harvest-total-table tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
+check('the summary lists the wallet plus a Total row', totalRows.length === 2 && /^Bitkey\b/.test(totalRows[0]) && /^Total\b/.test(totalRows[1]), JSON.stringify(totalRows));
+check('the Total row: 1 lot under water, $100,000 basis, $40,000 est. loss at $60,000', /\b1\b/.test(totalRows[1] || '') && /\$100,000\.00/.test(totalRows[1] || '') && /\$40,000\.00/.test(totalRows[1] || ''), JSON.stringify(totalRows));
+check('the summary export button is enabled', await evaluate(`return [...document.querySelectorAll('button')].some(b => /Export summary/.test(b.innerText) && !b.disabled);`));
+// drill into the wallet by clicking its row
+await evaluate(`document.querySelector('#harvest-total-table tbody tr').click(); return 1;`);
+await wait(400);
+check('clicking a wallet row opens that wallet', await evaluate(`return document.getElementById('harvest-wallet')?.value === 'Bitkey' && !!document.getElementById('harvest-back') && !document.getElementById('harvest-total-table');`));
 const harvestRows = await evaluate(`return [...document.querySelectorAll('#harvest-lots-table tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
 check('only the lot costing more than the price is listed', harvestRows.length === 1 && /100,000\.00/.test(harvestRows[0]), JSON.stringify(harvestRows));
 check('its loss at the price is shown', /\$40,000\.00/.test(harvestRows[0] || ''), JSON.stringify(harvestRows));
-check('the summary counts one lot', await evaluate(`return /lots to sell\\s*1\\b/i.test(document.body.innerText.replace(/\\n+/g,' '));`));
+check('the wallet summary counts one lot', await evaluate(`return /lots to sell\\s*1\\b/i.test(document.body.innerText.replace(/\\n+/g,' '));`));
 await setField('harvest-price', '20000');
 await wait(300);
 check('a lower price lists both lots', (await evaluate(`return document.querySelectorAll('#harvest-lots-table tbody tr').length;`)) === 2);
-// total summary across wallets: Bitkey holds both lots; the total row repeats its figures
-const totalRows = await evaluate(`return [...document.querySelectorAll('#harvest-total-table tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
-check('the total summary lists the wallet plus a Total row', totalRows.length === 2 && /^Bitkey\b/.test(totalRows[0]) && /^Total\b/.test(totalRows[1]), JSON.stringify(totalRows));
-check('the total row sums the wallet (2 lots, $130,000 basis, $90,000 est. loss at $20,000)', /\b2\b/.test(totalRows[1] || '') && /\$130,000\.00/.test(totalRows[1] || '') && /\$90,000\.00/.test(totalRows[1] || ''), JSON.stringify(totalRows));
-check('the summary export button is enabled', await evaluate(`return [...document.querySelectorAll('button')].some(b => /Export summary/.test(b.innerText) && !b.disabled);`));
+// back to the summary; the price carries over
+await evaluate(`document.getElementById('harvest-back').click(); return 1;`);
+await wait(300);
+const totalRows2 = await evaluate(`return [...document.querySelectorAll('#harvest-total-table tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
+check('Back returns to the summary, now at $20,000 (2 lots, $130,000 basis, $90,000 est. loss)', /\b2\b/.test(totalRows2[1] || '') && /\$130,000\.00/.test(totalRows2[1] || '') && /\$90,000\.00/.test(totalRows2[1] || ''), JSON.stringify(totalRows2));
 // the transaction form has the new fields
 await evaluate(`document.activeElement && document.activeElement.blur(); window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',bubbles:true})); return 1;`);
 await wait(500);
