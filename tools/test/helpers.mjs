@@ -27,7 +27,8 @@ const exported = ['normalizeDate','isRealDate','numOr','newTxId','ensureTxIds','
   'fmtDate','todayLocal','fillDailyPriceGaps','safeSetItem','VALID_TX_TYPES',
   'addDaysUTC','listDaysUTC','toEpochDay','fromEpochDay','dayKeyUTC','rangeCutoff',
   'sellFromCostPool','parseCoinLedgerRows','nextCommitStamp','txEffectOnWallet',
-  'txWalletDeltas','txPortfolioDelta','applyTxToCostPool','rewardPriceFor'];
+  'txWalletDeltas','txPortfolioDelta','applyTxToCostPool','rewardPriceFor',
+  'compareTx','txInstant','migrateTxTimestamps','nextSequenceAt','localPartsToUtcIso','txToLocalParts','fmtTxDate','fmtUtcStamp'];
 const fn = new Function(`${src}\nreturn {${exported.join(',')}};`);
 const H = fn();
 
@@ -276,6 +277,51 @@ ok(/^\d{4}-\d{2}-\d{2}$/.test(H.todayLocal()), 'todayLocal shape');
   localStorage.setItem('btc-last-modified', 'garbage');
   ok(H.isRealDate(H.nextCommitStamp().slice(0,10)), 'unparseable stored stamp is ignored');
   localStorage.removeItem('btc-last-modified');
+}
+
+// ── Timestamps, sequence, migration ─────────────────────────────────────────
+{
+  const orig = [
+    { id:'a', date:'2024-03-05', type:'Buy',  amount:'1', price:'60000', notes:'first' },
+    { id:'b', date:'2024-01-02', type:'Buy',  amount:'2', price:'40000' },
+    { id:'c', date:'2024-03-05', type:'Sell', amount:'1', price:'61000' },
+    { id:'d', date:'2024-03-05', type:'Buy',  amount:'1', price:'62000' },
+    { id:'e', date:'not a date', type:'Buy',  amount:'1' },
+  ];
+  const snapshot = JSON.parse(JSON.stringify(orig));
+  const m = H.migrateTxTimestamps(orig);
+  eq(orig, snapshot, 'migration does not mutate its input');
+  eq(m.map(t => t.date), orig.map(t => t.date), 'migration preserves every date');
+  eq(m.map(t => t.datetimeUtc), ['2024-03-05T12:00:00.000Z','2024-01-02T12:00:00.000Z','2024-03-05T12:00:00.000Z','2024-03-05T12:00:00.000Z', undefined], 'dates become 12:00:00 UTC; an unusable date is left alone');
+  eq(m.map(t => t.sequence), [1, 1, 2, 3, undefined], 'sequence is 1..n by current order within each timestamp');
+  eq(m.map(({ datetimeUtc, sequence, ...rest }) => rest), orig, 'no other field changes');
+  ok(H.migrateTxTimestamps(m) === m, 'idempotent: a migrated list comes back as the same array');
+  eq(H.migrateTxTimestamps(m), m, 'idempotent: second run changes nothing');
+  // a row added later at an occupied timestamp continues the numbering
+  const added = H.migrateTxTimestamps([...m, { id:'f', date:'2024-03-05', type:'Buy', amount:'1' }]);
+  eq(added[5].sequence, 4, 'late-arriving row at the same instant gets max+1');
+  eq(added.slice(0,5), m, 'and the existing rows are untouched');
+  // sorting
+  eq([...m].sort(H.compareTx).map(t => t.id), ['e','b','a','c','d'], 'sort is (datetime, sequence); a row with no usable time sorts first');
+  const shuffled = [m[3], m[1], m[2], m[0]];
+  eq(shuffled.sort(H.compareTx).map(t => t.id), ['b','a','c','d'], 'sequence, not array position, decides ties');
+  const early = { id:'x', date:'2024-03-05', datetimeUtc:'2024-03-05T09:30:00.000Z', sequence:9 };
+  eq([m[0], early].sort(H.compareTx).map(t => t.id), ['x','a'], 'a real time earlier in the day sorts before the noon placeholder');
+  eq(H.nextSequenceAt(m, '2024-03-05T12:00:00.000Z'), 4, 'nextSequenceAt');
+  eq(H.nextSequenceAt(m, '2024-03-05T12:00:00.000Z', 'd'), 3, 'nextSequenceAt ignores the row being edited');
+  eq(H.nextSequenceAt(m, '2030-01-01T00:00:00.000Z'), 1, 'nextSequenceAt on an empty instant');
+  // export timestamp
+  eq(H.fmtUtcStamp(H.txInstant(m[0])), '2024-03-05 12:00:00', 'export stamp for a migrated row');
+  eq(H.fmtUtcStamp(H.txInstant(early)), '2024-03-05 09:30:00', 'export stamp for a timed row');
+  // local <-> UTC (the test runner's own timezone, so compare through Date)
+  const iso = H.localPartsToUtcIso('2025-06-15', '08:07');
+  eq(iso, new Date(2025, 5, 15, 8, 7).toISOString(), 'local date+time converts to UTC to the minute');
+  eq(H.localPartsToUtcIso('2025-06-15', ''), '2025-06-15T12:00:00.000Z', 'blank time keeps the noon placeholder');
+  eq(H.localPartsToUtcIso('2025-06-15', '25:00'), null, 'bad time rejected');
+  eq(H.txToLocalParts({ date:'2025-06-15', datetimeUtc: iso }), { date:'2025-06-15', time:'08:07' }, 'UTC converts back to the local date and time');
+  eq(H.txToLocalParts(m[0]), { date:'2024-03-05', time:'' }, 'placeholder rows show their stored day and no time');
+  eq(H.fmtTxDate(m[0]), '03/05/2024', 'placeholder rows display date only');
+  eq(H.fmtTxDate({ date:'2025-06-15', datetimeUtc: iso }), '06/15/2025 08:07', 'timed rows display local date and time');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
