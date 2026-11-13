@@ -593,13 +593,18 @@ await wait(600);
 check('Harvest defaults to the Bitkey wallet', await evaluate(`return document.getElementById('harvest-wallet')?.value === 'Bitkey';`));
 await setField('harvest-price', '60000');
 await wait(300);
-const harvestRows = await evaluate(`return [...document.querySelectorAll('.table-wrap tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
+const harvestRows = await evaluate(`return [...document.querySelectorAll('#harvest-lots-table tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
 check('only the lot costing more than the price is listed', harvestRows.length === 1 && /100,000\.00/.test(harvestRows[0]), JSON.stringify(harvestRows));
 check('its loss at the price is shown', /\$40,000\.00/.test(harvestRows[0] || ''), JSON.stringify(harvestRows));
 check('the summary counts one lot', await evaluate(`return /lots to sell\\s*1\\b/i.test(document.body.innerText.replace(/\\n+/g,' '));`));
 await setField('harvest-price', '20000');
 await wait(300);
-check('a lower price lists both lots', (await evaluate(`return document.querySelectorAll('.table-wrap tbody tr').length;`)) === 2);
+check('a lower price lists both lots', (await evaluate(`return document.querySelectorAll('#harvest-lots-table tbody tr').length;`)) === 2);
+// total summary across wallets: Bitkey holds both lots; the total row repeats its figures
+const totalRows = await evaluate(`return [...document.querySelectorAll('#harvest-total-table tbody tr')].map(r => r.innerText.replace(/\\s+/g,' ').trim());`);
+check('the total summary lists the wallet plus a Total row', totalRows.length === 2 && /^Bitkey\b/.test(totalRows[0]) && /^Total\b/.test(totalRows[1]), JSON.stringify(totalRows));
+check('the total row sums the wallet (2 lots, $130,000 basis, $90,000 est. loss at $20,000)', /\b2\b/.test(totalRows[1] || '') && /\$130,000\.00/.test(totalRows[1] || '') && /\$90,000\.00/.test(totalRows[1] || ''), JSON.stringify(totalRows));
+check('the summary export button is enabled', await evaluate(`return [...document.querySelectorAll('button')].some(b => /Export summary/.test(b.innerText) && !b.disabled);`));
 // the transaction form has the new fields
 await evaluate(`document.activeElement && document.activeElement.blur(); window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',bubbles:true})); return 1;`);
 await wait(500);

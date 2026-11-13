@@ -1520,6 +1520,50 @@ const harvestCsv = (rows, { wallet, price, generatedAtMs }) => {
   ];
   return lines.join('\r\n');
 };
+// Total summary: the same harvest numbers for every wallet side by side, plus a combined row.
+// Each wallet's figures come straight from harvestLots (lots stay per wallet; nothing is pooled),
+// and the total row is the sum of the rounded wallet rows so the table foots exactly.
+const harvestSummaryAll = (lots, { price, nowMs, methodFor }) => {
+  const cents = n => Math.round(n * 100) / 100;
+  const names = [...new Set((lots || []).filter(l => l.sats > 0).map(l => l.wallet))];
+  const wallets = names.map(wallet => {
+    const mine = lots.filter(l => l.wallet === wallet && l.sats > 0);
+    const s = harvestLots(lots, { wallet, price, nowMs }).summary;
+    return {
+      wallet, method: methodFor ? methodFor(wallet) : '',
+      heldSats: mine.reduce((n, l) => n + l.sats, 0),
+      noBasisSats: mine.filter(l => l.noBasis).reduce((n, l) => n + l.sats, 0),
+      lotCount: s.lotCount, totalSats: s.totalSats, totalBasisUsd: s.totalBasisUsd, totalLossUsd: s.totalLossUsd,
+      ltLossUsd: s.longTerm.lossUsd, stLossUsd: s.shortTerm.lossUsd, ltSats: s.longTerm.sats, stSats: s.shortTerm.sats,
+      estimatedLots: s.estimatedLots,
+    };
+  }).sort((a, b) => b.totalLossUsd - a.totalLossUsd || a.wallet.localeCompare(b.wallet));
+  const sum = f => wallets.reduce((n, w) => n + f(w), 0);
+  const total = {
+    heldSats: sum(w => w.heldSats), noBasisSats: sum(w => w.noBasisSats), lotCount: sum(w => w.lotCount), totalSats: sum(w => w.totalSats),
+    totalBasisUsd: cents(sum(w => w.totalBasisUsd)), totalLossUsd: cents(sum(w => w.totalLossUsd)),
+    ltLossUsd: cents(sum(w => w.ltLossUsd)), stLossUsd: cents(sum(w => w.stLossUsd)),
+    ltSats: sum(w => w.ltSats), stSats: sum(w => w.stSats), estimatedLots: sum(w => w.estimatedLots),
+  };
+  return { wallets, total };
+};
+const HARVEST_SUMMARY_CSV_COLUMNS = ['Wallet','Disposal Method','Held BTC','Held BTC With No Basis','Lots Under Water','BTC to Sell','Basis (USD)','Est. Loss (USD)','LT Loss (USD)','ST Loss (USD)','Estimated Lots'];
+const harvestSummaryCsv = (summary, { price, generatedAtMs }) => {
+  const cell = (v, guard) => {
+    let t = v == null ? '' : String(v);
+    if(guard && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
+  const btc = s => (s / 1e8).toFixed(8);
+  const line = (name, method, w) => [cell(name, true), cell(method), cell(btc(w.heldSats)), cell(btc(w.noBasisSats)), cell(w.lotCount), cell(btc(w.totalSats)),
+    cell(w.totalBasisUsd.toFixed(2)), cell(w.totalLossUsd.toFixed(2)), cell(w.ltLossUsd.toFixed(2)), cell(w.stLossUsd.toFixed(2)), cell(w.estimatedLots)].join(',');
+  return [
+    [cell('Wallets: all'), cell('BTC price (USD): ' + numOr(price).toFixed(2)), cell('Generated (UTC): ' + fmtUtcStamp(generatedAtMs))].join(','),
+    HARVEST_SUMMARY_CSV_COLUMNS.map(c => cell(c)).join(','),
+    ...summary.wallets.map(w => line(w.wallet, w.method, w)),
+    line('Total', '', summary.total),
+  ].join('\r\n');
+};
 // Form ↔ storage. The form edits LOCAL date and time; storage keeps UTC to the minute.
 const localPartsToUtcIso = (date, time) => {
   const d = normalizeDate(date);
@@ -6232,6 +6276,11 @@ function App() {
             downloadBlob(new Blob([csv], {type:'text/csv'}), `harvest-${String(wallet).replace(/[^\w-]+/g,'_')}-${todayLocal()}.csv`);
             showToast(`Exported ${rows.length} lot${rows.length===1?'':'s'}`);
           };
+          const all = harvestSummaryAll(built.lots, { price, nowMs, methodFor: w => lotMethodFor(wallets, w) });
+          const exportSummary = () => {
+            downloadBlob(new Blob([harvestSummaryCsv(all, { price, generatedAtMs: Date.now() })], {type:'text/csv'}), `harvest-summary-all-wallets-${todayLocal()}.csv`);
+            showToast('Exported the total summary');
+          };
           const lossColor = v => v > 0 ? 'var(--red)' : undefined;
           return (<>
             <div className="card">
@@ -6277,7 +6326,7 @@ function App() {
                 {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see which lots are under water.</div>
                 : !rows.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No lots in {wallet} cost more than {fmtUSD(price)} per BTC.</div>
                 : (
-                  <div className="table-wrap">
+                  <div className="table-wrap" id="harvest-lots-table">
                     <table>
                       <thead><tr>
                         <th>Acquired</th><th>Platform</th><th>Lot</th><th>BTC</th><th>Sats</th><th>Basis / BTC</th><th>Basis</th><th>Est. loss</th><th>Term</th><th>Running BTC</th><th></th>
@@ -6302,6 +6351,55 @@ function App() {
                     </table>
                   </div>
                 )}
+              </div>
+            </div>
+            <div className="card">
+              <div className="card-header">
+                <div className="card-title">Total summary — all wallets</div>
+                <button className="btn btn-secondary btn-sm" disabled={!all.wallets.length || !price} onClick={exportSummary} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>
+                  {Icon.Download({width:13,height:13})} Export summary
+                </button>
+              </div>
+              <div className="card-body" style={{padding:0}}>
+                {!price ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>Enter a BTC price to see the summary.</div>
+                : !all.wallets.length ? <div style={{padding:'1.5rem',color:'var(--text-secondary)'}}>No wallet holds any BTC.</div>
+                : (
+                  <div className="table-wrap" id="harvest-total-table">
+                    <table>
+                      <thead><tr>
+                        <th>Wallet</th><th>Method</th><th>Held BTC</th><th>Lots under water</th><th>BTC to sell</th><th>Basis</th><th>Est. loss</th><th>LT loss</th><th>ST loss</th>
+                      </tr></thead>
+                      <tbody>
+                        {all.wallets.map(w => (
+                          <tr key={w.wallet}>
+                            <td>{w.wallet}</td><td>{w.method}</td>
+                            <td className="mono">{(w.heldSats/1e8).toFixed(8)}</td>
+                            <td className="mono">{w.lotCount}</td>
+                            <td className="mono">{(w.totalSats/1e8).toFixed(8)}</td>
+                            <td className="mono">{fmtUSD(w.totalBasisUsd)}</td>
+                            <td className="mono" style={{color:lossColor(w.totalLossUsd)}}>{fmtUSD(w.totalLossUsd)}</td>
+                            <td className="mono">{fmtUSD(w.ltLossUsd)}</td>
+                            <td className="mono">{fmtUSD(w.stLossUsd)}</td>
+                          </tr>
+                        ))}
+                        <tr style={{fontWeight:700}}>
+                          <td>Total</td><td></td>
+                          <td className="mono">{(all.total.heldSats/1e8).toFixed(8)}</td>
+                          <td className="mono">{all.total.lotCount}</td>
+                          <td className="mono">{(all.total.totalSats/1e8).toFixed(8)}</td>
+                          <td className="mono">{fmtUSD(all.total.totalBasisUsd)}</td>
+                          <td className="mono" style={{color:lossColor(all.total.totalLossUsd)}}>{fmtUSD(all.total.totalLossUsd)}</td>
+                          <td className="mono">{fmtUSD(all.total.ltLossUsd)}</td>
+                          <td className="mono">{fmtUSD(all.total.stLossUsd)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+                <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,padding:'.75rem 1rem'}}>
+                  The same lots as above, for every wallet at the price above. Lots are still tracked per wallet, so each row uses its own wallet's method; this is a summary, not one combined pool.
+                  {all.total.noBasisSats > 0 ? ` ${(all.total.noBasisSats/1e8).toFixed(8)} BTC across all wallets has no known basis and is never counted as a loss.` : ''}
+                </div>
               </div>
             </div>
           </>);

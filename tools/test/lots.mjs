@@ -2,7 +2,7 @@
 import { loadAppHelpers } from '../lib/app-helpers.mjs';
 
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
-  'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv']);
+  'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -186,6 +186,61 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   eq(csv[2], '"2026-06-01 10:00:00","Bitkey","Reward","0.00100000","100000","90000.00","90.00","30.00","ST","0.00100000","yes"', 'a row: UTC acquired time, platform, type, BTC, sats, basis/BTC, basis, loss, term, running BTC, estimated');
   const evil = H.harvestCsv([{ ...rows[0], platform: '=HYPERLINK("x")' }], { wallet: 'Bitkey', price: 60000, generatedAtMs: NOW }).split('\r\n')[2];
   ok(evil.includes(`,"'=HYPERLINK(""x"")",`), 'a formula-looking platform name is neutralised in the CSV');
+}
+
+// ── total summary across wallets ─────────────────────────────────────────────
+{
+  const NOW2 = Date.parse('2026-11-13T00:00:00.000Z');
+  const txs = [
+    buy('2023-01-10T10:00:00.000Z', 'Bitkey', '1', 70000),       // $70k, long term, under water at 60k
+    buy('2026-05-01T10:00:00.000Z', 'Bitkey', '0.5', 40000),     // $80k, short term
+    buy('2026-07-02T10:00:00.000Z', 'Bitkey', '1', 30000),       // $30k: above water
+    buy('2026-03-01T10:00:00.000Z', 'Gemini', '0.25', 20000),    // $80k, short term
+    buy('2022-01-01T10:00:00.000Z', 'Strike', '1', 90000),       // $90k, long term
+    buy('2026-08-01T10:00:00.000Z', 'Strike', '2', 900000, { excludeStats: true }),  // no basis
+    buy('2024-01-01T10:00:00.000Z', 'Empty', '1', 80000),
+    sell('2024-02-01T10:00:00.000Z', 'Empty', '1', 50000),       // empties the wallet
+  ];
+  const built = H.buildLots(txs, {});
+  const sum = H.harvestSummaryAll(built.lots, { price: 60000, nowMs: NOW2, methodFor: () => 'HIFO' });
+  eq(sum.wallets.map(w => w.wallet).sort(), ['Bitkey', 'Gemini', 'Strike'], 'only wallets that hold BTC are listed');
+  eq(sum.wallets.map(w => w.wallet), ['Strike', 'Bitkey', 'Gemini'], 'biggest estimated loss first');
+  // every wallet row equals what the single-wallet view reports for the same wallet
+  for(const w of sum.wallets) {
+    const one = H.harvestLots(built.lots, { wallet: w.wallet, price: 60000, nowMs: NOW2 }).summary;
+    eq([w.lotCount, w.totalSats, w.totalBasisUsd, w.totalLossUsd, w.ltLossUsd, w.stLossUsd],
+       [one.lotCount, one.totalSats, one.totalBasisUsd, one.totalLossUsd, one.longTerm.lossUsd, one.shortTerm.lossUsd], 'summary row matches the single-wallet harvest: ' + w.wallet);
+  }
+  const strike = sum.wallets.find(w => w.wallet === 'Strike');
+  eq([strike.heldSats, strike.noBasisSats], [300000000, 200000000], 'held BTC includes the no-basis lot, and reports it separately');
+  eq(strike.lotCount, 1, 'the no-basis lot is never counted as under water');
+  eq(sum.total, {
+    heldSats: 100000000 + 50000000 + 100000000 + 25000000 + 300000000, noBasisSats: 200000000,
+    lotCount: 4, totalSats: 100000000 + 50000000 + 25000000 + 100000000,
+    totalBasisUsd: 90000 + 70000 + 40000 + 20000, totalLossUsd: 30000 + 10000 + 10000 + 5000,
+    ltLossUsd: 30000 + 10000, stLossUsd: 10000 + 5000,
+    ltSats: 200000000, stSats: 75000000, estimatedLots: 0,
+  }, 'total row: sums of the wallet rows (held, lots, BTC, basis, loss, LT/ST split)');
+  eq(sum.total.ltLossUsd + sum.total.stLossUsd, sum.total.totalLossUsd, 'LT + ST loss equals the total loss');
+  eq(H.harvestSummaryAll(built.lots, { price: 0, nowMs: NOW2 }).total.lotCount, 0, 'no price: nothing under water');
+  eq(H.harvestSummaryAll([], { price: 60000, nowMs: NOW2 }).wallets, [], 'no lots: no wallets');
+  eq(H.harvestSummaryAll([], { price: 60000, nowMs: NOW2 }).total.lotCount, 0, 'no lots: empty total');
+  // the total row foots to the displayed wallet rows even when each rounds to a different cent
+  const odd = H.buildLots([buy('2026-01-01T10:00:00.000Z', 'A', '0.00000003', 0.01), buy('2026-01-01T10:00:00.000Z', 'B', '0.00000003', 0.01),
+    buy('2026-01-01T10:00:00.000Z', 'C', '0.00000003', 0.01)], {});
+  const oddSum = H.harvestSummaryAll(odd.lots, { price: 1000, nowMs: NOW2 });
+  near(oddSum.wallets.reduce((n, w) => n + w.totalLossUsd, 0), oddSum.total.totalLossUsd, 'total foots to the sum of the displayed wallet rows', 0.0051);
+
+  // CSV
+  const method = w => w === 'Bitkey' ? 'FIFO' : 'HIFO';
+  const csv = H.harvestSummaryCsv(H.harvestSummaryAll(built.lots, { price: 60000, nowMs: NOW2, methodFor: method }), { price: 60000, generatedAtMs: NOW2 }).split('\r\n');
+  eq(csv[0], '"Wallets: all","BTC price (USD): 60000.00","Generated (UTC): 2026-11-13 00:00:00"', 'summary CSV header line: scope, price, generated-at (UTC)');
+  eq(csv[1].split('","').length, 11, 'summary CSV has the 11 columns');
+  eq(csv.length, 2 + 3 + 1, 'one row per wallet plus the total row');
+  eq(csv[csv.length - 1].startsWith('"Total"'), true, 'last row is the total');
+  ok(csv.some(l => l.startsWith('"Bitkey","FIFO"')), 'each row carries its wallet disposal method');
+  const evil = H.harvestSummaryCsv({ wallets: [{ ...sum.wallets[0], wallet: '=SUM(A1)' }], total: sum.total }, { price: 60000, generatedAtMs: NOW2 }).split('\r\n')[2];
+  ok(evil.startsWith(`"'=SUM(A1)"`), 'a formula-looking wallet name is neutralised in the summary CSV');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
