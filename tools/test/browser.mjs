@@ -971,7 +971,10 @@ console.log('\n[Market candle store]');
   await wait(600);
   const bar = await evaluate(`const row = document.querySelector('.mobile-bottom-nav-row');
     return { labels: [...row.querySelectorAll('.mobile-bottom-nav-item')].map(b => b.getAttribute('aria-label')),
-      overflow: row.scrollWidth > row.clientWidth, more: row.parentElement.dataset.more };`);
+      overflow: row.scrollWidth > row.clientWidth, more: row.parentElement.dataset.more,
+      gapRight: (() => { const items = row.querySelectorAll('.mobile-bottom-nav-item');
+        return Math.round(row.getBoundingClientRect().right - items[items.length - 1].getBoundingClientRect().right); })() };`);
+  check('bottom nav items span the row when they fit (not left-aligned)', bar?.overflow || bar?.gapRight <= 2, JSON.stringify(bar));
   check('bottom nav: Market is second', bar?.labels?.[1] === 'Market', JSON.stringify(bar));
   // With Wallets and Export moved into Settings the bar may fit outright; the fade must then stay off.
   check('bottom nav shows the trailing fade exactly when it overflows', bar?.more === (bar?.overflow ? '1' : '0'), JSON.stringify(bar));

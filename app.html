@@ -7,7 +7,7 @@
   <meta name="description" content="Track Bitcoin transactions, wallet holdings, cost basis, and P&L. Export to CoinLedger for tax reporting.">
   <meta name="theme-color" content="#0a0a0a">
   <meta name="referrer" content="strict-origin-when-cross-origin">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-qAWTtyHRedmSaLukvvLpklZWSGHiDmCYbUhIHJV+L7I=' 'sha256-994SycCdRQxPXEWvjImfG4kJPNkeW68JBlGeJOe6ZvE=' https://unpkg.com/react@18.3.1/umd/react.production.min.js https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js https://accounts.google.com/gsi/client https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com https://api.coinbase.com https://api.exchange.coinbase.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://accounts.google.com https://*.googleusercontent.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-pBBR9ZzGcgANNseLwqBfgIkhBgb+Bgbtb4smevMQUUQ=' 'sha256-994SycCdRQxPXEWvjImfG4kJPNkeW68JBlGeJOe6ZvE=' https://unpkg.com/react@18.3.1/umd/react.production.min.js https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js https://accounts.google.com/gsi/client https://static.cloudflareinsights.com; connect-src 'self' https://cloudflareinsights.com https://api.coinbase.com https://api.exchange.coinbase.com https://www.googleapis.com https://accounts.google.com https://oauth2.googleapis.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://accounts.google.com; font-src https://fonts.gstatic.com; img-src 'self' data: blob: https://accounts.google.com https://*.googleusercontent.com; frame-src https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
   <link rel="icon" type="image/png" sizes="32x32" href="images/favicon-32.png">
   <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="images/apple-touch-icon.png">
@@ -399,7 +399,7 @@
     // sends no ETag, so comparing the page's own headers didn't work there. The unbuilt
     // app.dev.html keeps the placeholder and skips the check.
     (function () {
-      var BUILD_ID = 'a7886407f3fb57ca';
+      var BUILD_ID = '346e63ba482db83e';
       if (BUILD_ID.indexOf('__') === 0) return;
       var lastCheck = 0;
       function check() {
@@ -975,8 +975,9 @@
 
     /* ── Mobile bottom navigation: one horizontally scrolling row (docs/mobile-chart-ux.md §1).
          The pill keeps its rounded container; the inner row is the scroll area. Items stop
-         shrinking, so eight never squeeze into 0.58rem labels; a trailing fade (which ignores
-         touches) says more items exist. ── */
+         shrinking, so they never squeeze into 0.58rem labels; a trailing fade (which ignores
+         touches) says more items exist. When they all fit, they grow to share the spare width
+         so the row spans the pill instead of sitting at its left edge. ── */
     .mobile-bottom-nav-row {
       display:flex; flex:1 1 auto; min-width:0; gap:.35rem; align-items:stretch;
       flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
@@ -985,7 +986,7 @@
     }
     .mobile-bottom-nav-row::-webkit-scrollbar { display:none; }
     .mobile-bottom-nav-row .mobile-bottom-nav-item {
-      flex:0 0 auto; width:auto; min-width:64px; min-height:50px; padding:0 .45rem;
+      flex:1 0 auto; width:auto; min-width:64px; min-height:50px; padding:0 .45rem;
       font-size:.625rem; scroll-snap-align:center;
     }
     .mobile-bottom-nav-row .mobile-bottom-nav-label { overflow:visible; text-overflow:clip; }

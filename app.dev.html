@@ -975,8 +975,9 @@
 
     /* ── Mobile bottom navigation: one horizontally scrolling row (docs/mobile-chart-ux.md §1).
          The pill keeps its rounded container; the inner row is the scroll area. Items stop
-         shrinking, so eight never squeeze into 0.58rem labels; a trailing fade (which ignores
-         touches) says more items exist. ── */
+         shrinking, so they never squeeze into 0.58rem labels; a trailing fade (which ignores
+         touches) says more items exist. When they all fit, they grow to share the spare width
+         so the row spans the pill instead of sitting at its left edge. ── */
     .mobile-bottom-nav-row {
       display:flex; flex:1 1 auto; min-width:0; gap:.35rem; align-items:stretch;
       flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
@@ -985,7 +986,7 @@
     }
     .mobile-bottom-nav-row::-webkit-scrollbar { display:none; }
     .mobile-bottom-nav-row .mobile-bottom-nav-item {
-      flex:0 0 auto; width:auto; min-width:64px; min-height:50px; padding:0 .45rem;
+      flex:1 0 auto; width:auto; min-width:64px; min-height:50px; padding:0 .45rem;
       font-size:.625rem; scroll-snap-align:center;
     }
     .mobile-bottom-nav-row .mobile-bottom-nav-label { overflow:visible; text-overflow:clip; }
