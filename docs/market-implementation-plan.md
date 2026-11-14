@@ -39,7 +39,7 @@ Status of each phase is tracked by ticking its heading here when it is merged.
 
 ---
 
-## Phase 0 — Safety net / golden CoinLedger export test
+## ✅ Phase 0 — Safety net / golden CoinLedger export test
 
 **Objective.** Lock the current CoinLedger CSV output byte-for-byte before any Market code
 exists, so every later phase can prove it did not change tax export behaviour. This is a hard
@@ -99,7 +99,7 @@ any Market code, constants, navigation entries or documentation edits beyond tic
 
 ---
 
-## Phase 1 — Candle model, validation, aggregation, gaps, range/interval rules
+## ✅ Phase 1 — Candle model, validation, aggregation, gaps, range/interval rules
 
 **Objective.** A pure, tested `Candles` namespace that every later phase builds on.
 
