@@ -219,7 +219,7 @@ Do not add a Market tab or load a chart library.
 
 ---
 
-## Phase 3 — Technical indicators
+## ✅ Phase 3 — Technical indicators
 
 **Objective.** A pure, documented, tested `Indicators` namespace.
 
