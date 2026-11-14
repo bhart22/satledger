@@ -1931,9 +1931,9 @@ const Candles = (() => {
   const MAX_VIEW_CANDLES = 3000;    // candles displayed for the selected range
   const MAX_NATIVE_CANDLES = 9000;  // native candles fetched to build them
   const REJECT_LIMIT = 0.05;        // more than this share rejected → the page counts as failed
-  // Column positions of a raw provider row. This is the Coinbase order [time, low, high, open,
-  // close, volume], still to be confirmed by the Phase 2 verification gate; a provider whose
-  // rows differ passes its own map.
+  // Column positions of a raw provider row: the Coinbase order [time, low, high, open, close,
+  // volume], verified 2026-11-14 (docs/market-data.md §4). A provider whose rows differ passes
+  // its own map.
   const ROW_ORDER = Object.freeze({ t:0, l:1, h:2, o:3, c:4, v:5 });
   // Weeks start Monday 00:00 UTC. The epoch was a Thursday; 345600 s is Monday 1970-01-05.
   const WEEK_ANCHOR_SEC = 345600;
@@ -2191,6 +2191,401 @@ const Candles = (() => {
     aggregate, findGaps,
     rangeStart, defaultInterval, allowedIntervals, resolveInterval,
     pageSpan, pageIndex, pageBounds, pagesFor,
+  });
+})();
+
+// ─── Market: Data ────────────────────────────────────────────────────────────
+// Where candles come from: the provider (Coinbase), the cache-store interface with its in-memory
+// implementation, and the service that pages, caches, retries, supersedes and backfills. All I/O
+// goes through injected dependencies (fetchImpl, store, now, sleep), so Node tests drive it with
+// fakes. What leaves the browser is a symbol, a granularity and a fixed page-aligned window —
+// never anything derived from transactions, which nothing here can reach. Spec:
+// docs/market-data.md §3–4, §7–8, §14–19. The IndexedDB store is MarketCandleStore (component zone).
+const MarketData = (() => {
+  const DAY_SEC = 86400;
+  const EARLIEST_MAX_AGE_SEC = 90 * DAY_SEC; // re-verify a discovered earliest candle after this
+  const BACKFILL_MAX_FAILURES = 3;
+
+  const hasOwn = (o, k) => typeof k === 'string' && Object.prototype.hasOwnProperty.call(o, k);
+  const codeError = (code, message = code, extra = {}) => Object.assign(new Error(`MarketData: ${message}`), { code }, extra);
+  const abortError = () => Object.assign(new Error('MarketData: aborted'), { name: 'AbortError' });
+  const isAbort = e => e?.name === 'AbortError';
+  const throwIfAborted = signal => { if(signal?.aborted) throw abortError(); };
+  // Network failures, timeouts, 429 and 5xx are worth another attempt; a real 4xx, a malformed
+  // response or a page over the reject limit is not.
+  const retryable = e => e?.code === 'http' ? (e.status === 429 || e.status >= 500)
+    : !['bad_response', 'rejected', 'bad_window', 'unsupported_interval'].includes(e?.code);
+  const defaultNow = () => Date.now() / 1000;
+  const defaultSleep = (ms, signal) => new Promise((resolve, reject) => {
+    if(signal?.aborted) { reject(abortError()); return; }
+    const onAbort = () => { clearTimeout(timer); reject(abortError()); };
+    const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+  // Plain numbers from the provider's strings, without letting blanks or null become 0.
+  const toNum = x => (typeof x === 'number' || (typeof x === 'string' && x.trim() !== '')) ? Number(x) : NaN;
+  const isPrice = x => Number.isFinite(x) && x > 0;
+  const retryAfterOf = r => {
+    const h = r?.headers?.get?.('Retry-After');
+    const n = h == null || String(h).trim() === '' ? NaN : Number(h);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+
+  // ── Coinbase Exchange provider (§4) ──
+  // Converts responses into the candle model and nothing else: paging, caching, retry and
+  // aggregation are the service's. Verified behaviour it relies on: rows arrive newest first as
+  // [time, low, high, open, close, volume]; `end` is inclusive and rows may precede `start`, so
+  // only rows inside the requested half-open page are kept; responses are publicly cacheable for
+  // five minutes, so requests bypass the HTTP cache (IndexedDB is the only cache).
+  const COINBASE_GRANULARITY = Object.freeze({ '1m': 60, '5m': 300, '15m': 900, '1h': 3600, '1d': 86400 });
+  const createCoinbaseProvider = ({ fetchImpl, now = defaultNow } = {}) => {
+    if(typeof fetchImpl !== 'function') throw new Error('MarketData: createCoinbaseProvider needs fetchImpl');
+    const EXCHANGE = 'https://api.exchange.coinbase.com/products/BTC-USD';
+    const SPOT = 'https://api.coinbase.com/v2/prices/BTC-USD/spot';
+    const PER_REQUEST = 300;
+    const iso = sec => new Date(sec * 1000).toISOString().replace('.000Z', 'Z');
+    const getJson = async (url, signal) => {
+      const r = await fetchImpl(url, { signal, cache: 'no-store', credentials: 'omit' });
+      if(!r || !r.ok) throw codeError('http', `HTTP ${r?.status ?? 0}`, { status: r?.status ?? 0, retryAfterSec: retryAfterOf(r) });
+      try { return await r.json(); }
+      catch(e) { if(isAbort(e)) throw e; throw codeError('bad_response', 'response is not JSON'); }
+    };
+    const getCandles = async ({ interval, startSec, endSec, signal } = {}) => {
+      if(!hasOwn(COINBASE_GRANULARITY, interval)) throw codeError('unsupported_interval', `Coinbase has no native ${interval}`);
+      const g = COINBASE_GRANULARITY[interval];
+      if(!Number.isInteger(startSec) || !Number.isInteger(endSec) || startSec % g || endSec % g
+        || endSec <= startSec || (endSec - startSec) / g > PER_REQUEST) {
+        throw codeError('bad_window', 'candle window must be interval-aligned and at most one page');
+      }
+      const rows = await getJson(`${EXCHANGE}/candles?granularity=${g}&start=${iso(startSec)}&end=${iso(endSec)}`, signal);
+      if(!Array.isArray(rows)) throw codeError('bad_response', 'candles response is not an array');
+      // Rows outside the page belong to its neighbours. A row whose time is unreadable stays in,
+      // to be counted as rejected rather than silently dropped.
+      const inPage = rows.filter(row => {
+        const t = Array.isArray(row) ? toNum(row[Candles.ROW_ORDER.t]) : NaN;
+        return !(t < startSec || t >= endSec);
+      });
+      const r = Candles.parseRows(inPage, interval);
+      if(r.rejected.length) {
+        const reasons = {};
+        for(const x of r.rejected) reasons[x.reason] = (reasons[x.reason] || 0) + 1;
+        console.warn(`MarketData: Coinbase ${interval} page dropped ${r.rejected.length} of ${inPage.length} rows`, reasons);
+      }
+      if(r.overRejectLimit) throw codeError('rejected', 'too many malformed candles in the page');
+      return r.valid;
+    };
+    const getCurrentPrice = async ({ signal } = {}) => {
+      const j = await getJson(SPOT, signal);
+      const price = toNum(j?.data?.amount);
+      if(!isPrice(price)) throw codeError('bad_response', 'spot price missing');
+      return { price, at: Math.floor(now()) };
+    };
+    // Coinbase's 24 h figures are a rolling window and carry no timestamp; `at` is receipt time.
+    const get24HourStats = async ({ signal } = {}) => {
+      const j = await getJson(`${EXCHANGE}/stats`, signal);
+      const s = { open: toNum(j?.open), high: toNum(j?.high), low: toNum(j?.low), last: toNum(j?.last), volume: toNum(j?.volume) };
+      if(![s.open, s.high, s.low, s.last].every(isPrice) || !(Number.isFinite(s.volume) && s.volume >= 0)) {
+        throw codeError('bad_response', '24h stats malformed');
+      }
+      return { ...s, at: Math.floor(now()) };
+    };
+    // The earliest candle is discovered, never assumed (§8). The first-day constant the Dashboard
+    // uses is offered only as a hint.
+    const getHistoricalRange = () => ({ earliestSec: null, hintSec: Date.parse(`${BTC_USD_FIRST_CANDLE_DAY}T00:00:00Z`) / 1000 });
+    return Object.freeze({
+      id: 'coinbase', label: 'Coinbase', symbol: 'BTC-USD',
+      maxCandlesPerRequest: PER_REQUEST,
+      getAvailableIntervals: () => Object.keys(COINBASE_GRANULARITY),
+      getCandles, getCurrentPrice, get24HourStats, getHistoricalRange,
+    });
+  };
+
+  const providers = Object.freeze({
+    coinbase: Object.freeze({ id: 'coinbase', label: 'Coinbase', create: createCoinbaseProvider }),
+  });
+
+  // ── In-memory store (§14 interface) ──
+  // Used by tests, and by MarketCandleStore when IndexedDB is unavailable. Every method resolves.
+  const createMemoryStore = () => {
+    const candles = new Map(), coverage = new Map(), meta = new Map();
+    const key = (provider, symbol, interval) => `${provider}\u0000${symbol}\u0000${interval}`;
+    const series = (m, k) => { let s = m.get(k); if(!s) m.set(k, s = new Map()); return s; };
+    const copy = v => v === undefined ? null : JSON.parse(JSON.stringify(v));
+    return {
+      kind: 'memory',
+      async getCandles({ provider, symbol, interval, fromSec = -Infinity, toSec = Infinity }) {
+        const out = [];
+        for(const c of candles.get(key(provider, symbol, interval))?.values() || []) {
+          if(c.t >= fromSec && c.t < toSec) out.push({ ...c });
+        }
+        return out.sort((a, b) => a.t - b.t);
+      },
+      async putCandles({ provider, symbol, interval, candles: list }) {
+        const s = series(candles, key(provider, symbol, interval));
+        for(const { t, o, h, l, c, v } of Array.isArray(list) ? list : []) s.set(t, { t, o, h, l, c, v: v ?? null });
+      },
+      async getCoverage({ provider, symbol, interval, fromPage = -Infinity, toPage = Infinity }) {
+        const out = [];
+        for(const r of coverage.get(key(provider, symbol, interval))?.values() || []) {
+          if(r.pageIndex >= fromPage && r.pageIndex <= toPage) out.push({ ...r });
+        }
+        return out.sort((a, b) => a.pageIndex - b.pageIndex);
+      },
+      async putCoverage({ provider, symbol, interval, pageIndex, fetchedAt, complete }) {
+        series(coverage, key(provider, symbol, interval)).set(pageIndex, { provider, symbol, interval, pageIndex, fetchedAt, complete: !!complete });
+      },
+      async getMeta(k) { return meta.has(k) ? copy(meta.get(k).value) : null; },
+      async putMeta(k, value) { meta.set(k, { key: k, value: copy(value), at: Date.now() }); },
+      async clear() { candles.clear(); coverage.clear(); meta.clear(); },
+    };
+  };
+
+  // ── Service (§7–8, §15, §17–18) ──
+  const createMarketDataService = ({
+    provider, store = null, now = defaultNow, sleep = defaultSleep, random = Math.random,
+    maxConcurrent = 4, maxAttempts = 3, baseDelayMs = 1000, timeoutMs = 15000, backfillPauseMs = 250,
+  } = {}) => {
+    if(!provider || typeof provider.getCandles !== 'function') throw new Error('MarketData: createMarketDataService needs a provider');
+    const st = store || createMemoryStore();
+    const base = { provider: provider.id, symbol: provider.symbol };
+    const per = provider.maxCandlesPerRequest;
+    const native = new Set(provider.getAvailableIntervals());
+    const nowSec = () => Math.floor(now());
+    const earliestKey = iv => `earliest:${base.provider}:${base.symbol}:${iv}`;
+    const backfillKey = iv => `backfill:${base.provider}:${base.symbol}:${iv}`;
+    let pausedUntilMs = 0; // a 429 pauses every request, not only the one that hit it
+    let viewToken = 0, viewController = null;
+
+    const sourceOf = interval => {
+      if(native.has(interval)) return interval;
+      const from = Candles.INTERVALS[interval]?.from;
+      if(hasOwn(Candles.INTERVALS, interval) && native.has(from)) return from;
+      throw new Error(`MarketData: ${provider.id} cannot provide ${interval}`);
+    };
+
+    // Up to maxAttempts tries with doubling delay plus jitter; a numeric Retry-After replaces the
+    // delay. Each try has its own timeout, linked to the caller's signal. The call is raced
+    // against that signal, so an abort or timeout settles at once even if the fetch never does.
+    const withRetry = async (call, signal) => {
+      let delay = baseDelayMs;
+      for(let attempt = 1; ; attempt++) {
+        throwIfAborted(signal);
+        const pause = pausedUntilMs - now() * 1000;
+        if(pause > 0) await sleep(pause, signal);
+        const ctl = new AbortController();
+        let rejectOnAbort;
+        const aborted = new Promise((_, reject) => { rejectOnAbort = () => reject(abortError()); });
+        aborted.catch(() => {});
+        ctl.signal.addEventListener('abort', rejectOnAbort, { once: true });
+        const onAbort = () => ctl.abort();
+        signal?.addEventListener('abort', onAbort, { once: true });
+        let timedOut = false;
+        const timer = timeoutMs > 0 ? setTimeout(() => { timedOut = true; ctl.abort(); }, timeoutMs) : null;
+        try {
+          return await Promise.race([call(ctl.signal), aborted]);
+        } catch(e) {
+          if(signal?.aborted) throw abortError();
+          const err = timedOut ? codeError('timeout', 'request timed out') : e;
+          if(!retryable(err) || isAbort(err) || attempt >= maxAttempts) throw err;
+          const ms = err.retryAfterSec != null ? err.retryAfterSec * 1000 : delay + random() * 250;
+          if(err.status === 429) pausedUntilMs = Math.max(pausedUntilMs, now() * 1000 + ms);
+          await sleep(ms, signal);
+          delay *= 2;
+        } finally {
+          if(timer) clearTimeout(timer);
+          signal?.removeEventListener('abort', onAbort);
+          ctl.signal.removeEventListener('abort', rejectOnAbort);
+        }
+      }
+    };
+
+    // One page: fetch, keep only completed candles, store them, then record coverage — in that
+    // order, so coverage never claims candles that were not written. Returns every candle in the
+    // page, the forming one included (it is shown, never stored).
+    const fetchPage = async (interval, page, signal) => {
+      const got = await withRetry(s => provider.getCandles({ interval, startSec: page.startSec, endSec: page.endSec, signal: s }), signal);
+      const fetchedAt = nowSec();
+      const s = Candles.intervalSeconds(interval);
+      const completed = got.filter(c => c.t + s <= fetchedAt);
+      if(completed.length) await st.putCandles({ ...base, interval, candles: completed });
+      const record = { ...base, interval, pageIndex: page.index, fetchedAt, complete: page.endSec <= fetchedAt };
+      await st.putCoverage(record);
+      return { candles: got, record };
+    };
+
+    const runPool = async (items, worker, limit) => {
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while(next < items.length) await worker(items[next++]);
+      }));
+    };
+
+    const getEarliest = async (interval = '1d') => {
+      const v = await st.getMeta(earliestKey(interval));
+      if(!v || v.provider !== base.provider || !Number.isInteger(v.earliestSec) || !Number.isFinite(v.verifiedAt)) return null;
+      return { earliestSec: v.earliestSec, verifiedAt: v.verifiedAt, stale: nowSec() - v.verifiedAt > EARLIEST_MAX_AGE_SEC };
+    };
+
+    // A view: { range, interval } (the window follows from the range) or { interval, fromSec,
+    // toSec } (an explicit window, e.g. panning). Read path: store → onUpdate → network for what
+    // is missing plus the newest two buckets → merge → onUpdate. A newer loadView (or cancel)
+    // supersedes this one: its requests are aborted, it resolves { status: 'superseded' }, and
+    // nothing it received reaches onUpdate (pages that finished before the abort stay cached).
+    const loadView = async ({ range = null, interval = null, fromSec = null, toSec = null, onUpdate = null } = {}) => {
+      const token = ++viewToken;
+      viewController?.abort();
+      const controller = viewController = new AbortController();
+      const signal = controller.signal;
+      const live = () => token === viewToken;
+      const superseded = { status: 'superseded', token };
+      const tNow = nowSec();
+      const earliest = await getEarliest('1d');
+      if(!live()) return superseded;
+      const earliestSec = earliest?.earliestSec ?? null;
+      if(range != null) {
+        interval = Candles.resolveInterval(range, interval, tNow, earliestSec);
+        fromSec = Candles.rangeStart(range, tNow, earliestSec);
+        toSec = tNow;
+      }
+      if(toSec == null) toSec = tNow;
+      const source = sourceOf(interval);
+      const ss = Candles.intervalSeconds(source);
+      if(fromSec == null) {
+        // ALL before the earliest candle is discovered: what is held, and at least the newest page.
+        const held = await st.getCandles({ ...base, interval: source, toSec });
+        if(!live()) return superseded;
+        const newestStart = Candles.pageBounds(Candles.pageIndex(tNow, source, per), source, per).startSec;
+        fromSec = held.length ? Math.min(held[0].t, newestStart) : newestStart;
+      }
+      const from = Candles.bucketStart(fromSec, interval); // the first target bucket in full
+      // Coinbase refuses a page that starts in the future; such a page has nothing to give.
+      const pages = Candles.pagesFor(from, toSec, source, per).filter(p => p.startSec <= tNow);
+      const lo = pages.length ? pages[pages.length - 1].index : 0, hi = pages.length ? pages[0].index : -1;
+      const [cached, cov] = await Promise.all([
+        st.getCandles({ ...base, interval: source, fromSec: from, toSec }),
+        pages.length ? st.getCoverage({ ...base, interval: source, fromPage: lo, toPage: hi }) : [],
+      ]);
+      if(!live()) return superseded;
+      const coverage = new Map(cov.map(r => [r.pageIndex, r]));
+      const byT = new Map(cached.map(c => [c.t, c]));
+      const failed = [];
+
+      const build = status => {
+        const nat = [...byT.values()].filter(c => c.t >= from && c.t < toSec).sort((a, b) => a.t - b.t);
+        const candles = source === interval ? nat.map(c => ({ ...c })) : Candles.aggregate(nat, interval, source, { nowSec: tNow });
+        const last = candles[candles.length - 1];
+        const completeTo = Math.min(toSec, Candles.bucketStart(tNow, source));
+        const gaps = completeTo > from
+          ? Candles.findGaps(nat, source, { fromSec: from, toSec: completeTo, isFetched: t => coverage.has(Candles.pageIndex(t, source, per)) })
+          : [];
+        return {
+          status, token, interval, sourceInterval: source, fromSec: from, toSec, candles,
+          formingIndex: last && !Candles.isComplete(last.t, interval, tNow) ? candles.length - 1 : -1,
+          gaps, failedPages: failed.map(f => ({ ...f })), earliestSec,
+          provider: { id: provider.id, label: provider.label, symbol: provider.symbol },
+        };
+      };
+      if(onUpdate && cached.length) onUpdate(build('loading'));
+
+      // Complete pages are never refetched. An incomplete page is refetched at most once per
+      // interval — except the page(s) holding the newest two buckets, which every load refreshes
+      // to correct a final candle stored moments before its close.
+      const newest = Candles.bucketStart(tNow, source);
+      const forced = new Set([newest, newest - ss].map(t => Candles.pageIndex(t, source, per)));
+      const toFetch = pages.filter(p => {
+        if(forced.has(p.index)) return true;
+        const rec = coverage.get(p.index);
+        return !rec || (!rec.complete && tNow - rec.fetchedAt >= ss);
+      });
+      await runPool(toFetch, async page => {
+        if(signal.aborted) return;
+        try {
+          const { candles, record } = await fetchPage(source, page, signal);
+          for(const c of candles) byT.set(c.t, c);
+          coverage.set(page.index, record);
+        } catch(e) {
+          if(isAbort(e) || signal.aborted) return;
+          failed.push({ index: page.index, startSec: page.startSec, endSec: page.endSec, error: e?.code || 'error', status: e?.status ?? null });
+        }
+      }, maxConcurrent);
+      if(!live()) return superseded;
+      const result = build(failed.length ? 'partial' : 'ok');
+      if(onUpdate) onUpdate(result);
+      return result;
+    };
+
+    // Leaving the Market tab: abort the view in flight; whatever it resolves is superseded.
+    const cancel = () => { viewToken++; viewController?.abort(); viewController = null; };
+
+    // Full daily history, newest page to oldest, one request at a time with a pause between.
+    // Resumable (position kept in meta) and idempotent (writes are keyed by t). A page already
+    // covered and holding candles costs no request. Two consecutive empty pages older than the
+    // oldest candle held mean the provider's history starts there: that candle is recorded as the
+    // earliest (§8). Stops after BACKFILL_MAX_FAILURES consecutive page failures; abort `signal`
+    // to pause (tab hidden or Market tab left). Daily only: an intraday walk back to 2015 would be
+    // tens of thousands of requests, and no range offers an intraday interval that needs it.
+    const backfill = async ({ signal = null, onProgress = null } = {}) => {
+      const interval = '1d';
+      const known = await getEarliest(interval);
+      if(known && !known.stale) return { status: 'complete', earliestSec: known.earliestSec };
+      const saved = await st.getMeta(backfillKey(interval));
+      const newestIdx = Candles.pageIndex(nowSec(), interval, per);
+      const resume = saved && Number.isInteger(saved.nextPage) && saved.nextPage <= newestIdx;
+      let idx = resume ? saved.nextPage : newestIdx;
+      let emptyRun = resume && Number.isInteger(saved.emptyRun) ? saved.emptyRun : 0;
+      let oldestSec = resume && Number.isInteger(saved.oldestSec) ? saved.oldestSec : null;
+      let failures = 0, requested = false;
+      const paused = () => ({ status: 'paused', nextPage: idx });
+      for(;;) {
+        if(signal?.aborted) return paused();
+        const page = Candles.pageBounds(idx, interval, per);
+        if(page.endSec <= 0) return { status: 'failed', error: 'no_history', nextPage: idx };
+        let candles = null;
+        const [rec] = await st.getCoverage({ ...base, interval, fromPage: idx, toPage: idx });
+        if(rec?.complete) {
+          const held = await st.getCandles({ ...base, interval, fromSec: page.startSec, toSec: page.endSec });
+          if(held.length) candles = held;
+        }
+        if(!candles) {
+          try {
+            if(requested) await sleep(backfillPauseMs, signal);
+            requested = true;
+            ({ candles } = await fetchPage(interval, page, signal));
+            failures = 0;
+          } catch(e) {
+            if(isAbort(e) || signal?.aborted) return paused();
+            if(++failures >= BACKFILL_MAX_FAILURES) {
+              await st.putMeta(backfillKey(interval), { nextPage: idx, emptyRun, oldestSec });
+              return { status: 'failed', error: e?.code || 'error', nextPage: idx };
+            }
+            continue;
+          }
+        }
+        if(candles.length) { oldestSec = oldestSec == null ? candles[0].t : Math.min(oldestSec, candles[0].t); emptyRun = 0; }
+        else if(oldestSec != null) emptyRun++;
+        idx--;
+        if(emptyRun >= 2) {
+          await st.putMeta(earliestKey(interval), { ...base, interval, earliestSec: oldestSec, verifiedAt: nowSec() });
+          await st.putMeta(backfillKey(interval), null);
+          return { status: 'complete', earliestSec: oldestSec };
+        }
+        await st.putMeta(backfillKey(interval), { nextPage: idx, emptyRun, oldestSec });
+        onProgress?.({ nextPage: idx, oldestSec });
+      }
+    };
+
+    return Object.freeze({
+      provider, store: st,
+      loadView, cancel, backfill, getEarliest,
+      getCurrentPrice: ({ signal = null } = {}) => withRetry(s => provider.getCurrentPrice({ signal: s }), signal),
+      get24HourStats: ({ signal = null } = {}) => withRetry(s => provider.get24HourStats({ signal: s }), signal),
+      clearCache: () => st.clear(),
+    });
+  };
+
+  return Object.freeze({
+    COINBASE_GRANULARITY,
+    createCoinbaseProvider, providers, createMemoryStore, createMarketDataService,
   });
 })();
 
@@ -3868,6 +4263,100 @@ const sanitizeStoredTransactions = list => list.map(tx => {
 
 // Sanitize, de-duplicate ids, fill datetimeUtc/sequence on rows that predate them, and default reward categories
 const prepareTransactions = list => migrateRewardCategory(migrateTxTimestamps(ensureTxIds(sanitizeStoredTransactions(list))));
+
+// ─── Market: Candle store ────────────────────────────────────────────────────
+// IndexedDB cache of completed native candles (docs/market-data.md §14): database
+// satledger-market v1, stores candles / coverage / meta, the same interface as
+// MarketData.createMemoryStore(). Public market data only — not synced, not backed up, always
+// safe to discard. Opened lazily by open(); if IndexedDB is unavailable, blocked or failing, the
+// in-memory store is used for the session. Every operation resolves: a failed transaction logs a
+// warning and behaves as a cache miss. A schema change bumps DB_VERSION and the upgrade drops and
+// recreates every store.
+const MarketCandleStore = (() => {
+  const DB_NAME = 'satledger-market', DB_VERSION = 1, OPEN_TIMEOUT_MS = 3000;
+  const STORES = {
+    candles: ['provider', 'symbol', 'interval', 't'],
+    coverage: ['provider', 'symbol', 'interval', 'pageIndex'],
+    meta: 'key',
+  };
+  const warn = (what, e) => console.warn(`Market cache: ${what} failed; continuing without it`, e?.name || e?.message || String(e));
+  const request = r => new Promise((resolve, reject) => { r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
+
+  const openDb = idb => new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, v) => { if(!settled) { settled = true; clearTimeout(timer); fn(v); } };
+    // A blocked upgrade (another tab holding an older version) must not hold the feature hostage.
+    const timer = setTimeout(() => finish(reject, new Error('open timed out')), OPEN_TIMEOUT_MS);
+    let r;
+    try { r = idb.open(DB_NAME, DB_VERSION); } catch(e) { finish(reject, e); return; }
+    r.onupgradeneeded = () => {
+      const db = r.result;
+      for(const name of [...db.objectStoreNames]) db.deleteObjectStore(name);
+      for(const [name, keyPath] of Object.entries(STORES)) db.createObjectStore(name, { keyPath });
+    };
+    r.onsuccess = () => {
+      const db = r.result;
+      if(settled) { db.close(); return; }
+      db.onversionchange = () => db.close(); // let a newer tab upgrade; later calls become misses
+      finish(resolve, db);
+    };
+    r.onerror = () => finish(reject, r.error);
+  });
+
+  const wrap = db => {
+    // Runs fn inside one transaction; for writes, waits for it to commit.
+    const run = async (what, names, mode, fn, fallback) => {
+      try {
+        const tx = db.transaction(names, mode);
+        const committed = new Promise((resolve, reject) => {
+          tx.oncomplete = resolve;
+          tx.onerror = () => reject(tx.error);
+          tx.onabort = () => reject(tx.error || new Error('transaction aborted'));
+        });
+        const result = await fn(tx);
+        if(mode === 'readwrite') await committed; else committed.catch(() => {});
+        return result;
+      } catch(e) { warn(what, e); return fallback; }
+    };
+    return {
+      kind: 'indexeddb',
+      getCandles: ({ provider, symbol, interval, fromSec = -Infinity, toSec = Infinity }) => !(toSec > fromSec) ? Promise.resolve([])
+        : run('read candles', ['candles'], 'readonly', tx => request(tx.objectStore('candles').getAll(
+            IDBKeyRange.bound([provider, symbol, interval, fromSec], [provider, symbol, interval, toSec], false, true)))
+          .then(rows => rows.map(({ t, o, h, l, c, v }) => ({ t, o, h, l, c, v: v ?? null }))), []),
+      putCandles: ({ provider, symbol, interval, candles }) => run('write candles', ['candles'], 'readwrite', tx => {
+        const os = tx.objectStore('candles');
+        for(const { t, o, h, l, c, v } of Array.isArray(candles) ? candles : []) os.put({ provider, symbol, interval, t, o, h, l, c, v: v ?? null });
+      }, undefined),
+      getCoverage: ({ provider, symbol, interval, fromPage = -Infinity, toPage = Infinity }) => !(toPage >= fromPage) ? Promise.resolve([])
+        : run('read coverage', ['coverage'], 'readonly', tx => request(tx.objectStore('coverage').getAll(
+            IDBKeyRange.bound([provider, symbol, interval, fromPage], [provider, symbol, interval, toPage]))), []),
+      putCoverage: ({ provider, symbol, interval, pageIndex, fetchedAt, complete }) => run('write coverage', ['coverage'], 'readwrite', tx => {
+        tx.objectStore('coverage').put({ provider, symbol, interval, pageIndex, fetchedAt, complete: !!complete });
+      }, undefined),
+      getMeta: key => run('read meta', ['meta'], 'readonly', tx => request(tx.objectStore('meta').get(key)).then(r => r ? r.value ?? null : null), null),
+      putMeta: (key, value) => run('write meta', ['meta'], 'readwrite', tx => {
+        tx.objectStore('meta').put({ key, value: value === undefined ? null : value, at: Date.now() });
+      }, undefined),
+      clear: () => run('clear', Object.keys(STORES), 'readwrite', tx => { for(const name of Object.keys(STORES)) tx.objectStore(name).clear(); }, undefined),
+    };
+  };
+
+  // A new store each call; `idb` is injectable so tests can make it fail.
+  const create = async ({ idb } = {}) => {
+    try {
+      if(idb === undefined) idb = typeof indexedDB === 'undefined' ? null : indexedDB; // the getter itself can throw
+      if(!idb || typeof idb.open !== 'function') throw new Error('IndexedDB unavailable');
+      return Object.freeze(wrap(await openDb(idb)));
+    } catch(e) {
+      warn('open', e);
+      return Object.freeze(MarketData.createMemoryStore());
+    }
+  };
+  let opened = null;
+  const open = () => opened || (opened = create());
+  return Object.freeze({ DB_NAME, DB_VERSION, open, create });
+})();
 
 // Every keystroke in the transaction modal re-renders App (the form state lives there), and
 // with it every chart: RSI segments and MA paths over thousands of points, rebuilt per key.

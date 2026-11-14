@@ -15,7 +15,7 @@ if (!(await findChrome())) {
   process.exit(0);
 }
 
-const { evaluate, reload, wait, seed, press, close, errors } =
+const { send, evaluate, reload, wait, seed, press, close, errors } =
   await launch({ page: process.env.SATLEDGER_PAGE || 'app.html', port: 8791, debugPort: 9291, label: 'browser' });
 const { check, report } = createChecks();
 
@@ -686,6 +686,67 @@ console.log('\n[CoinLedger export is unchanged]');
     }
     check(`${label}: CSV is byte-identical to ${g.file}`, same, detail);
   }
+}
+
+// ── Market candle store (IndexedDB) ──────────────────────────────────────────
+// MarketCandleStore round-trips candles, coverage and meta through real IndexedDB, and falls
+// back to the in-memory store — with the app still booting — when indexedDB.open fails.
+console.log('\n[Market candle store]');
+{
+  const base = `{ provider: 'test', symbol: 'BTC-USD', interval: '1h' }`;
+  const r = await evaluate(`return (async () => {
+    const k = ${base};
+    const s = await MarketCandleStore.create();
+    await s.clear();
+    await s.putCandles({ ...k, candles: [{ t: 7200, o: 2, h: 3, l: 1, c: 2.5, v: null }, { t: 3600, o: 1, h: 2, l: 0.5, c: 1.5, v: 4 }, { t: 10800, o: 3, h: 3, l: 3, c: 3, v: 1 }] });
+    await s.putCandles({ ...k, interval: '1d', candles: [{ t: 0, o: 9, h: 9, l: 9, c: 9, v: 9 }] });
+    await s.putCoverage({ ...k, pageIndex: 4, fetchedAt: 123, complete: true });
+    await s.putMeta('earliest:test:BTC-USD:1d', { earliestSec: 42, verifiedAt: 7 });
+    const again = await MarketCandleStore.create(); // a second connection reads what the first wrote
+    const out = {
+      kind: s.kind,
+      window: await again.getCandles({ ...k, fromSec: 3600, toSec: 10800 }),
+      other: await again.getCandles({ ...k, interval: '1d', fromSec: -Infinity, toSec: Infinity }),
+      empty: await again.getCandles({ ...k, fromSec: 5, toSec: 5 }),
+      coverage: await again.getCoverage({ ...k, fromPage: 0, toPage: 10 }),
+      meta: await again.getMeta('earliest:test:BTC-USD:1d'),
+      missing: await again.getMeta('nope'),
+    };
+    await s.clear();
+    out.cleared = (await again.getCandles({ ...k })).length + (await again.getCoverage({ ...k })).length;
+    out.dbs = (await indexedDB.databases?.() || []).map(d => d.name + '@' + d.version);
+    return out;
+  })()`);
+  check('IndexedDB store opened', r?.kind === 'indexeddb', r?.kind);
+  check('candles round-trip, ascending, toSec exclusive', JSON.stringify(r?.window) === JSON.stringify([
+    { t: 3600, o: 1, h: 2, l: 0.5, c: 1.5, v: 4 }, { t: 7200, o: 2, h: 3, l: 1, c: 2.5, v: null }]), JSON.stringify(r?.window));
+  check('series kept apart by interval', r?.other?.length === 1 && r.other[0].t === 0);
+  check('empty window → []', Array.isArray(r?.empty) && r.empty.length === 0);
+  check('coverage round-trips', JSON.stringify(r?.coverage) === JSON.stringify([{ provider: 'test', symbol: 'BTC-USD', interval: '1h', pageIndex: 4, fetchedAt: 123, complete: true }]), JSON.stringify(r?.coverage));
+  check('meta round-trips; missing meta → null', JSON.stringify(r?.meta) === '{"earliestSec":42,"verifiedAt":7}' && r?.missing === null, JSON.stringify(r?.meta));
+  check('clear() empties the stores', r?.cleared === 0);
+  check('database is satledger-market v1', (r?.dbs || []).includes('satledger-market@1'), JSON.stringify(r?.dbs));
+
+  // indexedDB.open made to fail before any app script runs
+  const { identifier } = await send('Page.addScriptToEvaluateOnNewDocument', {
+    source: `IDBFactory.prototype.open = function(){ throw new DOMException('blocked by test', 'SecurityError'); };`,
+  });
+  await seed({ 'btc-tx-v2': [tx({ id: 'mk1' })], 'btc-wallets': WALLETS });
+  await evaluate(`history.replaceState(null, '', '#dashboard'); return 1;`); // the export test left #export
+  const errorsBefore = errors.length;
+  await reload();
+  check('app still boots with indexedDB.open failing', await evaluate(`return !!document.querySelector('.stats-grid');`));
+  const f = await evaluate(`return (async () => {
+    const s = await MarketCandleStore.open();
+    const k = ${base};
+    await s.putCandles({ ...k, candles: [{ t: 3600, o: 1, h: 1, l: 1, c: 1, v: 1 }] });
+    return { kind: s.kind, n: (await s.getCandles({ ...k })).length, same: s === await MarketCandleStore.open() };
+  })()`);
+  check('falls back to the in-memory store', f?.kind === 'memory' && f?.n === 1, JSON.stringify(f));
+  check('open() is lazy and shared', f?.same === true);
+  check('nothing thrown', errors.length === errorsBefore, errors.slice(errorsBefore).join(' | '));
+  await send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  await reload();
 }
 
 // ── a new deploy is announced ────────────────────────────────────────────────

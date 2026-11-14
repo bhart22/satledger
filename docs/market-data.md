@@ -232,7 +232,10 @@ constant.
 - The record is re-verified if older than 90 days, and is discarded when the provider id changes.
 - `ALL` means `[earliestSec for '1d', now)`. Until discovery completes, `ALL` shows what is
   loaded with a "loading history" state.
-- For intraday intervals, the earliest candle is discovered the same way but only on demand.
+- Intraday intervals have no earliest-candle discovery. No range offers an intraday interval
+  without a bounded start (`ALL` offers only `1d` and `1w`, §9), and walking back from today to
+  2015 a 300-candle page at a time would take tens of thousands of requests. If one is ever
+  needed it must start from `hintSec`, not from now. `service.backfill()` is daily only.
 - Swapping provider changes `ALL` automatically; nothing else in the app refers to the date.
 
 ## 9. Range and interval rules
@@ -431,6 +434,26 @@ Supersede:
 
 Failure outcome: pages that succeeded are kept and shown; the view enters the `partial` state
 with a retry control. A failed page is not recorded in `coverage`, so the next load retries it.
+
+Service interface (`MarketData.createMarketDataService({ provider, store, now, sleep })`, `now`
+in UTC seconds):
+
+```js
+service.loadView({ range, interval, onUpdate })            // window from the range, interval resolved (§9)
+service.loadView({ interval, fromSec, toSec, onUpdate })   // explicit window (panning)
+// → { status: 'ok' | 'partial' | 'superseded', token, interval, sourceInterval, fromSec, toSec,
+//     candles, formingIndex, gaps, failedPages: [{ index, startSec, endSec, error, status }],
+//     earliestSec, provider: { id, label, symbol } }
+// onUpdate receives the cached result first ('loading'), then the final one; never a superseded one.
+service.cancel()                       // supersede and abort the view in flight
+service.backfill({ signal })           // → { status: 'complete' | 'paused' | 'failed', earliestSec?, nextPage? }
+service.getEarliest('1d')              // → { earliestSec, verifiedAt, stale } | null
+service.getCurrentPrice({ signal }), service.get24HourStats({ signal })   // with the same retry
+service.clearCache()
+```
+
+`formingIndex` is the index of the forming candle in `candles`, or −1. `gaps` covers completed
+native buckets only.
 
 Rate limits: Coinbase's public limit is per IP, 10 requests/second sustained with bursts to 15
 (verified, §4). With 4 concurrent requests and the caps in §10 the feature stays below it; the
