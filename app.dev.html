@@ -2589,6 +2589,428 @@ const MarketData = (() => {
   });
 })();
 
+// ─── Market: Indicators ──────────────────────────────────────────────────────
+// Technical indicators over validated candles { t, o, h, l, c, v }: the definition registry
+// (SMA, EMA, RSI, MACD, Bollinger Bands, ATR, historical volatility), gap segmentation, settings
+// validation, returns, drawdown and the high-since / all-time-high helpers. Pure: no I/O, no
+// clock, no mutation of the input, and nothing here knows about transactions. Every output array
+// is the input's length; a position with no defined value is null — never 0, never NaN.
+// Every formula is written out in docs/technical-indicators.md, which this code must match.
+// The Dashboard's buildMovingAverageSeries is separate and untouched; tests assert the two agree.
+const Indicators = (() => {
+  const DAY_SEC = 86400;
+  const PERIOD_MIN = 2, PERIOD_MAX = 1000;
+  const SOURCES = Object.freeze(['close', 'open', 'high', 'low', 'hl2', 'ohlc4']);
+  const CATEGORIES = Object.freeze(['TREND', 'MOMENTUM', 'VOLATILITY', 'VOLUME', 'STATISTICAL']);
+  // Highest BTC-USD price before the provider's earliest daily candle (§12). Deliberately null
+  // until Phase 8 verifies a value, date and authoritative source; never filled in from memory.
+  const ATH_SEED = null;
+
+  const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+  const nulls = n => new Array(n).fill(null);
+  const list = candles => Array.isArray(candles) ? candles : [];
+  const isNum = x => typeof x === 'number' && Number.isFinite(x);
+
+  // ── Price source (§1) ──
+  const SOURCE_FN = {
+    close: x => x.c, open: x => x.o, high: x => x.h, low: x => x.l,
+    hl2: x => (x.h + x.l) / 2, ohlc4: x => (x.o + x.h + x.l + x.c) / 4,
+  };
+  const values = (candles, source = 'close') => list(candles).map(SOURCE_FN[source]);
+
+  // ── Series math over plain number arrays ──
+  // Rolling sum in the same order as buildMovingAverageSeries, so rounded values agree exactly.
+  const smaOf = (xs, N) => {
+    const out = nulls(xs.length);
+    let sum = 0;
+    for(let i = 0; i < xs.length; i++) {
+      sum += xs[i];
+      if(i >= N) sum -= xs[i - N];
+      if(i >= N - 1) out[i] = sum / N;
+    }
+    return out;
+  };
+  // EMA seeded with the simple average of the first N values from `from` (§5); xs before
+  // `from` are ignored (they may be null, as in the MACD line's warm-up).
+  const emaOf = (xs, N, from = 0) => {
+    const out = nulls(xs.length);
+    const seedAt = from + N - 1;
+    if(seedAt >= xs.length) return out;
+    let sum = 0;
+    for(let j = from; j <= seedAt; j++) sum += xs[j];
+    let e = sum / N;
+    out[seedAt] = e;
+    const k = 2 / (N + 1);
+    for(let i = seedAt + 1; i < xs.length; i++) { e = xs[i] * k + e * (1 - k); out[i] = e; }
+    return out;
+  };
+  // Wilder RSI (§6). Same arithmetic as buildMovingAverageSeries: avgLoss 0 → 100.
+  const rsiOf = (xs, N) => {
+    const out = nulls(xs.length);
+    if(xs.length <= N) return out;
+    let g = 0, l = 0;
+    for(let j = 1; j <= N; j++) { const d = xs[j] - xs[j - 1]; g += Math.max(d, 0); l += Math.max(-d, 0); }
+    let ag = g / N, al = l / N;
+    const rsi = () => al === 0 ? 100 : 100 - 100 / (1 + ag / al);
+    out[N] = rsi();
+    for(let i = N + 1; i < xs.length; i++) {
+      const d = xs[i] - xs[i - 1];
+      ag = (ag * (N - 1) + Math.max(d, 0)) / N;
+      al = (al * (N - 1) + Math.max(-d, 0)) / N;
+      out[i] = rsi();
+    }
+    return out;
+  };
+
+  // ── Settings validation (§1) ──
+  const fail = msg => { throw new Error(`Indicators: ${msg}`); };
+  const checkPeriod = (v, name) => {
+    if(typeof v !== 'number' || !Number.isInteger(v) || v < PERIOD_MIN || v > PERIOD_MAX) fail(`${name} must be an integer from ${PERIOD_MIN} to ${PERIOD_MAX}`);
+    return v;
+  };
+  const checkMultiplier = (v, name) => {
+    if(!isNum(v) || !(v > 0) || v > 10) fail(`${name} must be a number greater than 0 and at most 10`);
+    return v;
+  };
+  const checkSource = v => {
+    if(typeof v !== 'string' || !SOURCES.includes(v)) fail(`source must be one of ${SOURCES.join(', ')}`);
+    return v;
+  };
+  const checkLevel = (v, name) => {
+    if(!isNum(v) || !(v > 0) || !(v < 100)) fail(`${name} must be a number between 0 and 100`);
+    return v;
+  };
+  // Defaults filled in for absent keys; keys the definition doesn't know are dropped.
+  const merge = (defaults, settings) => {
+    if(settings != null && (typeof settings !== 'object' || Array.isArray(settings))) fail('settings must be an object');
+    const s = { ...defaults };
+    if(settings) for(const k of Object.keys(defaults)) if(hasOwn(settings, k) && settings[k] !== undefined) s[k] = settings[k];
+    return s;
+  };
+
+  // ── Definitions ──
+  // Each spec gives check(s) (throws on a bad value), warmup(s) and calculate(candles, s,
+  // interval) over already-merged settings; define() wraps them so every public entry point
+  // validates first. The public methods don't use `this`, so they can be passed around freely.
+  const define = d => {
+    const defaults = Object.freeze({ ...d.defaults });
+    const validate = settings => { const s = merge(defaults, settings); d.check(s); return s; };
+    return Object.freeze({
+      id: d.id, name: d.name, category: d.category, placement: d.placement,
+      defaults, presets: d.presets ? Object.freeze([...d.presets]) : null, series: Object.freeze([...d.series]),
+      validate,
+      warmup: settings => d.warmup(validate(settings)),
+      calculate: (candles, settings, interval) => d.calculate(candles, validate(settings), interval),
+    });
+  };
+
+  const sma = define({
+    id: 'sma', name: 'Simple Moving Average', category: 'TREND', placement: 'overlay',
+    defaults: { period: 50, source: 'close' }, presets: [20, 50, 100, 200], series: ['sma'],
+    check(s) {
+      checkPeriod(s.period, 'period'); checkSource(s.source);
+      return s;
+    },
+    warmup(s) { return { sma: s.period - 1 }; },
+    calculate(candles, s) {
+      return { sma: smaOf(values(candles, s.source), s.period) };
+    },
+  });
+
+  const ema = define({
+    id: 'ema', name: 'Exponential Moving Average', category: 'TREND', placement: 'overlay',
+    defaults: { period: 21, source: 'close' }, presets: [12, 21, 50, 200], series: ['ema'],
+    check(s) {
+      checkPeriod(s.period, 'period'); checkSource(s.source);
+      return s;
+    },
+    warmup(s) { return { ema: s.period - 1 }; },
+    calculate(candles, s) {
+      return { ema: emaOf(values(candles, s.source), s.period) };
+    },
+  });
+
+  const rsi = define({
+    id: 'rsi', name: 'Relative Strength Index', category: 'MOMENTUM', placement: 'pane',
+    defaults: { period: 14, overbought: 70, oversold: 30 }, series: ['rsi'],
+    check(s) {
+      checkPeriod(s.period, 'period'); checkLevel(s.overbought, 'overbought'); checkLevel(s.oversold, 'oversold');
+      if(!(s.oversold < s.overbought)) fail('oversold must be below overbought');
+      return s;
+    },
+    warmup(s) { return { rsi: s.period }; },
+    calculate(candles, s) {
+      return { rsi: rsiOf(values(candles), s.period) };
+    },
+  });
+
+  const macd = define({
+    id: 'macd', name: 'MACD', category: 'MOMENTUM', placement: 'pane',
+    defaults: { fast: 12, slow: 26, signal: 9 }, series: ['macd', 'signal', 'histogram'],
+    check(s) {
+      checkPeriod(s.fast, 'fast'); checkPeriod(s.slow, 'slow'); checkPeriod(s.signal, 'signal');
+      if(!(s.fast < s.slow)) fail('fast must be smaller than slow');
+      return s;
+    },
+    warmup(s) {
+      return { macd: s.slow - 1, signal: s.slow + s.signal - 2, histogram: s.slow + s.signal - 2 };
+    },
+    calculate(candles, s) {
+      const c = values(candles);
+      const fast = emaOf(c, s.fast), slow = emaOf(c, s.slow);
+      const line = c.map((_, i) => i >= s.slow - 1 ? fast[i] - slow[i] : null);
+      const signal = emaOf(line, s.signal, s.slow - 1);
+      const histogram = line.map((m, i) => m !== null && signal[i] !== null ? m - signal[i] : null);
+      return { macd: line, signal, histogram };
+    },
+  });
+
+  const bollinger = define({
+    id: 'bollinger', name: 'Bollinger Bands', category: 'VOLATILITY', placement: 'overlay',
+    defaults: { period: 20, multiplier: 2 }, series: ['upper', 'middle', 'lower', 'percentB', 'bandWidth'],
+    check(s) {
+      checkPeriod(s.period, 'period'); checkMultiplier(s.multiplier, 'multiplier');
+      return s;
+    },
+    warmup(s) {
+      const w = s.period - 1;
+      return { upper: w, middle: w, lower: w, percentB: w, bandWidth: w };
+    },
+    calculate(candles, s) {
+      const N = s.period;
+      const c = values(candles), n = c.length;
+      const middle = smaOf(c, N);
+      const upper = nulls(n), lower = nulls(n), percentB = nulls(n), bandWidth = nulls(n);
+      for(let i = N - 1; i < n; i++) {
+        let ss = 0;
+        for(let j = i - N + 1; j <= i; j++) { const d = c[j] - middle[i]; ss += d * d; }
+        const sd = Math.sqrt(ss / N); // population deviation, divisor N
+        upper[i] = middle[i] + s.multiplier * sd;
+        lower[i] = middle[i] - s.multiplier * sd;
+        percentB[i] = upper[i] === lower[i] ? null : (c[i] - lower[i]) / (upper[i] - lower[i]);
+        bandWidth[i] = (upper[i] - lower[i]) / middle[i];
+      }
+      return { upper, middle, lower, percentB, bandWidth };
+    },
+  });
+
+  const atr = define({
+    id: 'atr', name: 'Average True Range', category: 'VOLATILITY', placement: 'pane',
+    defaults: { period: 14 }, series: ['atr'],
+    check(s) {
+      checkPeriod(s.period, 'period');
+      return s;
+    },
+    warmup(s) { return { atr: s.period }; },
+    calculate(candles, s) {
+      const N = s.period;
+      const xs = list(candles), n = xs.length;
+      const out = nulls(n);
+      if(n <= N) return { atr: out };
+      const tr = i => Math.max(xs[i].h - xs[i].l, Math.abs(xs[i].h - xs[i - 1].c), Math.abs(xs[i].l - xs[i - 1].c));
+      let sum = 0;
+      for(let j = 1; j <= N; j++) sum += tr(j);
+      let a = sum / N;
+      out[N] = a;
+      for(let i = N + 1; i < n; i++) { a = (a * (N - 1) + tr(i)) / N; out[i] = a; }
+      return { atr: out };
+    },
+  });
+
+  // Intervals per 365-day year (§10): 365 for 1d, 8760 for 1h, 52.142857… for 1w.
+  const annualizationFactor = interval => 365 * DAY_SEC / Candles.intervalSeconds(interval);
+
+  const volatility = define({
+    id: 'volatility', name: 'Historical Volatility', category: 'VOLATILITY', placement: 'pane',
+    defaults: { period: 30 }, presets: [7, 14, 30, 90], series: ['volatility'],
+    check(s) {
+      checkPeriod(s.period, 'period');
+      return s;
+    },
+    warmup(s) { return { volatility: s.period }; },
+    // interval is required: it sets the annualization factor.
+    calculate(candles, s, interval) {
+      const N = s.period;
+      const sqrtP = Math.sqrt(annualizationFactor(interval));
+      const c = values(candles), n = c.length;
+      const out = nulls(n);
+      const r = c.map((x, i) => i >= 1 ? Math.log(x / c[i - 1]) : null);
+      for(let i = N; i < n; i++) {
+        let sum = 0;
+        for(let j = i - N + 1; j <= i; j++) sum += r[j];
+        const mean = sum / N;
+        let ss = 0;
+        for(let j = i - N + 1; j <= i; j++) { const d = r[j] - mean; ss += d * d; }
+        out[i] = Math.sqrt(ss / (N - 1)) * sqrtP; // sample deviation, divisor N-1
+      }
+      return { volatility: out };
+    },
+  });
+
+  const DEFINITIONS = Object.freeze([sma, ema, rsi, macd, bollinger, atr, volatility]);
+  const BY_ID = Object.freeze(Object.fromEntries(DEFINITIONS.map(d => [d.id, d])));
+  const IDS = Object.freeze(DEFINITIONS.map(d => d.id));
+  const get = id => {
+    if(typeof id !== 'string' || !hasOwn(BY_ID, id)) fail(`unknown indicator ${JSON.stringify(id)}`);
+    return BY_ID[id];
+  };
+  // For settings from a URL or stored preferences: invalid → the defaults, never a throw.
+  const resolveSettings = (id, settings) => {
+    const def = get(id);
+    try { return def.validate(settings); } catch { return { ...def.defaults }; }
+  };
+
+  // ── Gap segmentation (§2) ──
+  // Splits at every missing bucket (consecutive t further apart than one interval) and around
+  // every candle flagged partial, runs calculate on each segment separately and concatenates.
+  // A partial candle is its own segment, so all its values are null. Nothing is forward-filled.
+  const calculateSegmented = (defOrId, candles, settings, interval) => {
+    const def = typeof defOrId === 'string' ? get(defOrId) : defOrId;
+    const s = def.validate(settings);
+    const step = Candles.intervalSeconds(interval);
+    const xs = list(candles);
+    const out = Object.fromEntries(def.series.map(k => [k, []]));
+    const run = (a, b) => {
+      if(b <= a) return;
+      const r = def.calculate(xs.slice(a, b), s, interval);
+      for(const k of def.series) out[k].push(...r[k]);
+    };
+    let start = 0;
+    for(let i = 0; i < xs.length; i++) {
+      if(xs[i].partial) {
+        run(start, i);
+        for(const k of def.series) out[k].push(null);
+        start = i + 1;
+      } else if(i > start && xs[i].t - xs[i - 1].t !== step) {
+        run(start, i);
+        start = i;
+      }
+    }
+    run(start, xs.length);
+    return out;
+  };
+
+  // ── Returns (§11) ──
+  const simple = (a, b) => b / a - 1;
+  const log = (a, b) => Math.log(b / a);
+  // Selected range return: last close over the first candle's open.
+  const rangeReturn = candles => {
+    const xs = list(candles);
+    return xs.length ? simple(xs[0].o, xs[xs.length - 1].c) : null;
+  };
+  const PERIOD_DAYS = Object.freeze({ '1D': 1, '7D': 7, '30D': 30, '90D': 90, '1Y': 365, '3Y': 1095, '5Y': 1825 });
+  // Period returns from daily candles. The reference is the close of the last daily candle that
+  // had completed by the target time; if that exact candle is missing (before the earliest
+  // candle, or a gap) the result is null — no neighbour stands in for it.
+  const periodReturns = (daily, priceNow, nowSec) => {
+    const out = { YTD: null };
+    for(const k of Object.keys(PERIOD_DAYS)) out[k] = null;
+    if(!isNum(priceNow) || !(priceNow > 0) || !isNum(nowSec)) return out;
+    const byT = new Map(list(daily).map(x => [x.t, x]));
+    const closeBefore = targetSec => {
+      const ref = byT.get(Candles.bucketStart(Math.floor(targetSec), '1d') - DAY_SEC);
+      return ref ? ref.c : null;
+    };
+    for(const [k, days] of Object.entries(PERIOD_DAYS)) {
+      const c = closeBefore(nowSec - days * DAY_SEC);
+      out[k] = c === null ? null : simple(c, priceNow);
+    }
+    // YTD: against the close of 31 December of the previous year (the last day before 1 Jan).
+    const c = closeBefore(Date.UTC(new Date(nowSec * 1000).getUTCFullYear(), 0, 1) / 1000);
+    out.YTD = c === null ? null : simple(c, priceNow);
+    return out;
+  };
+  // Average and median of C[i]/C[i-1] - 1 over consecutive daily candles; a pair separated by a
+  // gap is not a daily return and is skipped. Median of an even count: mean of the middle two.
+  const dailyReturns = candles => {
+    const xs = list(candles), rs = [];
+    for(let i = 1; i < xs.length; i++) if(xs[i].t - xs[i - 1].t === DAY_SEC) rs.push(simple(xs[i - 1].c, xs[i].c));
+    if(!rs.length) return { average: null, median: null, count: 0 };
+    const sorted = [...rs].sort((a, b) => a - b), m = sorted.length >> 1;
+    return {
+      average: rs.reduce((a, b) => a + b, 0) / rs.length,
+      median: sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2,
+      count: rs.length,
+    };
+  };
+  const returns = Object.freeze({ simple, log, range: rangeReturn, periods: periodReturns, daily: dailyReturns, PERIOD_DAYS });
+
+  // Highest h and lowest l over the candles, with the bucket where each first occurred.
+  const extremes = candles => {
+    const xs = list(candles);
+    if(!xs.length) return null;
+    let hi = xs[0], lo = xs[0];
+    for(const x of xs) { if(x.h > hi.h) hi = x; if(x.l < lo.l) lo = x; }
+    return { high: hi.h, highT: hi.t, low: lo.l, lowT: lo.t };
+  };
+
+  // ── Drawdown (§12, close-based; the peak resets at the start of the given candles) ──
+  const drawdown = candles => {
+    const xs = list(candles);
+    const series = nulls(xs.length);
+    let peakIdx = 0, max = null;
+    for(let i = 0; i < xs.length; i++) {
+      if(xs[i].c > xs[peakIdx].c) peakIdx = i;
+      series[i] = xs[i].c / xs[peakIdx].c - 1;
+      if(max === null || series[i] < max.value) max = { value: series[i], peakIndex: peakIdx, troughIndex: i };
+    }
+    if(max) { max.peakT = xs[max.peakIndex].t; max.troughT = xs[max.troughIndex].t; }
+    return { series, max };
+  };
+
+  // ── High since / all-time high (§12) ──
+  const seedDaySec = seed => {
+    if(!seed || typeof seed !== 'object' || !isNum(seed.price) || !(seed.price > 0)
+      || typeof seed.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(seed.date)) fail('invalid ATH seed');
+    const sec = Date.parse(`${seed.date}T00:00:00Z`) / 1000;
+    if(!isNum(sec)) fail('invalid ATH seed date');
+    return sec;
+  };
+  // ATH(T): the highest h over daily candles that had fully closed by T (t + 1 day <= T), and the
+  // seed when it applies. The seed applies only when its day is earlier than the provider's
+  // earliest daily candle (earliestSec; the first candle given when that is unknown) and had
+  // itself ended by T. → { price, t, fromSeed } or null when nothing qualifies.
+  const previousAth = (daily, T, { seed = ATH_SEED, earliestSec = null } = {}) => {
+    const xs = list(daily);
+    if(!isNum(T)) fail('previousAth needs a time in seconds');
+    let best = null;
+    if(seed != null) {
+      const ss = seedDaySec(seed);
+      const earliest = isNum(earliestSec) ? earliestSec : (xs.length ? xs[0].t : null);
+      if(earliest !== null && ss < earliest && ss + DAY_SEC <= T) best = { price: seed.price, t: ss, fromSeed: true };
+    }
+    for(const x of xs) {
+      if(x.t + DAY_SEC > T) continue;
+      if(best === null || x.h > best.price) best = { price: x.h, t: x.t, fromSeed: false };
+    }
+    return best;
+  };
+  const mdyUtc = sec => {
+    const d = new Date(sec * 1000);
+    return `${String(d.getUTCMonth() + 1).padStart(2, '0')}/${String(d.getUTCDate()).padStart(2, '0')}/${d.getUTCFullYear()}`;
+  };
+  // The one place the high/drawdown wording is decided (approved decision D18). Without a
+  // verified seed nothing is called an all-time high; until the earliest candle is verified the
+  // labels are in a loading state rather than showing a date that may move.
+  const athLabels = ({ seedVerified = false, earliestSec = null } = {}) => {
+    if(seedVerified === true) {
+      return { loading: false, summaryHigh: 'All-Time High', summaryDistance: 'Distance from ATH',
+        summaryDrawdown: 'Current Drawdown', contextHigh: 'Previous ATH', contextDrawdown: 'Drawdown from Previous ATH' };
+    }
+    if(!isNum(earliestSec)) {
+      return { loading: true, summaryHigh: null, summaryDistance: null, summaryDrawdown: null, contextHigh: null, contextDrawdown: null };
+    }
+    const high = `High since ${mdyUtc(earliestSec)}`, dd = `Drawdown from ${high}`;
+    return { loading: false, summaryHigh: high, summaryDistance: dd, summaryDrawdown: dd, contextHigh: high, contextDrawdown: dd };
+  };
+
+  return Object.freeze({
+    SOURCES, CATEGORIES, ATH_SEED, PERIOD_MIN, PERIOD_MAX,
+    definitions: DEFINITIONS, ids: IDS, get, resolveSettings, calculateSegmented, annualizationFactor,
+    returns, extremes, drawdown, previousAth, athLabels,
+  });
+})();
+
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 const sz = {width:14,height:14,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:2,strokeLinecap:'round',strokeLinejoin:'round'};
 const Icon = {
