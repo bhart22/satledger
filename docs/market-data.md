@@ -4,25 +4,11 @@ Part of the Market Analytics design; see `docs/market-analytics.md` for context 
 All code described here lives in the helper region of `app.dev.html` (`Candles`, `MarketData`)
 except `MarketCandleStore`, which uses IndexedDB and lives in the component zone.
 
-Items marked **[verify]** were recalled during design. They are **not authoritative**.
-
-**Verification gate — first task of Phase 2, before any provider code.** Check each of the
-following against current official Coinbase documentation (and, for CORS and history, a manual
-request from a browser), then correct this document wherever the verified behaviour differs:
-
-1. Supported candle granularities.
-2. Maximum candles per request.
-3. Returned row ordering and column order.
-4. Product stats endpoint: URL, fields, and what "24 hour" means there.
-5. Historical availability: how far back each granularity goes and what an out-of-range
-   request returns (empty array, error, or clamped data) — earliest-candle discovery (§8)
-   depends on this.
-6. Rate limits for unauthenticated requests.
-7. CORS behaviour of every endpoint used, from the production origin.
-
-Record the date of verification and the documentation URLs in a short "Verified" note at the
-end of §4. If a verified fact changes the interval table, the page size, the caps or the
-discovery method, update §2, §7, §8 and §10 before implementing.
+The Coinbase facts this document relies on were recalled during design and then checked in the
+Phase 2 verification gate (granularities, page size, row order, stats endpoint, historical
+availability, rate limits, CORS). The results, with dates and sources, are in the "Verified"
+note at the end of §4; where they differed from the recollection, this document was corrected.
+There are no remaining [verify] items.
 
 ---
 
@@ -54,8 +40,8 @@ Candles.INTERVALS = {
 
 - `native` is per provider; the table above is the Coinbase mapping. The provider reports its
   native set through `getAvailableIntervals()` and the service derives the rest.
-- Coinbase native granularities are 60, 300, 900, 3600, 21600 and 86400 seconds **[verify]**.
-  The 6-hour granularity is not exposed in the UI.
+- Coinbase native granularities are 60, 300, 900, 3600, 21600 and 86400 seconds (verified, §4);
+  any other value is refused with HTTP 400. The 6-hour granularity is not exposed in the UI.
 - A derived interval is only ever built from a smaller one. Never the reverse.
 
 ## 3. MarketDataProvider interface
@@ -66,7 +52,7 @@ Candles.INTERVALS = {
   label: 'Coinbase',                      // used in the volume label and freshness line
   symbol: 'BTC-USD',
   getAvailableIntervals(),                // → ['1m','5m','15m','1h','1d'] (native only)
-  maxCandlesPerRequest,                   // 300 for Coinbase [verify]
+  maxCandlesPerRequest,                   // 300 for Coinbase (verified, §4)
   getCandles({ interval, startSec, endSec, signal }),   // → Candle[] ascending, validated
   getCurrentPrice({ signal }),            // → { price, at }
   get24HourStats({ signal }),             // → { open, high, low, last, volume, at }
@@ -77,7 +63,11 @@ Candles.INTERVALS = {
 Rules:
 
 - `getCandles` requests a native interval only and a window of at most `maxCandlesPerRequest`
-  buckets. `endSec` is exclusive.
+  buckets. `endSec` is exclusive. The provider returns only candles with
+  `startSec <= t < endSec`, whatever extra rows the upstream API sends (Coinbase treats `end`
+  as inclusive and may return candles before `start`, §4).
+- `getCandles` may return the forming candle. The service decides what is complete; the
+  provider does not filter by time.
 - The provider converts the raw response into the candle model and nothing else. Paging,
   caching, retry and aggregation belong to the service.
 - A provider is constructed with its dependencies: `createCoinbaseProvider({ fetchImpl })`.
@@ -98,7 +88,7 @@ Chosen because:
 - Same source as the Dashboard's daily closes, so the two screens agree.
 - Deep daily history for BTC-USD and exchange volume per candle.
 
-Endpoints **[verify]**:
+Endpoints (verified):
 
 | Purpose | Request |
 |---|---|
@@ -106,15 +96,63 @@ Endpoints **[verify]**:
 | 24 h stats | `GET https://api.exchange.coinbase.com/products/BTC-USD/stats` |
 | Spot price | `GET https://api.coinbase.com/v2/prices/BTC-USD/spot` (already polled by `fetchPrice`) |
 
-Candle rows arrive as arrays `[time, low, high, open, close, volume]`, newest first
-**[verify]**. The existing historical-price code reads index 4 as the close, which is
-consistent with this order. The provider maps by position and then sorts ascending.
+Candle rows arrive as arrays `[time, low, high, open, close, volume]`, newest first, all six
+entries numbers. The existing historical-price code reads index 4 as the close, which is
+consistent with this order. The provider maps by position (`Candles.ROW_ORDER`) and then sorts
+ascending.
+
+Request rules the provider and service must respect:
+
+- `end` is **inclusive**. A page-aligned window `[start, start + 300 × granularity]` is
+  accepted and returns up to 301 rows, the last being the first bucket of the next page. The
+  documentation also warns that rows may precede `start`. The provider therefore sends the exact
+  page bounds and keeps only `startSec <= t < endSec`.
+- More than 300 buckets between `start` and `end` → HTTP 400 ("Count of aggregations requested
+  exceeds 300"). Exactly 300 is accepted.
+- `start` in the future → HTTP 400 ("Start cannot be in the future"). The service never requests
+  a page that starts after `now`. `end` in the future is accepted.
+- `start` after `end` → HTTP 400.
+- A window before the first candle → HTTP 200 with `[]`. This is what earliest-candle discovery
+  (§8) relies on.
+- The response includes the forming candle (the bucket containing now).
+- Candle responses carry `Cache-Control: public, max-age=300`. Requests are made with
+  `cache: 'no-store'` so the browser's HTTP cache can't hand back a five-minute-old page when the
+  newest buckets are refreshed (§15). The IndexedDB store is the only cache.
+
+Stats response: an object of **strings** — `open`, `high`, `low`, `last`, `volume` (in BTC), and
+`volume_30day` plus RFQ volume fields that are not used. It carries no timestamp, so `at` is the
+time the response was received. The documentation does not define the 24-hour window; observed
+`open` differs from the open of the current UTC daily candle, so it is treated as a rolling 24
+hours, not the UTC day, and labelled "24h".
 
 Limitations to state in the UI or docs:
 
 - Volume is Coinbase's own volume, not global Bitcoin volume.
 - Buckets with no trades are omitted from the response rather than returned empty.
+- "Historical rate data may be incomplete" (Coinbase's wording): provider gaps exist (§12).
 - History begins at the provider's first candle (§8).
+
+**Verified 2026-11-14** against the official documentation and live unauthenticated requests:
+
+- Candles: <https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproductcandles>
+  — granularities {60, 300, 900, 3600, 21600, 86400}; maximum 300 candles per request, larger
+  windows rejected; rows may precede `start`; no data for intervals without ticks. The
+  documentation states neither row order nor `end` inclusivity; both were measured live (newest
+  first; a page-aligned 300-bucket window returned 301 rows including the `end` bucket). Unix
+  seconds and ISO 8601 are both accepted for `start`/`end`; the provider sends ISO 8601
+  (`YYYY-MM-DDTHH:MM:SSZ`), as the existing Dashboard history fetch does.
+- Stats: <https://docs.cdp.coinbase.com/exchange/reference/exchangerestapi_getproductstats>
+  — fields as above, all strings.
+- History: the first BTC-USD daily candle is 2015-07-20 (requesting 2015-06-01…2015-07-22
+  returned exactly 07-20, 07-21, 07-22); 2010 and 1-minute 2014 windows returned `[]` with
+  HTTP 200. This matches the existing `BTC_USD_FIRST_CANDLE_DAY` hint.
+- Rate limits: <https://docs.cdp.coinbase.com/exchange/rest-api/rate-limits> — public
+  endpoints, per IP: 10 requests/second sustained, bursts up to 15; exceeding them returns
+  HTTP 429.
+- CORS: candles, stats (including an `OPTIONS` preflight) and spot all answer with
+  `Access-Control-Allow-Origin: *` for `Origin: https://satledger.com`. The requests are simple
+  `GET`s with no custom headers, so the browser sends no preflight. The production app already
+  fetches daily candles from the browser for the Dashboard.
 
 ## 5. Normalization
 
@@ -171,7 +209,9 @@ page      = [pageIndex * pageSpan, (pageIndex + 1) * pageSpan)
   `{ index, startSec, endSec }`; `pageSpan`, `pageIndex` and `pageBounds` give the same
   arithmetic. `perPage` is the provider's `maxCandlesPerRequest`. Only native intervals have
   pages.
-- The service never issues a request whose bounds are not page boundaries.
+- The service never issues a request whose bounds are not page boundaries, and never one whose
+  page starts after `now` (Coinbase refuses a future `start`, §4). The newest page's `endSec`
+  may lie in the future.
 - Concurrency: at most 4 requests in flight. Pages are queued newest first so the visible
   right edge fills in first.
 - Panning left requests the next older page when the visible range comes within one screen
@@ -392,9 +432,9 @@ Supersede:
 Failure outcome: pages that succeeded are kept and shown; the view enters the `partial` state
 with a retry control. A failed page is not recorded in `coverage`, so the next load retries it.
 
-Rate limits: Coinbase's public limit is per IP **[verify]**. With 4 concurrent requests and the
-caps in §10 the feature stays far below any plausible limit; the design does not depend on the
-exact number.
+Rate limits: Coinbase's public limit is per IP, 10 requests/second sustained with bursts to 15
+(verified, §4). With 4 concurrent requests and the caps in §10 the feature stays below it; the
+design does not depend on the exact number.
 
 ## 18. Historical backfill
 
