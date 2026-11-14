@@ -994,12 +994,17 @@
     body.mkt-expanded .mobile-bottom-nav { display:none !important; }
 
     /* ── Market tab (.mkt-*) ── */
+    /* Text and essential lines reach 4.5:1 on the Market surfaces in both themes (docs/mobile-chart-ux.md §10):
+       the app-wide tertiary grey and light-theme green are too faint there, so the Market uses its own. */
+    .mkt, .mkt-sheet-backdrop { --mkt-muted:#626977; --mkt-up:#127f3f; }
+    [data-theme="dark"] .mkt, [data-theme="dark"] .mkt-sheet-backdrop { --mkt-muted:#8a91a2; --mkt-up:var(--green); }
     .mkt { display:flex; flex-direction:column; gap:.75rem; max-width:1200px; margin:0 auto; }
     .mkt-header { display:flex; flex-wrap:wrap; align-items:baseline; gap:.25rem 1rem; }
-    .mkt-pair { font-size:.75rem; font-weight:700; letter-spacing:.08em; color:var(--text-tertiary); text-transform:uppercase; }
+    .mkt-pair { font-size:.75rem; font-weight:700; letter-spacing:.08em; color:var(--mkt-muted); text-transform:uppercase; }
     .mkt-price { font-size:1.875rem; font-weight:700; letter-spacing:-.02em; font-variant-numeric:tabular-nums; font-family:var(--font-display); }
     .mkt-change { font-size:.9375rem; font-weight:600; font-variant-numeric:tabular-nums; }
-    .mkt-up { color:var(--green); }
+    .mkt-up { color:var(--mkt-up); }
+    .mkt .btn-primary, .mkt-sheet .btn-primary { color:#13151a; }
     .mkt-down { color:var(--red, #dc2626); }
     .mkt-badge { display:inline-flex; align-items:center; gap:.25rem; padding:.1rem .5rem; border-radius:999px; font-size:.6875rem; font-weight:700; background:rgba(217,119,6,.14); color:#b45309; vertical-align:middle; }
     [data-theme="dark"] .mkt-badge { color:#fbbf24; }
@@ -1013,7 +1018,7 @@
     .mkt-group + .mkt-group { padding-left:.5rem; border-left:1px solid var(--border-color); }
     .mkt-btn { flex:0 0 auto; min-width:44px; min-height:36px; padding:0 .7rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-secondary); font:inherit; font-size:.8125rem; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:.3rem; font-variant-numeric:tabular-nums; }
     .mkt-btn:hover:not(:disabled) { border-color:var(--bitcoin-orange); color:var(--text-primary); }
-    .mkt-btn[aria-checked="true"], .mkt-btn[aria-pressed="true"] { background:var(--bitcoin-orange); border-color:var(--bitcoin-orange); color:#fff; }
+    .mkt-btn[aria-checked="true"], .mkt-btn[aria-pressed="true"] { background:var(--bitcoin-orange); border-color:var(--bitcoin-orange); color:#13151a; }
     .mkt-btn:disabled { opacity:.4; cursor:not-allowed; }
     .mkt-btn:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; }
     @media(max-width:768px) { .mkt-btn { min-height:44px; } }
@@ -1022,10 +1027,14 @@
     .mkt-shell-bar { display:none; align-items:center; gap:.5rem; }
     .mkt-shell.expanded .mkt-shell-bar { display:flex; }
     .mkt-shell-title { font-weight:700; font-size:.875rem; white-space:nowrap; }
-    .mkt-readout { min-height:3.6rem; display:flex; flex-wrap:wrap; align-content:flex-start; gap:.125rem .875rem; font-size:.75rem; font-variant-numeric:tabular-nums; color:var(--text-secondary); overflow-x:auto; scrollbar-width:none; }
+    .mkt-readout { min-height:4.05rem; display:flex; flex-wrap:wrap; align-content:flex-start; gap:.125rem .875rem; font-size:.75rem; font-variant-numeric:tabular-nums; color:var(--text-secondary); overflow-x:auto; scrollbar-width:none; }
     .mkt-readout::-webkit-scrollbar { display:none; }
     .mkt-readout b { color:var(--text-primary); font-weight:600; }
-    .mkt-readout .mkt-when { color:var(--text-primary); font-weight:600; flex-basis:100%; }
+    .mkt-readout .mkt-when { color:var(--text-primary); font-weight:600; }
+    .mkt-readout > * { line-height:1.35rem; }
+    .mkt-readout .mkt-badge { line-height:1.1rem; padding-top:0; padding-bottom:0; }
+    .mkt-ohlc { flex-basis:100%; display:flex; flex-wrap:nowrap; gap:.75rem; white-space:nowrap; }
+    @media(max-width:400px) { .mkt-readout { column-gap:.5rem; } .mkt-ohlc { gap:.4rem; font-size:.6875rem; letter-spacing:-.01em; } }
     .mkt-shell.expanded .mkt-readout { min-height:0; flex-wrap:nowrap; white-space:nowrap; }
     .mkt-chart-wrap { position:relative; height:clamp(320px, 62vh, 560px); }
     .mkt-shell.expanded .mkt-chart-wrap { flex:1 1 auto; height:auto; min-height:0; }
@@ -1035,22 +1044,23 @@
     .mkt-overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.75rem; text-align:center; padding:1rem; border-radius:8px; background:var(--bg-secondary); z-index:3; font-size:.875rem; color:var(--text-secondary); }
     .mkt-skeleton { position:absolute; inset:0; display:flex; align-items:flex-end; gap:3%; padding:12% 4% 20%; border:1px dashed var(--border-color); border-radius:8px; background:var(--bg-secondary); z-index:2; }
     .mkt-skeleton span { flex:1; border-radius:3px; background:var(--border-color); opacity:.6; }
-    .mkt-skeleton-label { position:absolute; top:.75rem; left:.75rem; font-size:.75rem; color:var(--text-tertiary); }
+    .mkt-skeleton-label { position:absolute; top:.75rem; left:.75rem; font-size:.75rem; color:var(--mkt-muted); }
     .mkt-progress { position:absolute; top:0; left:0; right:0; height:2px; overflow:hidden; z-index:4; border-radius:2px; }
     .mkt-progress::before { content:''; position:absolute; top:0; bottom:0; width:30%; background:var(--bitcoin-orange); animation:mktSlide 1.1s ease-in-out infinite; }
     @keyframes mktSlide { from { left:-30%; } to { left:100%; } }
     .mkt-edge { position:absolute; left:.5rem; top:50%; transform:translateY(-50%); z-index:4; font-size:.6875rem; padding:.2rem .5rem; border-radius:999px; background:var(--bg-tertiary); border:1px solid var(--border-color); color:var(--text-secondary); }
     .mkt-banner { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem .75rem; padding:.5rem .75rem; border-radius:10px; font-size:.8125rem; background:rgba(217,119,6,.1); border:1px solid rgba(217,119,6,.3); }
-    .mkt-legal { font-size:.6875rem; color:var(--text-tertiary); }
+    .mkt-legal { font-size:.6875rem; color:var(--mkt-muted); }
     .mkt-legal a { color:inherit; }
-.mkt-count { display:inline-flex; align-items:center; justify-content:center; min-width:1.15rem; height:1.15rem; padding:0 .3rem; border-radius:999px; background:var(--bitcoin-orange); color:#fff; font-size:.6875rem; font-weight:700; }
+    .mkt a:focus-visible, .mkt-sheet a:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; border-radius:4px; }
+.mkt-count { display:inline-flex; align-items:center; justify-content:center; min-width:1.15rem; height:1.15rem; padding:0 .3rem; border-radius:999px; background:var(--bitcoin-orange); color:#13151a; font-size:.6875rem; font-weight:700; }
 .mkt-readout-ind { position:relative; flex-basis:100%; display:flex; flex-wrap:nowrap; gap:.875rem; overflow-x:auto; scrollbar-width:none; white-space:nowrap; min-height:1.1rem; }
 .mkt-readout-ind::-webkit-scrollbar { display:none; }
 .mkt-readout-ind b { font-weight:600; }
-.mkt-ind-short { color:var(--text-tertiary); margin-right:.2rem; }
+.mkt-ind-short { color:var(--mkt-muted); margin-right:.2rem; }
 .mkt-swatch { display:inline-block; width:.6rem; height:.2rem; border-radius:2px; margin-right:.3rem; vertical-align:middle; }
 .mkt-prov b { font-style:italic; }
-.mkt-prov-note { color:var(--text-tertiary); font-style:italic; }
+.mkt-prov-note { color:var(--mkt-muted); font-style:italic; }
 @media(min-width:769px) {
   .mkt-chart-wrap[data-panes="1"] { height:clamp(380px, 70vh, 680px); }
   .mkt-chart-wrap[data-panes="2"] { height:clamp(440px, 78vh, 780px); }
@@ -1058,7 +1068,7 @@
 }
 .mkt-pane-legend { position:absolute; left:.375rem; z-index:2; display:flex; align-items:center; gap:.5rem; padding:.05rem .25rem .05rem .4rem; border-radius:6px; background:color-mix(in srgb, var(--bg-secondary) 82%, transparent); font-size:.6875rem; font-variant-numeric:tabular-nums; pointer-events:none; }
 .mkt-pane-title { font-weight:700; color:var(--text-secondary); }
-.mkt-pane-close { pointer-events:auto; border:none; background:none; color:var(--text-tertiary); font-size:1rem; line-height:1; cursor:pointer; min-width:28px; min-height:28px; padding:0; border-radius:6px; }
+.mkt-pane-close { pointer-events:auto; border:none; background:none; color:var(--mkt-muted); font-size:1rem; line-height:1; cursor:pointer; min-width:28px; min-height:28px; padding:0; border-radius:6px; }
 .mkt-pane-close:hover { color:var(--text-primary); }
 .mkt-pane-close:focus-visible { outline:2px solid var(--bitcoin-orange); }
 .mkt-sheet-backdrop { position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.4); display:flex; justify-content:flex-end; }
@@ -1074,7 +1084,7 @@
 }
 .mkt-ind-panel section { padding:.5rem 0; border-top:1px solid var(--border-color); }
 .mkt-ind-panel section:first-child { border-top:none; }
-.mkt-ind-panel h3 { margin:.25rem 0 .5rem; font-size:.6875rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-tertiary); }
+.mkt-ind-panel h3 { margin:.25rem 0 .5rem; font-size:.6875rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--mkt-muted); }
 .mkt-ind { display:flex; flex-direction:column; gap:.4rem; padding:.4rem 0 .6rem; }
 .mkt-ind-name { font-weight:600; font-size:.875rem; }
 .mkt-chips { display:flex; flex-wrap:wrap; gap:.375rem; }
@@ -1094,13 +1104,13 @@
 .mkt-stats { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:.75rem 1rem; margin:0; }
 .mkt-stat dt { display:flex; align-items:center; gap:.3rem; font-size:.75rem; color:var(--text-secondary); }
 .mkt-stat dd { margin:.1rem 0 0; font-weight:700; font-variant-numeric:tabular-nums; }
-.mkt-stat-sub { display:block; font-weight:500; font-size:.6875rem; color:var(--text-tertiary); }
+.mkt-stat-sub { display:block; font-weight:500; font-size:.6875rem; color:var(--mkt-muted); }
 @media(max-width:480px) { .mkt-stats { grid-template-columns:1fr 1fr; } }
 /* Personal figures under hide-values: the sheet is portalled outside .app, so it carries its own class */
 .values-hidden .mkt-private, .mkt-values-hidden .mkt-private { filter:blur(8px); user-select:none; }
 .mkt-readout-sel { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:.25rem; color:var(--text-primary); font-weight:600; }
 .mkt-sel-dot { display:inline-block; width:.55rem; height:.55rem; border-radius:50%; margin-right:.15rem; }
-.mkt-activity-sub { margin:.5rem 0 0; font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-tertiary); }
+.mkt-activity-sub { margin:.5rem 0 0; font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--mkt-muted); }
 .mkt-summary-title .scope-badge { margin-left:.375rem; vertical-align:middle; }
 .mkt-txlist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.375rem; }
 .mkt-txlist button { width:100%; display:flex; align-items:center; justify-content:space-between; gap:.75rem; min-height:44px; padding:.5rem .75rem; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary); color:var(--text-primary); font:inherit; font-size:.8125rem; cursor:pointer; text-align:left; font-variant-numeric:tabular-nums; }
@@ -1124,9 +1134,42 @@
 .mkt-checks { display:flex; flex-direction:column; }
 .mkt-check { display:flex; align-items:center; gap:.5rem; min-height:40px; font-size:.875rem; cursor:pointer; }
 .mkt-check input { width:18px; height:18px; accent-color:var(--bitcoin-orange); }
+/* Sheet grab bar: a drag zone on phones only (docs/mobile-chart-ux.md §7) */
+.mkt-sheet { transition:transform .18s ease-out; }
+.mkt-sheet-grip { display:none; }
+.mkt-sheet-wide { width:min(640px, 100vw); }
+.mkt-table-actions { display:flex; gap:.5rem; justify-content:flex-end; }
+.mkt-select { min-height:36px; padding:0 .5rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font:inherit; font-size:.8125rem; font-weight:600; }
+.mkt-select:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; }
+/* Expanded chart: the readout is one translucent line over the top-left of the price pane, clear
+   of the price scale and of the newest candles on the right (§8). It never takes a touch. */
+.mkt-shell.expanded .mkt-readout { position:absolute; top:.25rem; left:.25rem; z-index:3; max-width:calc(100% - 7.5rem); min-height:0;
+  flex-wrap:nowrap; white-space:nowrap; overflow:hidden; gap:.75rem; padding:.2rem .5rem; border-radius:8px; pointer-events:none;
+  background:color-mix(in srgb, var(--bg-secondary) 80%, transparent); }
+.mkt-shell.expanded .mkt-readout .mkt-when, .mkt-shell.expanded .mkt-ohlc, .mkt-shell.expanded .mkt-readout-ind, .mkt-shell.expanded .mkt-readout-sel { flex-basis:auto; flex-shrink:0; }
+.mkt-shell.expanded .mkt-readout-ind { overflow:visible; }
+@media(max-width:768px) {
+  .mkt-sheet-grip { display:flex; justify-content:center; align-items:center; height:28px; touch-action:none; cursor:grab; }
+  .mkt-sheet-grip .mkt-sheet-handle { margin:0; }
+  /* 44 px targets with 8 px between them (§5) */
+  .mkt-group, .mkt-chips { gap:.5rem; }
+  .mkt-field input, .mkt-field select, .mkt-select { min-height:44px; }
+  .mkt-check { min-height:44px; }
+  .mkt .btn-sm, .mkt-sheet .btn-sm { min-height:44px; }
+  .mkt-pane-close { min-width:44px; min-height:44px; margin:-10px -8px -10px 0; }
+  .mkt-txlist button { min-height:48px; }
+}
+/* Phone in landscape: the expanded overlay opens on its own; keep its single row compact */
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 960px) {
+  .mkt-shell.expanded { padding:.25rem calc(.5rem + env(safe-area-inset-right, 0px)) calc(.25rem + env(safe-area-inset-bottom, 0px)) calc(.5rem + env(safe-area-inset-left, 0px)); gap:.25rem; }
+  .mkt-shell.expanded .mkt-btn, .mkt-shell.expanded .mkt-select { min-height:44px; }
+  .mkt-shell.expanded > .mkt-legal { white-space:nowrap; overflow-x:auto; scrollbar-width:none; line-height:1.2; }
+}
     .mkt-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
     @media (prefers-reduced-motion: reduce) {
       .mkt-spinner, .mkt-progress::before { animation:none; }
+      .mkt-sheet, .mobile-bottom-nav::after { transition:none; }
+      .mkt-scroll, .mobile-bottom-nav-row { scroll-behavior:auto; }
     }
   </style>
 </head>
@@ -1168,7 +1211,7 @@ function useThrottledCallback(fn, delay) {
 // Two versions on purpose: APP_VERSION is what the UI shows, BACKUP_SCHEMA_VERSION is a
 // data contract read by importers. Collapsing them guarantees pain at the first real
 // migration. Keep APP_VERSION in sync with the footer in index.html.
-const APP_VERSION = '4.3';
+const APP_VERSION = '4.4';
 const BACKUP_SCHEMA_VERSION = 2;
 const HISTORICAL_PRICE_CACHE_KEY = 'btc-price-history-v1';
 // Earliest daily candle Coinbase Exchange has for BTC-USD (checked against the API).
@@ -5740,7 +5783,7 @@ function loadChartLibrary() {
 // Fixed palettes rather than CSS variables: the library parses colours itself and would throw
 // on color-mix(). Up candles are hollow and down candles solid, so they differ by more than hue.
 const CHART_PALETTES = {
-  light: { text:'#5b6271', grid:'rgba(19,21,26,.06)', border:'rgba(19,21,26,.14)', up:'#149a4c', down:'#d83a3a',
+  light: { text:'#5b6271', grid:'rgba(19,21,26,.06)', border:'rgba(19,21,26,.14)', up:'#127f3f', down:'#d83a3a',
     forming:'#f7931a', formingFill:'rgba(247,147,26,.30)', volUp:'rgba(20,154,76,.28)', volDown:'rgba(216,58,58,.28)',
     volForming:'rgba(247,147,26,.40)', cross:'#9aa1b0', label:'#13151a' },
   dark: { text:'#9aa1b2', grid:'rgba(236,238,244,.06)', border:'rgba(236,238,244,.14)', up:'#2ebd6b', down:'#f0564f',
@@ -5827,6 +5870,7 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
   };
   const onRange = r => {
     if(!r) return;
+    container.dataset.visible = `${r.from.toFixed(2)},${r.to.toFixed(2)}`; // test-readable: pan and zoom
     emit(subs.range, { fromIndex: r.from, toIndex: r.to, count: bars.length, user: performance.now() > quietUntil });
   };
   const onDbl = () => fit();
@@ -6131,7 +6175,7 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
       markerApi?.detach(); markerApi = null; markerList = [];
       subs.crosshair.clear(); subs.range.clear(); layoutSubs.clear(); markerSubs.clear();
       overlays.clear(); panes.clear();
-      delete container.dataset.overlays; delete container.dataset.panes; delete container.dataset.markers;
+      delete container.dataset.overlays; delete container.dataset.panes; delete container.dataset.markers; delete container.dataset.visible;
       chart.remove();
       liveChartAdapters--; reportChartAdapters();
     },
@@ -6159,6 +6203,9 @@ const MARKET_RANGE_NAMES = { '1D':'1 day', '1W':'1 week', '1M':'1 month', '3M':'
   'YTD':'year to date', '1Y':'1 year', '3Y':'3 years', '5Y':'5 years', 'ALL':'all available history' };
 const MARKET_INTERVAL_NAMES = { '1m':'1-minute', '5m':'5-minute', '15m':'15-minute', '30m':'30-minute',
   '1h':'hourly', '4h':'4-hour', '1d':'daily', '1w':'weekly' };
+// A phone held sideways: short and not wide (the largest phones are about 930 × 430 in
+// landscape). A desktop window is rarely this short, and if it is the overlay can be closed.
+const MKT_PHONE_LANDSCAPE = '(orientation: landscape) and (max-height: 500px) and (max-width: 960px)';
 const mktPad = n => String(n).padStart(2, '0');
 const mktDay = tSec => { const d = new Date(tSec * 1000); return `${mktPad(d.getUTCMonth()+1)}/${mktPad(d.getUTCDate())}/${d.getUTCFullYear()}`; };
 // Candle time in UTC: the bucket's day, week or start time.
@@ -6183,11 +6230,27 @@ const mktSigned = (diff, base) => {
 };
 const mktVolume = v => v == null ? '—' : `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })} BTC`;
 
+const mktReducedMotion = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
 // A row of mutually exclusive buttons: role="radiogroup", roving tabindex, arrow keys move.
 function MarketRadioGroup({ label, options, value, onChange }) {
   const refs = useRef({});
   const enabled = options.filter(o => !o.disabled);
   const tabStop = enabled.some(o => o.value === value) ? value : enabled[0]?.value;
+  // The selected option is scrolled into view inside its sideways-scrolling row, on mount and on
+  // change (docs/mobile-chart-ux.md §2, §5) — the row only, never the page. Smooth except on the
+  // first render and under reduced motion.
+  const mounted = useRef(false);
+  useEffect(() => {
+    const b = refs.current[value], row = b?.closest('.mkt-scroll');
+    const first = !mounted.current;
+    mounted.current = true;
+    if(!b || !row || row.scrollWidth <= row.clientWidth) return;
+    const br = b.getBoundingClientRect(), rr = row.getBoundingClientRect();
+    if(br.left >= rr.left && br.right <= rr.right) return;
+    const left = row.scrollLeft + (br.left - rr.left) - (rr.width - br.width) / 2;
+    row.scrollTo({ left: Math.max(0, left), behavior: first || mktReducedMotion() ? 'auto' : 'smooth' });
+  }, [value]);
   const onKeyDown = (e, v) => {
     const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
     if(step === undefined && e.key !== 'Home' && e.key !== 'End') return;
@@ -6239,7 +6302,7 @@ class MarketErrorBoundary extends React.Component {
             Your transactions are not affected, and every other tab still works.
           </span>
           <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => this.setState({ error: null })}>Try again</button></div>
-          <details style={{fontSize:'.75rem',color:'var(--text-tertiary)'}}>
+          <details style={{fontSize:'.75rem',color:'var(--mkt-muted)'}}>
             <summary style={{cursor:'pointer'}}>Technical details</summary>
             <pre style={{whiteSpace:'pre-wrap'}}>{String(this.state.error?.message || this.state.error)}</pre>
           </details>
@@ -6255,11 +6318,11 @@ class MarketErrorBoundary extends React.Component {
 // formula. SMA and EMA may each have several lines; EMA lines are dashed so the two families
 // differ by more than colour.
 const MKT_COLORS = {
-  light: { sma: { 20:'#0d9488', 50:'#2563eb', 100:'#9333ea', 200:'#db2777' }, ema: { 12:'#0891b2', 21:'#b45309', 50:'#7c3aed', 200:'#be185d' },
-    extra: ['#4d7c0f', '#c2410c', '#0f766e', '#6d28d9', '#a21caf', '#1d4ed8'], bb: '#64748b', bbMid: '#94a3b8',
-    rsi: '#7c3aed', macd: '#2563eb', signal: '#ea580c', histUp: 'rgba(20,154,76,.55)', histDown: 'rgba(216,58,58,.55)', atr: '#0d9488', hv: '#c2410c' },
+  light: { sma: { 20:'#0f766e', 50:'#2563eb', 100:'#9333ea', 200:'#db2777' }, ema: { 12:'#0e7490', 21:'#b45309', 50:'#7c3aed', 200:'#be185d' },
+    extra: ['#4d7c0f', '#c2410c', '#0f766e', '#6d28d9', '#a21caf', '#1d4ed8'], bb: '#64748b', bbMid: '#475569',
+    rsi: '#7c3aed', macd: '#2563eb', signal: '#c2410c', histUp: 'rgba(20,154,76,.55)', histDown: 'rgba(216,58,58,.55)', atr: '#0f766e', hv: '#9a3412' },
   dark: { sma: { 20:'#2dd4bf', 50:'#60a5fa', 100:'#c084fc', 200:'#f472b6' }, ema: { 12:'#22d3ee', 21:'#facc15', 50:'#a78bfa', 200:'#f9a8d4' },
-    extra: ['#a3e635', '#fb923c', '#5eead4', '#c4b5fd', '#f0abfc', '#93c5fd'], bb: '#94a3b8', bbMid: '#64748b',
+    extra: ['#a3e635', '#fb923c', '#5eead4', '#c4b5fd', '#f0abfc', '#93c5fd'], bb: '#94a3b8', bbMid: '#8b95a7',
     rsi: '#c084fc', macd: '#60a5fa', signal: '#fb923c', histUp: 'rgba(46,189,107,.55)', histDown: 'rgba(240,86,79,.55)', atr: '#2dd4bf', hv: '#fb923c' },
 };
 const MKT_PANE_ORDER = { rsi: 1, macd: 2, atr: 3, volatility: 4 };
@@ -6308,14 +6371,47 @@ const mktErrorText = e => { const m = String(e?.message || e).replace(/^Indicato
 // Bottom sheet on a phone, side panel on a wide screen (docs/mobile-chart-ux.md §7), on
 // useModalA11y: focus trap, Escape, focus restored, body scroll locked. Portalled, so it also
 // opens above the expanded chart.
+// A downward drag on the handle (a phone's grab bar) closes the sheet: past 80 px, or a quick
+// flick; anything less springs back. The close button, the backdrop and Escape do the same for
+// everyone else, so the gesture is never the only way.
+const MKT_SHEET_DRAG_CLOSE_PX = 80;
 function MarketSheet({ title, onClose, children, className = '' }) {
   const ref = useModalA11y(onClose);
   const titleId = useMemo(() => 'mkt-sheet-' + Math.random().toString(36).slice(2, 9), []);
+  const drag = useRef(null);
+  const setOffset = dy => {
+    const el = ref.current;
+    if(!el) return;
+    el.style.transform = dy > 0 ? `translateY(${dy}px)` : '';
+    el.style.transition = dy > 0 ? 'none' : '';
+  };
+  const onHandleDown = e => {
+    if(e.button != null && e.button !== 0) return;
+    drag.current = { id: e.pointerId, y: e.clientY, t: performance.now(), dy: 0 };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  };
+  const onHandleMove = e => {
+    const d = drag.current;
+    if(!d || d.id !== e.pointerId) return;
+    d.dy = Math.max(0, e.clientY - d.y);
+    setOffset(d.dy);
+  };
+  const onHandleUp = e => {
+    const d = drag.current;
+    if(!d || d.id !== e.pointerId) return;
+    drag.current = null;
+    const fast = d.dy > 24 && d.dy / Math.max(1, performance.now() - d.t) > 0.6; // px per ms
+    if(e.type === 'pointerup' && (d.dy >= MKT_SHEET_DRAG_CLOSE_PX || fast)) onClose();
+    else setOffset(0);
+  };
   return ReactDOM.createPortal(
     <div className="mkt-sheet-backdrop" onMouseDown={backdropHandler(onClose)}>
       <div ref={ref} className={`mkt-sheet ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
         onMouseDown={e => e.stopPropagation()} data-market-sheet="1">
-        <div className="mkt-sheet-handle" aria-hidden="true" />
+        <div className="mkt-sheet-grip" aria-hidden="true" data-sheet-handle="1"
+          onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={onHandleUp} onPointerCancel={onHandleUp}>
+          <div className="mkt-sheet-handle" />
+        </div>
         <div className="mkt-sheet-head">
           <h2 id={titleId}>{title}</h2>
           <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">{Icon.X()}</button>
@@ -6585,7 +6681,7 @@ const MKT_MARKER = {
   TRANSFER: { shape: 'square', position: 'aboveBar', one: 'Transfer', many: 'Transfers', filter: 'transfers', letter: 'T' },
 };
 const MKT_MARKER_COLORS = {
-  light: { ACQUISITION: [21,128,61], DISPOSAL: [185,28,28], REWARD: [124,58,237], TRANSFER: [71,85,105], aap: '#ea580c', balance: '#0f766e' },
+  light: { ACQUISITION: [21,128,61], DISPOSAL: [185,28,28], REWARD: [124,58,237], TRANSFER: [71,85,105], aap: '#c2410c', balance: '#0f766e' },
   dark: { ACQUISITION: [74,222,128], DISPOSAL: [248,113,113], REWARD: [192,132,252], TRANSFER: [148,163,184], aap: '#fb923c', balance: '#2dd4bf' },
 };
 const mktMarkerColor = (theme, group, estimated) => {
@@ -6894,6 +6990,47 @@ function MarketAcquisitionTables({ b, scoped }) {
   );
 }
 
+// "View as table" (docs/mobile-chart-ux.md §10): the transactions marked in the chart's visible
+// range as a real table, with the same actions a marker has, so nothing is reachable only
+// through the canvas. Rows follow the chart as it pans and zooms.
+const MKT_TABLE_MAX_ROWS = 500;
+function MarketTxTable({ rows, total, fromT, toT, txById, showTx, onDetails, onView }) {
+  const span = fromT != null && toT != null ? `${mktDay(fromT)} – ${mktDay(toT)}` : '';
+  if(!showTx) return <p className="mkt-legal" style={{fontSize:'.8125rem'}} data-tx-table="off">“Show My Transactions” is off, so nothing is marked on the chart. Turn it on to list your transactions here.</p>;
+  if(!rows.length) return <p className="mkt-legal" style={{fontSize:'.8125rem'}} data-tx-table="0">None of your transactions are marked in the visible range{span ? ` (${span})` : ''}. Pan or zoom the chart, or change the filters.</p>;
+  return (
+    <div className="mkt-acq-table" data-tx-table={rows.length}>
+      <table>
+        <caption className="mkt-acq-caption">
+          {total} transaction{total === 1 ? '' : 's'} marked in the visible range{span ? `, ${span}` : ''}
+          {total > rows.length ? ` — the first ${rows.length} are listed; zoom in to see the rest` : ''}
+        </caption>
+        <thead>
+          <tr><th scope="col">Date</th><th scope="col">Type</th><th scope="col">Amount</th><th scope="col">Price per BTC</th><th scope="col"><span className="mkt-sr">Actions</span></th></tr>
+        </thead>
+        <tbody>
+          {rows.map(r => {
+            const tx = txById.get(r.id);
+            const label = `${MKT_CATEGORY_TEXT[r.category]}, ${tx ? (r.dateOnly ? fmtDate(tx.date) : fmtTxDate(tx)) : ''}`;
+            return (
+              <tr key={r.id} data-table-tx={r.id}>
+                <th scope="row">{tx ? (r.dateOnly ? fmtDate(tx.date) : fmtTxDate(tx)) : '—'}</th>
+                <td>{MKT_CATEGORY_TEXT[r.category]}</td>
+                <td className="mkt-private">{mktBtc(r.sats)}</td>
+                <td className="mkt-private">{r.price == null ? '—' : fmtUSD(r.price)}</td>
+                <td className="mkt-table-actions">
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onDetails(r.id)} aria-label={`Details: ${label}`}>Details</button>
+                  <button type="button" className="btn btn-secondary btn-sm" onClick={() => onView(r.id)} aria-label={`View Transaction: ${label}`} data-table-view={r.id}>View Transaction</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPrefsChange = null,
   transactions = [], wallets = [], hideValues = false, focusTx = null, onFocusDone = null, onViewTransaction = null, onNotice = null }) {
   // Preferences: stored per device, overridden on load by a #market?… URL (not saved until the
@@ -6914,6 +7051,9 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const [expanded, setExpanded] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [narrow, setNarrow] = useState(() => !!window.matchMedia?.('(max-width: 768px)').matches);
+  const [landscape, setLandscape] = useState(() => !!window.matchMedia?.(MKT_PHONE_LANDSCAPE).matches);
+  const [tableOpen, setTableOpen] = useState(false);
+  const [visTick, setVisTick] = useState(0); // the visible range moved while "View as table" is open
   const [paneLayout, setPaneLayout] = useState([]);
   const [daily, setDaily] = useState([]);
   const [lib, setLib] = useState(() => window.LightweightCharts ? 'ready' : 'loading');
@@ -6949,6 +7089,8 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const expandedRef = useRef(false); expandedRef.current = expanded;
   const extendingRef = useRef(false), refreshingRef = useRef(false), appliedViewRef = useRef(null);
   const seqRef = useRef(0), announceTimer = useRef(null);
+  const visibleRef = useRef(null); // { fromIndex, toIndex } of the chart's last visible range
+  const tableOpenRef = useRef(false); tableOpenRef.current = tableOpen;
 
   const nowMs = Date.now(), nowSec = Math.floor(nowMs / 1000);
   const requested = prefs.intervals[range] ?? Candles.defaultInterval(range);
@@ -6973,8 +7115,26 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
     const mq = window.matchMedia?.('(max-width: 768px)');
     const onMq = () => setNarrow(!!mq.matches);
     mq?.addEventListener?.('change', onMq);
-    return () => { window.removeEventListener('hashchange', onHash); mq?.removeEventListener?.('change', onMq); };
+    const lq = window.matchMedia?.(MKT_PHONE_LANDSCAPE);
+    const onLq = () => setLandscape(!!lq.matches);
+    lq?.addEventListener?.('change', onLq);
+    return () => {
+      window.removeEventListener('hashchange', onHash);
+      mq?.removeEventListener?.('change', onMq);
+      lq?.removeEventListener?.('change', onLq);
+    };
   }, []);
+
+  // A phone turned sideways gets the full-viewport chart without asking (docs/mobile-chart-ux.md
+  // §8); turned back, an overlay that opened that way closes again. One the user opened stays
+  // open through rotation, and one the user closed stays closed until the next rotation.
+  const autoExpandedRef = useRef(false);
+  useEffect(() => {
+    if(landscape) { if(!expandedRef.current) { autoExpandedRef.current = true; setExpanded(true); } }
+    else if(autoExpandedRef.current) { autoExpandedRef.current = false; setExpanded(false); }
+  }, [landscape]);
+  const openExpanded = () => { autoExpandedRef.current = false; setExpanded(true); };
+  const closeExpanded = () => { autoExpandedRef.current = false; setExpanded(false); };
 
   const applyResult = useCallback((r, mode, forRange) => {
     setView({ ...r, mode, range: forRange, loadedAt: Date.now(), seq: ++seqRef.current });
@@ -7283,6 +7443,19 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const acqBuckets = useMemo(() => hasTx ? PersonalMarket.bucketAcquisitions(chartTxs, ctxCache, { wallets: scope, contextLabels: ctxLabels }) : null,
     [hasTx, chartTxs, ctxCache, scope, ctxLabels]);
 
+  // ── "View as table": the members of every marker on a candle inside the visible range ──
+  const tableData = useMemo(() => {
+    if(!tableOpen || !display?.length) return null;
+    const n = display.length, v = visibleRef.current;
+    const lo = v ? Math.max(0, Math.min(n - 1, Math.ceil(v.fromIndex))) : 0;
+    const hi = v ? Math.max(0, Math.min(n - 1, Math.floor(v.toIndex))) : n - 1;
+    const fromT = display[lo].t, toT = display[hi].t;
+    const ids = [];
+    for(const m of markers.values()) if(m.t >= fromT && m.t <= toT) ids.push(...m.ids);
+    const rows = ids.map(id => rowById.get(id)).filter(Boolean).sort((a, b) => a.tSec - b.tSec);
+    return { rows: rows.slice(0, MKT_TABLE_MAX_ROWS), total: rows.length, fromT, toT };
+  }, [tableOpen, visTick, display, markers, rowById]);
+
   // ── marker selection: a single marker opens its detail, an aggregated one lists its members ──
   const openMarker = useCallback(m => {
     if(!m) { setSel(null); return; }
@@ -7355,11 +7528,14 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   useEffect(() => {
     if(!adapter) return;
     const offCross = adapter.onCrosshair(p => setInspectT(p ? p.t : null));
+    let visRaf = 0;
     const offRange = adapter.onVisibleRange(r => {
+      visibleRef.current = r;
+      if(tableOpenRef.current && !visRaf) visRaf = requestAnimationFrame(() => { visRaf = 0; setVisTick(n => n + 1); });
       if(!r.user || loadingRef.current || historyEndRef.current || !r.count) return;
       if(r.fromIndex <= r.toIndex - r.fromIndex) extendRef.current();
     });
-    return () => { offCross(); offRange(); };
+    return () => { offCross(); offRange(); if(visRaf) cancelAnimationFrame(visRaf); };
   }, [adapter]);
 
   // ── 24 h change: only from the stats endpoint, never from candles on screen ──
@@ -7532,6 +7708,8 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         onClick={() => updatePrefs(p => ({ ...p, personal: { ...p.personal, showTx: !p.personal.showTx } }))}>My Transactions</button>
       <button type="button" className="mkt-btn" aria-haspopup="dialog" aria-label="My Transactions options" title="Filters, Average Acquisition Price line, BTC Balance"
         onClick={() => setTxSheet(true)} data-open-tx-options="1">{Icon.ChevronDown({width:15,height:15})}</button>
+      <button type="button" className="mkt-btn" aria-haspopup="dialog" onClick={() => setTableOpen(true)} data-open-tx-table="1"
+        title="List the transactions marked in the visible range" disabled={!hasTx}>View as table</button>
     </div>
   );
   const paneLimitNote = narrow && !expanded
@@ -7546,6 +7724,57 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
     </>
   );
 
+  const readout = (
+    <div className="mkt-readout" aria-live="off" data-readout data-t={shown ? shown.t : ''}>
+      {shown ? (
+        <>
+          {/* Three lines on a 360 px phone: when, O H L C, change + volume (§3) */}
+          <span className="mkt-when">
+            {mktCandleWhen(shown.t, view.interval)}
+            {shownForming ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>{online ? 'forming' : `incomplete · as of ${mktClock(view.loadedAt)}`}</span> : null}
+            {shown.partial && !shownForming ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>incomplete bucket</span> : null}
+          </span>
+          <span className="mkt-ohlc">
+            <span>O <b>{fmtUSD(shown.o)}</b></span>
+            <span>H <b>{fmtUSD(shown.h)}</b></span>
+            <span>L <b>{fmtUSD(shown.l)}</b></span>
+            <span>C <b>{fmtUSD(shown.c)}</b></span>
+          </span>
+          <span className={shownChange ? 'mkt-' + shownChange.dir : ''}>{shownChange ? shownChange.text : '—'}</span>
+          {prefs.volume ? <span>{volumeLabel} <b>{mktVolume(shown.v)}</b></span> : null}
+        </>
+      ) : <span className="mkt-when">{volumeLabel}</span>}
+      {specs.length ? (
+        <div className="mkt-readout-ind" data-readout-indicators>
+          {specs.filter(s => s.placement === 'overlay' || shownPaneKeys.includes(s.key)).map(s => (
+            <span key={s.key} className={shownForming ? 'mkt-prov' : ''}>
+              <i className="mkt-swatch" style={{background: s.lines.find(l => l.color)?.color}} aria-hidden="true" />
+              {s.label}{' '}
+              {[...s.lines].sort((a, b) => (a.type === 'histogram') - (b.type === 'histogram')).map(ln => {
+                const v = shownIdx >= 0 ? indicatorValues[s.key]?.[ln.series]?.[shownIdx] ?? null : null;
+                return (
+                  <React.Fragment key={ln.series}>
+                    {s.lines.length > 1 ? <span className="mkt-ind-short">{ln.short}</span> : null}
+                    <b data-ind={s.key} data-series={ln.series} data-value={v == null ? '' : String(v)}>{mktFormatValue(v, s.format)}</b>{' '}
+                  </React.Fragment>
+                );
+              })}
+            </span>
+          ))}
+          {shownForming ? <span className="mkt-prov-note" title="The candle is still forming, so these values will change">provisional<span className="mkt-sr"> indicator values: the candle is still forming</span></span> : null}
+        </div>
+      ) : null}
+      {selMarker ? (
+        <div className="mkt-readout-sel" data-readout-marker={selMarker.key}>
+          <span className="mkt-sel-dot" style={{background: mktMarkerColor(theme, selMarker.category, false)}} aria-hidden="true" />
+          Selected: {selMarker.count} {selMarker.count === 1 ? MKT_MARKER[selMarker.category].one : MKT_MARKER[selMarker.category].many}
+          {' · '}{mktCandleWhen(selMarker.t, view?.interval || interval)}{' · '}<b className="mkt-private">{mktBtc(selMarker.sats)}</b>
+          {selMarker.estimated ? <span className="mkt-stat-sub" style={{display:'inline'}}> · position estimated</span> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
   return (
     <div className="mkt" data-market-view="1">
       {/* Price header */}
@@ -7554,9 +7783,10 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         <span className="mkt-price" aria-label={btcPrice ? `Bitcoin price ${fmtUSD(btcPrice)}` : 'Bitcoin price unavailable'}>
           {btcPrice ? fmtUSD(btcPrice) : '—'}
         </span>
-        {priceStale && btcPrice ? <span className="mkt-badge" data-stale="price">Stale · {priceAge == null ? 'age unknown' : mktAge(priceAge)}</span> : null}
+        {!online && btcPrice ? <span className="mkt-badge" data-offline="price">Offline · last price {priceAge == null ? 'saved earlier' : mktAge(priceAge) + ' old'}</span> : null}
+        {online && priceStale && btcPrice ? <span className="mkt-badge" data-stale="price">Stale · {priceAge == null ? 'age unknown' : mktAge(priceAge)}</span> : null}
         <span className={`mkt-change ${change24 ? 'mkt-' + change24.dir : ''}`} data-change24>
-          {change24 ? <>{change24.text} <span style={{fontWeight:500,color:'var(--text-tertiary)'}}>24 h</span></> : statsError ? '24 h change unavailable' : '24 h …'}
+          {change24 ? <>{change24.text} <span style={{fontWeight:500,color:'var(--mkt-muted)'}}>24 h</span></> : statsError ? '24 h change unavailable' : '24 h …'}
           {statsStale ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>Stale · {mktAge(nowMs - stats.at * 1000)}</span> : null}
         </span>
         <div className="mkt-fresh" data-freshness>
@@ -7580,7 +7810,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         {txButtons}
         <div className="mkt-group">{navButtons}</div>
         <div className="mkt-group">
-          <button type="button" className="mkt-btn" onClick={() => setExpanded(true)} aria-label="Expand chart" title="Expand chart">{Icon.Expand({width:15,height:15})}</button>
+          <button type="button" className="mkt-btn" onClick={openExpanded} aria-label="Expand chart" title="Expand chart">{Icon.Expand({width:15,height:15})}</button>
         </div>
       </div>
 
@@ -7595,65 +7825,39 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
 
       <div ref={shellRef} className={`mkt-shell${expanded ? ' expanded' : ''}`}
         {...(expanded ? { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Expanded BTC/USD chart', tabIndex: -1 } : {})}>
-        {expanded ? <MarketExpandedA11y nodeRef={shellRef} onClose={() => setExpanded(false)} /> : null}
+        {expanded ? <MarketExpandedA11y nodeRef={shellRef} onClose={closeExpanded} /> : null}
         <div className="mkt-shell-bar mkt-scroll">
-          <span className="mkt-shell-title">BTC / USD · {range} · {interval}{btcPrice ? ` · ${fmtUSD(btcPrice)}` : ''}</span>
+          <span className="mkt-shell-title">BTC / USD{btcPrice ? ` · ${fmtUSD(btcPrice)}` : ''}
+            {change24 ? <span className={`mkt-${change24.dir}`} style={{marginLeft:'.375rem'}}>{change24.text.replace(/^.* \(/, '(')}</span> : null}
+            {priceStale && btcPrice ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>Stale</span> : null}
+          </span>
+          {/* Compact range and interval pickers: the expanded view has one toolbar row (§8) */}
+          {expanded ? (
+            <div className="mkt-group mkt-selects">
+              <label className="mkt-sr" htmlFor="mkt-x-range">Range</label>
+              <select id="mkt-x-range" className="mkt-select" value={range} onChange={e => chooseRange(e.target.value)} data-expanded-range="1">
+                {rangeOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+              <label className="mkt-sr" htmlFor="mkt-x-interval">Interval</label>
+              <select id="mkt-x-interval" className="mkt-select" value={interval} onChange={e => chooseInterval(e.target.value)} data-expanded-interval="1">
+                {intervalOptions.map(o => <option key={o.value} value={o.value} disabled={o.disabled}>{o.label}{o.disabled ? ` — ${o.title}` : ''}</option>)}
+              </select>
+            </div>
+          ) : null}
           <div className="mkt-group">{scaleButton}{indicatorsButton}</div>
           {txButtons}
           <div className="mkt-group">{navButtons}</div>
           <div className="mkt-group">
-            <button type="button" className="mkt-btn" onClick={() => setExpanded(false)} aria-label="Close expanded chart">{Icon.X({width:15,height:15})}</button>
+            <button type="button" className="mkt-btn" onClick={closeExpanded} aria-label="Close expanded chart">{Icon.X({width:15,height:15})}</button>
           </div>
         </div>
 
-        {/* Persistent readout: always the same height, so nothing jumps (§3) */}
-        <div className="mkt-readout" aria-live="off" data-readout data-t={shown ? shown.t : ''}>
-          {shown ? (
-            <>
-              <span className="mkt-when">
-                {mktCandleWhen(shown.t, view.interval)}
-                {shownForming ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>forming</span> : null}
-                {shown.partial && !shownForming ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>incomplete bucket</span> : null}
-              </span>
-              <span>O <b>{fmtUSD(shown.o)}</b></span>
-              <span>H <b>{fmtUSD(shown.h)}</b></span>
-              <span>L <b>{fmtUSD(shown.l)}</b></span>
-              <span>C <b>{fmtUSD(shown.c)}</b></span>
-              <span className={shownChange ? 'mkt-' + shownChange.dir : ''}>{shownChange ? shownChange.text : '—'}</span>
-              {prefs.volume ? <span>{volumeLabel} <b>{mktVolume(shown.v)}</b></span> : null}
-            </>
-          ) : <span className="mkt-when">{volumeLabel}</span>}
-          {specs.length ? (
-            <div className="mkt-readout-ind" data-readout-indicators>
-              {specs.filter(s => s.placement === 'overlay' || shownPaneKeys.includes(s.key)).map(s => (
-                <span key={s.key} className={shownForming ? 'mkt-prov' : ''}>
-                  <i className="mkt-swatch" style={{background: s.lines.find(l => l.color)?.color}} aria-hidden="true" />
-                  {s.label}{' '}
-                  {[...s.lines].sort((a, b) => (a.type === 'histogram') - (b.type === 'histogram')).map(ln => {
-                    const v = shownIdx >= 0 ? indicatorValues[s.key]?.[ln.series]?.[shownIdx] ?? null : null;
-                    return (
-                      <React.Fragment key={ln.series}>
-                        {s.lines.length > 1 ? <span className="mkt-ind-short">{ln.short}</span> : null}
-                        <b data-ind={s.key} data-series={ln.series} data-value={v == null ? '' : String(v)}>{mktFormatValue(v, s.format)}</b>{' '}
-                      </React.Fragment>
-                    );
-                  })}
-                </span>
-              ))}
-              {shownForming ? <span className="mkt-prov-note" title="The candle is still forming, so these values will change">provisional<span className="mkt-sr"> indicator values: the candle is still forming</span></span> : null}
-            </div>
-          ) : null}
-          {selMarker ? (
-            <div className="mkt-readout-sel" data-readout-marker={selMarker.key}>
-              <span className="mkt-sel-dot" style={{background: mktMarkerColor(theme, selMarker.category, false)}} aria-hidden="true" />
-              Selected: {selMarker.count} {selMarker.count === 1 ? MKT_MARKER[selMarker.category].one : MKT_MARKER[selMarker.category].many}
-              {' · '}{mktCandleWhen(selMarker.t, view?.interval || interval)}{' · '}<b className="mkt-private">{mktBtc(selMarker.sats)}</b>
-              {selMarker.estimated ? <span className="mkt-stat-sub" style={{display:'inline'}}> · position estimated</span> : null}
-            </div>
-          ) : null}
-        </div>
+        {/* Persistent readout: always the same height, so nothing jumps (§3); in the expanded
+            chart it is one line over the top-left of the price pane (§8) */}
+        {!expanded ? readout : null}
 
         <div className="mkt-chart-wrap" data-panes={shownPaneKeys.length}>
+          {expanded ? readout : null}
           <div ref={chartRef} className="mkt-chart" role="img" tabIndex={0} aria-label={ariaLabel}
             data-state={chartState} data-candles={display?.length || 0} data-range={view?.range || range}
             data-interval={view?.interval || interval} data-scale={scale} data-forming={view?.formingIndex ?? -1}
@@ -7714,7 +7918,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         {hiddenPanes > 0 ? (
           <div className="mkt-fresh" data-hidden-panes={hiddenPanes}>
             {hiddenPanes} more indicator pane{hiddenPanes === 1 ? '' : 's'} on — {maxPanes} fit on this screen.
-            {!expanded ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => setExpanded(true)}>Expand to see all</button> : null}
+            {!expanded ? <button type="button" className="btn btn-secondary btn-sm" onClick={openExpanded}>Expand to see all</button> : null}
           </div>
         ) : null}
         <div className="mkt-legal">
@@ -7725,6 +7929,14 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
       {summary ? <MarketSummaryView s={summary} rangeName={MARKET_RANGE_NAMES[view.range] || view.range} interval={view.interval} /> : null}
       <MarketActivityView hasTx={hasTx} aap={aap} price={btcPrice} range={rangeSum} scoped={!!scope} buckets={acqBuckets}
         rangeName={view ? MARKET_RANGE_NAMES[view.range] || view.range : ''} />
+      {tableOpen ? (
+        <MarketSheet title="My transactions on the chart" onClose={() => setTableOpen(false)} className={`mkt-sheet-wide${hideValues ? ' mkt-values-hidden' : ''}`}>
+          <MarketTxTable rows={tableData?.rows || []} total={tableData?.total || 0} fromT={tableData?.fromT ?? null} toT={tableData?.toT ?? null}
+            txById={txById} showTx={personal.showTx}
+            onDetails={id => { setTableOpen(false); setSel({ key: [...markers.values()].find(m => m.ids.includes(id))?.key ?? null, txId: id }); setPanel({ kind: 'detail', id }); }}
+            onView={id => { setTableOpen(false); viewTransaction(id); }} />
+        </MarketSheet>
+      ) : null}
       {sheet ? (
         <MarketSheet title="Indicators" onClose={() => setSheet(false)}>
           <MarketIndicatorPanel prefs={prefs} update={updatePrefs} maxPanes={maxPanes} narrow={narrow} otherPanes={balanceOn ? 1 : 0} />
@@ -7911,6 +8123,7 @@ function App() {
   const [editId, setEditId] = useState(null); // a transaction id, not an array index
   const [editWalletTarget, setEditWalletTarget] = useState(null);
   const [showResetDialog, setShowResetDialog] = useState(false);
+  const [marketCacheBusy, setMarketCacheBusy] = useState(false);
   const [syncState, setSyncState] = useState('disconnected'); // disconnected, syncing, synced, error
   const [syncUser, setSyncUser] = useState(null); // { email, name }
   const [lastSync, setLastSync] = useState(null);
@@ -11150,6 +11363,33 @@ function App() {
                     </label>
                   </div>
                 ))}
+              </div>
+            </div>
+
+            {/* Market data cache: public candles only (satledger-market), never the user's data */}
+            <div className="card" data-market-cache-card="1">
+              <div className="card-header">
+                <div className="card-title">Market Data</div>
+              </div>
+              <div className="card-body">
+                <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',marginBottom:'.75rem'}}>
+                  The Market tab keeps BTC/USD candles from Coinbase on this device so charts open quickly and work offline.
+                  Clearing them removes only that public price history; your transactions, wallets and settings are not touched.
+                  It is downloaded again the next time you open the Market tab.
+                </div>
+                <button className="btn btn-secondary btn-sm" data-clear-market-cache="1" disabled={marketCacheBusy} onClick={async () => {
+                  setMarketCacheBusy(true);
+                  try {
+                    const store = await MarketCandleStore.open();
+                    await store.clear();
+                    showToast('Cached market data cleared');
+                  } catch(e) {
+                    console.warn('Market cache: clear failed', e?.message || e);
+                    showToast('Could not clear cached market data');
+                  } finally { setMarketCacheBusy(false); }
+                }}>
+                  {Icon.Trash({width:13,height:13})} Clear cached market data
+                </button>
               </div>
             </div>
 

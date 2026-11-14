@@ -48,6 +48,9 @@ await navigate('/app.html', 3000);
 check('offline: /app.html renders from cache', !!(await appRendered()), await appRendered());
 await navigate('/app', 3000);
 check('offline: /app renders from cache', !!(await appRendered()), await appRendered());
+// The Market tab loads the chart library on first open; offline it must come from the cache.
+const vendorOffline = await evaluate(`return Promise.all(${JSON.stringify(vendorFiles)}.map(f => fetch('/' + f).then(r => r.ok && r.text()).then(t => !!t && t.includes('LightweightCharts')).catch(() => false)));`);
+check('offline: the vendored chart library is served from the cache', vendorOffline?.length > 0 && vendorOffline.every(Boolean), JSON.stringify(vendorOffline));
 await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
 
 const failed = report();

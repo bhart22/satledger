@@ -26,6 +26,14 @@ A personal Bitcoin portfolio tracker that runs entirely in your browser. No serv
 - **Sample charts** — Preview all visualizations with sample data before adding transactions
 - **Chart controls** — Reorder, show/hide, and expand any chart; date range filters (3M, 6M, 1Y, 5Y, YTD, All, Custom)
 
+### Market
+- **Live BTC/USD chart** — Current price, 24-hour change, candlesticks with volume from Coinbase; ranges from 1D to ALL (the provider's full history) with 1m to 1w candles, linear or log scale, zoom, pan and an expanded full-screen view
+- **Technical indicators** — SMA, EMA, Bollinger Bands on the price; RSI, MACD, ATR and Historical Volatility in synchronized panes; a market summary (range return, highs and lows, All-Time High and drawdown, SMA 50/200 distance, volatility)
+- **Your transactions on the chart** — Purchases, sales, rewards and (optionally) transfers as markers that group when they overlap; tap one for its details and the market just before it, or jump between a marker and its row in Transactions
+- **Average Acquisition Price** — An analytical average of what your BTC cost to acquire (fees and rewards included), as a figure and a line, plus a BTC Balance pane, a summary of each range and tables of acquisitions by market conditions. Market analytics are separate from tax lots and never change the CoinLedger export
+- **Phones, keyboards and screen readers** — Bottom sheets, a sideways-scrolling toolbar, an automatic full-screen chart in landscape, keyboard control of the chart with spoken updates, and a "View as table" list of the transactions on screen
+- **Offline** — Candles are kept on the device (IndexedDB), so the chart opens offline from saved data, clearly marked as saved. **Settings → Market Data** clears that cache; it holds public prices only, never your transactions
+
 ### Data & Privacy
 - **100% client-side** — All data stored in browser localStorage
 - **Google Drive sync** — Optional backup and cross-device sync using Drive's appDataFolder (only this app can access it). A recovery snapshot is kept before anything replaces local data, and can be downloaded or restored from **Export → Recovery Snapshot**. If both devices changed independently, you're asked which copy to keep rather than one silently winning
@@ -49,8 +57,10 @@ A personal Bitcoin portfolio tracker that runs entirely in your browser. No serv
 
 - **React 18** from version-pinned CDN scripts with SRI
 - **Single HTML file** — `app.dev.html` runs as-is (in-browser Babel); `npm run build` compiles it into the deployed `app.html`
-- **SVG charts** — Custom-built charting with no library dependencies
-- **Coinbase API** — Daily BTC-USD candles for historical price data
+- **SVG charts** — The Dashboard's charts are custom-built, with no library
+- **TradingView Lightweight Charts™ 5.3.0** — The Market tab's chart, self-hosted under `vendor/` (Apache License 2.0; `LICENSE` and `NOTICE` beside it) and loaded only when the tab opens. Attribution: the library's logo stays on the chart, and the Market tab credits "Charts by TradingView Lightweight Charts™ — Copyright (c) 2025 TradingView, Inc." with a link to tradingview.com
+- **Coinbase API** — BTC-USD spot price, 24-hour stats and candles (Exchange API), fetched in fixed page-aligned windows that carry nothing about your transactions
+- **IndexedDB** — `satledger-market` caches public candles; your own data stays in localStorage
 - **Google Identity Services** — OAuth for optional Drive sync
 - **CSS custom properties** — Theming with light/dark mode
 
@@ -69,7 +79,8 @@ npm install          # devDependencies only
 
 npm run build        # app.dev.html → app.html + version.json (commit both)
 npm run check        # parse the JSX block (a syntax error = blank page, so check first)
-npm test             # check + build is current + pure-function tests (balances, cost basis, CSV, MA oracle)
+npm test             # check + build is current + pure-function tests (balances, cost basis, CSV, MA oracle,
+                     # and the Market's candles, data service, indicators, preferences and personal analytics)
 npm run test:browser # end-to-end smoke test in headless Chrome (SATLEDGER_PAGE=app.dev.html for the source)
 npm run test:sw      # service worker behind Cloudflare-style redirects, online and offline
 npm run test:all     # everything
@@ -81,7 +92,15 @@ npm run qr           # regenerate the Tip Jar QR PNGs (re-run if a tip address c
 `npm test` needs no browser and takes a couple of seconds. It extracts the pure helpers
 straight out of `app.dev.html`, so there is no duplicated copy to drift, and it keeps the original
 naive moving-average implementation as an oracle to prove the fast version returns identical
-numbers. `npm run test:browser` drives real Chrome over the DevTools protocol — no Puppeteer —
+numbers. The Market's pure logic has its own files: `tools/test/market-data.mjs` (candles, the
+Coinbase provider and the caching service, with a fake fetch and clock), `market-indicators.mjs`
+(every indicator against a naive oracle and hand-computed values), `market-prefs.mjs` (saved view
+settings and the `#market?…` URL) and `market-personal.mjs` (transactions on the chart, Average
+Acquisition Price, balance history, market context with no look-ahead, acquisition tables).
+`npm run test:browser` also locks the CoinLedger CSV byte-for-byte against a golden file
+(`tools/test/fixtures/`) and runs the Market tab against intercepted Coinbase responses: on a
+desktop, on a phone in portrait and landscape, by keyboard, offline and with 2,000 transactions.
+`npm run test:browser` drives real Chrome over the DevTools protocol — no Puppeteer —
 and skips cleanly if no browser is installed (set `CHROME_PATH` to point at one).
 
 ## Getting Started

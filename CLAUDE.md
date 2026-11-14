@@ -55,8 +55,14 @@ npm run test:sw        # service worker behind Cloudflare-style /app.html → /a
 npm run test:all
 ```
 
-- Single test file: `node tools/test/lots.mjs` (also `helpers.mjs`, `moving-average.mjs`). There
-  is no test framework; each file is a standalone script that exits non-zero on failure.
+- Single test file: `node tools/test/lots.mjs` (also `helpers.mjs`, `moving-average.mjs`, and for
+  the Market `market-data.mjs`, `market-indicators.mjs`, `market-prefs.mjs`,
+  `market-personal.mjs`). There is no test framework; each file is a standalone script that exits
+  non-zero on failure.
+- `tools/test/fixtures/` holds the CoinLedger golden input and CSVs (the browser test compares the
+  export byte-for-byte — never regenerate them to make a test pass) and a real Coinbase daily-candle
+  slice. The browser test answers every Coinbase request itself through the DevTools `Fetch`
+  domain; no Market test touches the real network.
 - Browser test against the source instead of the build:
   `SATLEDGER_PAGE=app.dev.html npm run test:browser` (PowerShell: `$env:SATLEDGER_PAGE='app.dev.html'`).
 - Browser tests drive Chrome/Edge over the DevTools protocol (`tools/test/lib/harness.mjs`), and
@@ -65,7 +71,7 @@ npm run test:all
 - `node tools/backfill-reward-usd.mjs` — offline reward-USD backfill on a backup file (dry run by
   default, never modifies its input).
 
-## Layout of `app.dev.html` (~7,900 lines)
+## Layout of `app.dev.html` (~12,000 lines)
 
 1. **Head scripts (plain JS, not Babel)** — theme bootstrap, the `GDriveSync` module (OAuth via
    Google Identity Services, Drive REST), the boot watchdog / crash page with "Download my data",
@@ -74,9 +80,19 @@ npm run test:all
 3. **`<script type="text/babel">`** — everything else:
    - **Helper region**: from the line `const { useState, useEffect …` to the `─── SVG Icons`
      marker. Pure JS, no JSX. Holds date/number helpers, transaction ordering, reward USD logic,
-     the lot engine, harvest, balance rules, the cost pool and CSV parsing.
+     the lot engine, harvest, balance rules, the cost pool and CSV parsing. At its end, just
+     before `─── SVG Icons`, the Market sections, each adding only the top-level names listed
+     here: `Candles` (candle model, validation, aggregation, ranges/intervals,
+     paging), `MarketData` (Coinbase provider, memory store, the caching/paging/backfill service),
+     `Indicators` (SMA, EMA, RSI, MACD, Bollinger, ATR, volatility, returns, highs, `ATH_SEED`),
+     the Market preference/URL helpers (`normalizeMarketPrefs`, `parseMarketHash`,
+     `formatMarketHash`) and `PersonalMarket` (transactions → chart rows, balance history,
+     Average Acquisition Price, context at a transaction, acquisition buckets).
    - Icons, `NAV_ITEMS`, `ErrorBoundary`, modal accessibility helpers.
    - `DashboardCharts` + `SVGChart` (hand-rolled SVG charting, no library).
+   - The Market tab (component zone): `MarketCandleStore` (IndexedDB), `createChartAdapter` (the
+     only code that touches Lightweight Charts), and `MarketView` with its sheets, tables and
+     `MarketErrorBoundary`. Design: `docs/market-analytics.md` and the documents it links.
    - `App`: one large component holding state, the Drive push queue, sync reconciliation, CRUD,
      import/export, and the render tree.
 
@@ -111,6 +127,12 @@ of the logic. Therefore:
 - Dates display as mm/dd/yyyy. Deletions use the in-app `ConfirmDialog`, not `window.confirm`.
 
 ## Storage and sync
+
+Market candles are cached in IndexedDB database `satledger-market` (stores `candles`, `coverage`,
+`meta`): public market data only, never synced or backed up, falling back to memory if IndexedDB
+fails. Settings → Market Data clears it. Market view preferences live in `settings.market`, a
+device view setting (in `DEVICE_VIEW_SETTING_KEYS`, so never pushed). No transaction-derived value
+may reach IndexedDB, a request, the URL or a new storage key — the browser test asserts this.
 
 `localStorage` is primary (`btc-tx-v2`, `btc-wallets`, `btc-settings`, `btc-vault`,
 `btc-last-modified`, plus sync bookkeeping `btc-pending-push`, `btc-drive-seen-mtime`,

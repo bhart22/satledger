@@ -59,7 +59,7 @@ Consequences:
 | D13 | Market preferences are per-device view settings, excluded from Drive sync | Otherwise each indicator toggle queues a push and can raise a sync conflict |
 | D14 | Routing is `#market?range=…&interval=…`; no transaction data in the URL | Matches existing hash routing; privacy |
 | D15 | Transaction context always uses completed daily candles | No look-ahead; independent of the interval on screen |
-| D16 | Cut from the first milestone: VWAP, crossover events, presets, the quantitative data table, market CSV export, synchronized timeline | The specification's 60-item milestone is too large for a deploy-on-push repository |
+| D16 | Cut from the first release (features described elsewhere in the specification; none is one of its 60 first-milestone items, all of which are built): VWAP, crossover events, presets, the quantitative data table, market CSV export, synchronized timeline | Keeps the first release to the specification's milestone in a deploy-on-push repository |
 | D17 | Work happens on a branch; `main` receives merges at phase boundaries | Pushing to `main` deploys |
 
 ## 3. Functionality being reused
