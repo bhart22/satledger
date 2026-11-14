@@ -378,7 +378,7 @@ indicators, saved preferences, URL parameters or transaction markers.
 
 ---
 
-## Phase 5 — Indicator overlays/panes + preferences
+## ✅ Phase 5 — Indicator overlays/panes + preferences
 
 **Objective.** Indicators on the chart, a quantitative summary, and preferences that persist
 per device and in the URL.
