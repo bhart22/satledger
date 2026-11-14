@@ -518,7 +518,7 @@ render markers.
 
 ---
 
-## Phase 7 — Personal transaction overlay UI
+## ✅ Phase 7 — Personal transaction overlay UI
 
 **Objective.** The user's transactions on the chart, with navigation both ways.
 
