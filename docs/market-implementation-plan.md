@@ -599,7 +599,7 @@ balance pane work. Do not add context values or bucket tables.
 
 ---
 
-## Phase 8 — Historical transaction context + quantitative acquisition analytics
+## ✅ Phase 8 — Historical transaction context + quantitative acquisition analytics
 
 **Objective.** What the market looked like at each transaction, and how the user's
 acquisitions distribute across market conditions — with no look-ahead.
