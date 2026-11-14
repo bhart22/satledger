@@ -8,7 +8,7 @@
     "build": "node tools/build.mjs",
     "build:check": "node tools/build.mjs --check",
     "check": "node tools/test/check-jsx.mjs",
-    "test": "npm run check && npm run build:check && node tools/test/helpers.mjs && node tools/test/moving-average.mjs && node tools/test/lots.mjs && node tools/test/market-data.mjs && node tools/test/market-indicators.mjs",
+    "test": "npm run check && npm run build:check && node tools/test/helpers.mjs && node tools/test/moving-average.mjs && node tools/test/lots.mjs && node tools/test/market-data.mjs && node tools/test/market-indicators.mjs && node tools/test/market-prefs.mjs",
     "test:browser": "node tools/test/browser.mjs",
     "test:sw": "node tools/test/sw.mjs",
     "test:all": "npm test && npm run test:browser && npm run test:sw",

@@ -448,6 +448,8 @@ service.loadView({ interval, fromSec, toSec, onUpdate })   // explicit window (p
 service.cancel()                       // supersede and abort the view in flight
 service.backfill({ signal })           // → { status: 'complete' | 'paused' | 'failed', earliestSec?, nextPage? }
 service.getEarliest('1d')              // → { earliestSec, verifiedAt, stale } | null
+service.readCached({ interval, fromSec, toSec })  // completed native candles already stored; no request,
+                                       // no effect on the view in flight (the Market summary's daily history)
 service.getCurrentPrice({ signal }), service.get24HourStats({ signal })   // with the same retry
 service.clearCache()
 ```

@@ -1007,7 +1007,7 @@
     .mkt-fresh button { font:inherit; }
     .mkt-spinner { display:inline-block; width:10px; height:10px; border-radius:50%; border:2px solid var(--border-color); border-top-color:var(--bitcoin-orange); animation:mktSpin .8s linear infinite; vertical-align:-1px; }
     @keyframes mktSpin { to { transform:rotate(360deg); } }
-    .mkt-scroll { display:flex; flex-wrap:nowrap; gap:.5rem; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; -webkit-overflow-scrolling:touch; padding:.125rem; }
+    .mkt-scroll { position:relative; display:flex; flex-wrap:nowrap; gap:.5rem; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; -webkit-overflow-scrolling:touch; padding:.125rem; }
     .mkt-scroll::-webkit-scrollbar { display:none; }
     .mkt-group { display:flex; flex-wrap:nowrap; gap:.25rem; flex:0 0 auto; align-items:center; }
     .mkt-group + .mkt-group { padding-left:.5rem; border-left:1px solid var(--border-color); }
@@ -1043,6 +1043,59 @@
     .mkt-banner { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem .75rem; padding:.5rem .75rem; border-radius:10px; font-size:.8125rem; background:rgba(217,119,6,.1); border:1px solid rgba(217,119,6,.3); }
     .mkt-legal { font-size:.6875rem; color:var(--text-tertiary); }
     .mkt-legal a { color:inherit; }
+.mkt-count { display:inline-flex; align-items:center; justify-content:center; min-width:1.15rem; height:1.15rem; padding:0 .3rem; border-radius:999px; background:var(--bitcoin-orange); color:#fff; font-size:.6875rem; font-weight:700; }
+.mkt-readout-ind { position:relative; flex-basis:100%; display:flex; flex-wrap:nowrap; gap:.875rem; overflow-x:auto; scrollbar-width:none; white-space:nowrap; min-height:1.1rem; }
+.mkt-readout-ind::-webkit-scrollbar { display:none; }
+.mkt-readout-ind b { font-weight:600; }
+.mkt-ind-short { color:var(--text-tertiary); margin-right:.2rem; }
+.mkt-swatch { display:inline-block; width:.6rem; height:.2rem; border-radius:2px; margin-right:.3rem; vertical-align:middle; }
+.mkt-prov b { font-style:italic; }
+.mkt-prov-note { color:var(--text-tertiary); font-style:italic; }
+@media(min-width:769px) {
+  .mkt-chart-wrap[data-panes="1"] { height:clamp(380px, 70vh, 680px); }
+  .mkt-chart-wrap[data-panes="2"] { height:clamp(440px, 78vh, 780px); }
+  .mkt-chart-wrap[data-panes="3"], .mkt-chart-wrap[data-panes="4"] { height:clamp(520px, 86vh, 920px); }
+}
+.mkt-pane-legend { position:absolute; left:.375rem; z-index:2; display:flex; align-items:center; gap:.5rem; padding:.05rem .25rem .05rem .4rem; border-radius:6px; background:color-mix(in srgb, var(--bg-secondary) 82%, transparent); font-size:.6875rem; font-variant-numeric:tabular-nums; pointer-events:none; }
+.mkt-pane-title { font-weight:700; color:var(--text-secondary); }
+.mkt-pane-close { pointer-events:auto; border:none; background:none; color:var(--text-tertiary); font-size:1rem; line-height:1; cursor:pointer; min-width:28px; min-height:28px; padding:0; border-radius:6px; }
+.mkt-pane-close:hover { color:var(--text-primary); }
+.mkt-pane-close:focus-visible { outline:2px solid var(--bitcoin-orange); }
+.mkt-sheet-backdrop { position:fixed; inset:0; z-index:10000; background:rgba(0,0,0,.4); display:flex; justify-content:flex-end; }
+.mkt-sheet { background:var(--bg-primary); color:var(--text-primary); width:min(420px, 100vw); height:100%; overflow:hidden; display:flex; flex-direction:column; box-shadow:-12px 0 40px rgba(0,0,0,.2); outline:none; }
+.mkt-sheet-handle { display:none; }
+.mkt-sheet-head { display:flex; align-items:center; justify-content:space-between; padding:.875rem 1rem .5rem; }
+.mkt-sheet-head h2 { margin:0; font-size:1.0625rem; }
+.mkt-sheet-body { overflow-y:auto; padding:0 1rem 1rem; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
+@media(max-width:768px) {
+  .mkt-sheet-backdrop { align-items:flex-end; justify-content:stretch; }
+  .mkt-sheet { width:100%; height:auto; max-height:85vh; border-radius:16px 16px 0 0; box-shadow:0 -12px 40px rgba(0,0,0,.25); padding-bottom:env(safe-area-inset-bottom, 0px); }
+  .mkt-sheet-handle { display:block; width:40px; height:4px; border-radius:2px; background:var(--border-color); margin:.5rem auto 0; }
+}
+.mkt-ind-panel section { padding:.5rem 0; border-top:1px solid var(--border-color); }
+.mkt-ind-panel section:first-child { border-top:none; }
+.mkt-ind-panel h3 { margin:.25rem 0 .5rem; font-size:.6875rem; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--text-tertiary); }
+.mkt-ind { display:flex; flex-direction:column; gap:.4rem; padding:.4rem 0 .6rem; }
+.mkt-ind-name { font-weight:600; font-size:.875rem; }
+.mkt-chips { display:flex; flex-wrap:wrap; gap:.375rem; }
+.mkt-ind-settings { display:flex; flex-wrap:wrap; align-items:flex-end; gap:.5rem .75rem; }
+.mkt-field { display:inline-flex; flex-direction:column; gap:.15rem; font-size:.75rem; color:var(--text-secondary); }
+.mkt-field input, .mkt-field select { width:5.5rem; min-height:36px; padding:.25rem .5rem; border-radius:8px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-primary); font:inherit; font-size:.875rem; }
+.mkt-field input[aria-invalid="true"] { border-color:var(--red, #dc2626); }
+.mkt-field-error { color:var(--red, #dc2626); font-size:.75rem; }
+.mkt-switch { display:inline-flex; align-items:center; gap:.6rem; min-height:44px; border:none; background:none; padding:0; color:var(--text-primary); font:inherit; font-size:.875rem; font-weight:600; cursor:pointer; text-align:left; }
+.mkt-switch-track { position:relative; flex:0 0 auto; width:36px; height:20px; border-radius:999px; background:var(--border-color); }
+.mkt-switch-track span { position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.3); }
+.mkt-switch[aria-checked="true"] .mkt-switch-track { background:var(--bitcoin-orange); }
+.mkt-switch[aria-checked="true"] .mkt-switch-track span { left:18px; }
+.mkt-switch:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; border-radius:6px; }
+.mkt-summary { display:flex; flex-direction:column; gap:.5rem; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:var(--radius); padding:.75rem; }
+.mkt-summary-title { margin:0; font-size:.9375rem; }
+.mkt-stats { display:grid; grid-template-columns:repeat(auto-fill, minmax(170px, 1fr)); gap:.75rem 1rem; margin:0; }
+.mkt-stat dt { display:flex; align-items:center; gap:.3rem; font-size:.75rem; color:var(--text-secondary); }
+.mkt-stat dd { margin:.1rem 0 0; font-weight:700; font-variant-numeric:tabular-nums; }
+.mkt-stat-sub { display:block; font-weight:500; font-size:.6875rem; color:var(--text-tertiary); }
+@media(max-width:480px) { .mkt-stats { grid-template-columns:1fr 1fr; } }
     .mkt-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
     @media (prefers-reduced-motion: reduce) {
       .mkt-spinner, .mkt-progress::before { animation:none; }
@@ -2654,9 +2707,17 @@ const MarketData = (() => {
       }
     };
 
+    // Completed candles of a native interval that are already held: store only, no request, and
+    // no effect on the view in flight. The Market summary reads full daily history this way
+    // while the chart shows some other range or interval.
+    const readCached = async ({ interval = '1d', fromSec = -Infinity, toSec = Infinity } = {}) => {
+      if(!native.has(interval)) throw codeError('interval', `${interval} is not a native interval`);
+      return st.getCandles({ ...base, interval, fromSec, toSec });
+    };
+
     return Object.freeze({
       provider, store: st,
-      loadView, cancel, backfill, getEarliest,
+      loadView, cancel, backfill, getEarliest, readCached,
       getCurrentPrice: ({ signal = null } = {}) => withRetry(s => provider.getCurrentPrice({ signal: s }), signal),
       get24HourStats: ({ signal = null } = {}) => withRetry(s => provider.get24HourStats({ signal: s }), signal),
       clearCache: () => st.clear(),
@@ -3091,6 +3152,155 @@ const Indicators = (() => {
   });
 })();
 
+// ─── Market: Preferences ─────────────────────────────────────────────────────
+// The Market view's per-device preferences (settings.market, a device view setting: never pushed
+// to Drive, never a commit stamp) and their URL form, #market?range=1y&interval=1d&scale=log&
+// sma=50,200&ema=21&rsi=14&macd=12,26,9&bb=20,2&atr=14&hv=30&vol=1. Pure and total: any input —
+// a hand-edited backup, a Drive file, a hostile URL — yields valid preferences, never a throw.
+// Indicator settings are judged by Indicators' own validation; nothing here restates a rule.
+// The URL carries view parameters only: no transaction, amount, wallet or date ever goes in it.
+//
+// Shape: { range, intervals: { [range]: interval chosen for it }, scale: 'linear'|'log',
+//   volume: bool, indicators: { sma: { periods: [n…], source }, ema: { periods, source },
+//   bollinger: { on, period, multiplier }, rsi: { on, period }, macd: { on, fast, slow, signal },
+//   atr: { on, period }, volatility: { on, period } } }
+//
+// URL rules: each parameter overrides the stored value on its own and an invalid one is ignored.
+// The indicator parameters (sma ema rsi macd bb atr hv) count as one group: when at least one
+// of them is valid the URL describes the whole indicator set, so an indicator it leaves out is
+// off (its stored settings are kept); with none of them the stored indicator set stands. The
+// SMA/EMA price source is a stored setting only; the URL leaves it as it is.
+const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
+  const MAX_LINES = 6;        // SMA or EMA lines at once
+  const MAX_HASH_LENGTH = 1024;
+  const SINGLE = Object.freeze({ // indicator → the settings kept for it
+    bollinger: ['period', 'multiplier'], rsi: ['period'], macd: ['fast', 'slow', 'signal'],
+    atr: ['period'], volatility: ['period'],
+  });
+  const HASH_KEY = Object.freeze({ sma: 'sma', ema: 'ema', bollinger: 'bb', rsi: 'rsi', macd: 'macd', atr: 'atr', volatility: 'hv' });
+  const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
+  const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
+  const pick = (o, keys) => Object.fromEntries(keys.filter(k => own(o, k)).map(k => [k, o[k]]));
+  const valid = (id, settings) => { try { Indicators.get(id).validate(settings); return true; } catch { return false; } };
+
+  const defaults = () => {
+    const indicators = { sma: { periods: [], source: 'close' }, ema: { periods: [], source: 'close' } };
+    for(const [id, keys] of Object.entries(SINGLE)) indicators[id] = { on: false, ...pick(Indicators.get(id).defaults, keys) };
+    return { range: '1Y', intervals: {}, scale: 'linear', volume: true, indicators };
+  };
+  const normLines = (id, raw) => {
+    const d = Indicators.get(id).defaults;
+    const source = own(raw, 'source') && valid(id, { source: raw.source }) ? raw.source : d.source;
+    const list = own(raw, 'periods') && Array.isArray(raw.periods) ? raw.periods : [];
+    const periods = [...new Set(list.filter(p => valid(id, { period: p })))].sort((a, b) => a - b).slice(0, MAX_LINES);
+    return { periods, source };
+  };
+  // Wrong-typed or out-of-range settings fall back to that indicator's defaults as a whole (a
+  // MACD of fast 30 with slow 26 has no single bad key to drop).
+  const normSingle = (id, raw) => {
+    const keys = SINGLE[id];
+    const s = Indicators.resolveSettings(id, pick(raw, keys));
+    return { on: own(raw, 'on') && raw.on === true, ...pick(s, keys) };
+  };
+  const normalize = raw => {
+    const out = defaults();
+    if(!isObj(raw)) return out;
+    if(typeof raw.range === 'string' && Candles.RANGES.includes(raw.range)) out.range = raw.range;
+    if(isObj(raw.intervals)) {
+      for(const r of Candles.RANGES) {
+        const iv = own(raw.intervals, r) ? raw.intervals[r] : undefined;
+        if(typeof iv === 'string' && Candles.INTERVAL_KEYS.includes(iv) && iv !== Candles.defaultInterval(r)) out.intervals[r] = iv;
+      }
+    }
+    if(raw.scale === 'log' || raw.scale === 'linear') out.scale = raw.scale;
+    if(typeof raw.volume === 'boolean') out.volume = raw.volume;
+    const ind = isObj(raw.indicators) ? raw.indicators : {};
+    out.indicators.sma = normLines('sma', ind.sma);
+    out.indicators.ema = normLines('ema', ind.ema);
+    for(const id of Object.keys(SINGLE)) out.indicators[id] = normSingle(id, ind[id]);
+    return out;
+  };
+  const normalizeMarketPrefs = raw => { try { return normalize(raw); } catch { return defaults(); } };
+
+  // ── URL ──
+  const INT = /^\d{1,4}$/, DEC = /^\d{1,2}(\.\d{1,4})?$/;
+  const ints = (s, n) => {
+    const parts = s.split(',');
+    return parts.length === n && parts.every(p => INT.test(p)) ? parts.map(Number) : null;
+  };
+  // → the indicator's patch, or null when the value is not valid for it.
+  const parseIndicator = (id, value, base) => {
+    if(id === 'sma' || id === 'ema') {
+      const parts = value.split(',');
+      if(!parts.length || parts.length > MAX_LINES || !parts.every(p => INT.test(p))) return null;
+      const periods = parts.map(Number);
+      return periods.every(p => valid(id, { period: p })) ? { periods } : null;
+    }
+    let s = null;
+    if(id === 'macd') { const n = ints(value, 3); s = n && { fast: n[0], slow: n[1], signal: n[2] }; }
+    else if(id === 'bollinger') {
+      const [p, m, ...rest] = value.split(',');
+      s = !rest.length && INT.test(p || '') && DEC.test(m || '') ? { period: Number(p), multiplier: Number(m) } : null;
+    } else { const n = ints(value, 1); s = n && { period: n[0] }; }
+    return s && valid(id, { ...base[id], ...s }) ? { on: true, ...s } : null;
+  };
+  const parseMarketHash = (hash, basePrefs = null) => {
+    const prefs = normalizeMarketPrefs(basePrefs);
+    try {
+      if(typeof hash !== 'string' || hash.length > MAX_HASH_LENGTH) return prefs;
+      let q = hash.replace(/^#/, '');
+      if(q.startsWith('market')) q = q.slice(6);
+      if(!q.startsWith('?')) return prefs;
+      const params = new URLSearchParams(q.slice(1));
+      const get = k => { const v = params.get(k); return typeof v === 'string' ? v : null; };
+      const range = get('range') && Candles.RANGES.find(r => r === get('range').toUpperCase());
+      if(range) prefs.range = range;
+      const iv = get('interval');
+      if(iv && Candles.INTERVAL_KEYS.includes(iv)) {
+        if(iv === Candles.defaultInterval(prefs.range)) delete prefs.intervals[prefs.range];
+        else prefs.intervals[prefs.range] = iv;
+      }
+      const scale = get('scale');
+      if(scale === 'log' || scale === 'linear') prefs.scale = scale;
+      const vol = get('vol');
+      if(vol === '1' || vol === '0') prefs.volume = vol === '1';
+      const found = {};
+      for(const [id, key] of Object.entries(HASH_KEY)) {
+        const v = get(key);
+        const p = v === null ? null : parseIndicator(id, v, prefs.indicators);
+        if(p) found[id] = p;
+      }
+      if(Object.keys(found).length) {
+        for(const id of Object.keys(HASH_KEY)) {
+          const cur = prefs.indicators[id];
+          if(id === 'sma' || id === 'ema') prefs.indicators[id] = { ...cur, periods: found[id] ? found[id].periods : [] };
+          else prefs.indicators[id] = { ...cur, ...(found[id] || { on: false }) };
+        }
+      }
+      return normalizeMarketPrefs(prefs);
+    } catch { return normalizeMarketPrefs(basePrefs); }
+  };
+  // `interval` is the interval actually on screen (the stored choice may not be allowed yet);
+  // without it the stored choice, else the range's default, is written.
+  const formatMarketHash = (rawPrefs, interval = null) => {
+    const p = normalizeMarketPrefs(rawPrefs);
+    const iv = typeof interval === 'string' && Candles.INTERVAL_KEYS.includes(interval)
+      ? interval : (p.intervals[p.range] || Candles.defaultInterval(p.range));
+    const parts = [`range=${p.range.toLowerCase()}`, `interval=${iv}`, `scale=${p.scale}`];
+    const ind = p.indicators;
+    if(ind.sma.periods.length) parts.push(`sma=${ind.sma.periods.join(',')}`);
+    if(ind.ema.periods.length) parts.push(`ema=${ind.ema.periods.join(',')}`);
+    if(ind.rsi.on) parts.push(`rsi=${ind.rsi.period}`);
+    if(ind.macd.on) parts.push(`macd=${ind.macd.fast},${ind.macd.slow},${ind.macd.signal}`);
+    if(ind.bollinger.on) parts.push(`bb=${ind.bollinger.period},${ind.bollinger.multiplier}`);
+    if(ind.atr.on) parts.push(`atr=${ind.atr.period}`);
+    if(ind.volatility.on) parts.push(`hv=${ind.volatility.period}`);
+    parts.push(`vol=${p.volume ? 1 : 0}`);
+    return `#market?${parts.join('&')}`;
+  };
+  return { normalizeMarketPrefs, parseMarketHash, formatMarketHash };
+})();
+
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 const sz = {width:14,height:14,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:2,strokeLinecap:'round',strokeLinejoin:'round'};
 const Icon = {
@@ -3180,7 +3390,7 @@ function normalizeRsiThresholds(thresholds) {
 // Per-device view state. Stored in btc-settings with everything else, but changing one is not
 // a data edit (no commit stamp, no push), a pull never overwrites this device's values, and
 // the sync conflict dialog ignores them.
-const DEVICE_VIEW_SETTING_KEYS = ['chartRange', 'chartRangeCustom', 'hideValues', 'dashboardWalletFilter'];
+const DEVICE_VIEW_SETTING_KEYS = ['chartRange', 'chartRangeCustom', 'hideValues', 'dashboardWalletFilter', 'market'];
 const withoutViewSettings = (s) => {
   const out = {...(s && typeof s === 'object' ? s : {})};
   DEVICE_VIEW_SETTING_KEYS.forEach(k => { delete out[k]; });
@@ -3209,6 +3419,8 @@ const SETTINGS_TYPE_GUARDS = {
   hideValues: v => typeof v === 'boolean',
   bgDots: v => typeof v === 'boolean',
   showVault: v => typeof v === 'boolean',
+  // Only the outer type is checked here; MarketView runs normalizeMarketPrefs over the contents.
+  market: v => v && typeof v === 'object' && !Array.isArray(v),
 };
 function normalizeSettings(nextSettings) {
   const raw = nextSettings && typeof nextSettings === 'object' && !Array.isArray(nextSettings) ? nextSettings : {};
@@ -4909,6 +5121,13 @@ const CHART_PALETTES = {
     volForming:'rgba(247,147,26,.45)', cross:'#646b7c', label:'#2a2f3a' },
 };
 
+const chartUsd = p => (p < 0 ? '−$' : '$') + Math.abs(Number(p)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const CHART_FORMATS = {
+  usd: { type: 'custom', minMove: 0.01, formatter: chartUsd },
+  number: { type: 'custom', minMove: 0.01, formatter: p => Number(p).toFixed(2) },
+  percent: { type: 'custom', minMove: 0.0001, formatter: p => (Number(p) * 100).toFixed(1) + '%' },
+};
+
 // Live adapter count, mirrored on <html data-market-charts> so a test can see a leak.
 let liveChartAdapters = 0;
 const reportChartAdapters = () => { document.documentElement.dataset.marketCharts = String(liveChartAdapters); };
@@ -4951,9 +5170,10 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
     rightPriceScale: { borderColor: pal.border, scaleMargins: { top: 0.08, bottom: 0.24 }, ensureEdgeTickMarksVisible: true },
     timeScale: { borderColor: pal.border, timeVisible: false, secondsVisible: false, rightOffset: 3 },
     crosshair: { ...themeOptions().crosshair, mode: LC.CrosshairMode.Normal },
-    localization: { priceFormatter: p => '$' + Number(p).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
   });
-  const candles = chart.addSeries(LC.CandlestickSeries, candleStyle());
+  // Formats are per series, not chart-wide (a chart-wide priceFormatter would put a $ on the
+  // RSI and volatility panes too).
+  const candles = chart.addSeries(LC.CandlestickSeries, { ...candleStyle(), priceFormat: CHART_FORMATS.usd });
   const volume = chart.addSeries(LC.HistogramSeries, { priceScaleId: 'volume', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false });
   chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
   liveChartAdapters++; reportChartAdapters();
@@ -4997,6 +5217,7 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
     const r = ts.getVisibleLogicalRange();
     chart.resize(w, h);
     if(r) { quiet(); ts.setVisibleLogicalRange(r); }
+    scheduleLayout();
   };
   const ro = typeof ResizeObserver === 'function'
     ? new ResizeObserver(() => { if(!raf) raf = requestAnimationFrame(() => { raf = 0; resize(); }); })
@@ -5024,6 +5245,123 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
     const w = r.to - r.from;
     if(i >= r.from + 1 && i <= r.to - 1) return; // already in view
     setLogical(i - w / 2, i + w / 2);
+  };
+
+  // ── overlays (price pane) and indicator panes ──
+  // Points arrive as [{ t, v }] with v null where the indicator has no value (warm-up, gaps):
+  // those become whitespace, so a line breaks rather than bridging a gap. Colours come from the
+  // caller, which knows the theme. Panes share the chart's single time scale and crosshair, so
+  // pan, zoom and inspection are synchronised by construction.
+  const toLinePoint = p => p.v == null || !Number.isFinite(p.v) ? { time: p.t } : { time: p.t, value: p.v };
+  const toBarPoint = p => p.v == null || !Number.isFinite(p.v) ? { time: p.t } : { time: p.t, value: p.v, ...(p.color ? { color: p.color } : {}) };
+  const lineOptions = (style = {}) => ({
+    color: style.color || pal.text, lineWidth: style.width || 2,
+    lineStyle: style.dashed ? LC.LineStyle.Dashed : LC.LineStyle.Solid,
+    priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+    priceFormat: CHART_FORMATS[style.format] || CHART_FORMATS.usd,
+  });
+  const overlays = new Map(); // id → line series in pane 0
+  const setOverlay = (id, points, style) => {
+    if(destroyed) return;
+    let s = overlays.get(id);
+    if(s) s.applyOptions(lineOptions(style));
+    else { s = chart.addSeries(LC.LineSeries, lineOptions(style), 0); overlays.set(id, s); container.dataset.overlays = String(overlays.size); }
+    s.setData((Array.isArray(points) ? points : []).map(toLinePoint));
+  };
+  const removeOverlay = id => {
+    const s = overlays.get(id);
+    if(destroyed || !s) return;
+    chart.removeSeries(s);
+    overlays.delete(id);
+    container.dataset.overlays = String(overlays.size);
+  };
+
+  // A pane: { series: [{ key, type: 'line' | 'histogram', points, color, width, dashed }],
+  //   opts: { order, format: 'usd' | 'number' | 'percent', levels: [n…], fixed: [min, max] } }.
+  // A pane with no series left is removed by the library, which renumbers the ones below it, so
+  // any change to which panes exist rebuilds them all in `order`; a data-only change updates the
+  // existing series in place.
+  const panes = new Map(); // id → { series, opts, sig, apis }
+  let paneOrder = [];
+  const paneSeriesOptions = (opts, s) => {
+    const base = {
+      color: s.color || pal.text, priceLineVisible: false, lastValueVisible: true,
+      priceFormat: CHART_FORMATS[opts.format] || CHART_FORMATS.number,
+      ...(opts.fixed ? { autoscaleInfoProvider: () => ({ priceRange: { minValue: opts.fixed[0], maxValue: opts.fixed[1] } }) } : {}),
+    };
+    return s.type === 'histogram' ? base
+      : { ...base, lineWidth: s.width || 2, lineStyle: s.dashed ? LC.LineStyle.Dashed : LC.LineStyle.Solid, crosshairMarkerVisible: false };
+  };
+  const paintPane = p => p.apis.forEach((api, i) => api.setData((p.series[i].points || []).map(p.series[i].type === 'histogram' ? toBarPoint : toLinePoint)));
+  const buildPane = (p, index) => {
+    p.apis = p.series.map(s => chart.addSeries(s.type === 'histogram' ? LC.HistogramSeries : LC.LineSeries, paneSeriesOptions(p.opts, s), index));
+    // The chart-wide right-scale margins leave room for volume in the price pane; a pane has none.
+    p.apis[0]?.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.08 } });
+    for(const level of p.opts.levels || []) {
+      p.apis[0]?.createPriceLine({ price: level, color: pal.cross, lineWidth: 1, lineStyle: LC.LineStyle.Dashed, axisLabelVisible: false, title: '' });
+    }
+    paintPane(p);
+  };
+  // Price pane 68 / 32 with one pane, 56 / 22 / 22 with two (docs/mobile-chart-ux.md §6).
+  const STRETCH = { 1: [68, 32], 2: [56, 22, 22] };
+  const rebuildPanes = () => {
+    for(const p of panes.values()) { for(const api of p.apis || []) chart.removeSeries(api); p.apis = null; }
+    paneOrder = [...panes.keys()].sort((a, b) => (panes.get(a).opts.order ?? 0) - (panes.get(b).opts.order ?? 0));
+    paneOrder.forEach((id, i) => buildPane(panes.get(id), i + 1));
+    const n = paneOrder.length;
+    const f = STRETCH[n] || [46, ...paneOrder.map(() => 54 / n)];
+    chart.panes().forEach((pane, i) => { if(f[i] != null) pane.setStretchFactor(f[i]); });
+    scheduleLayout();
+  };
+  const paneSig = (series, opts) => JSON.stringify([series.map(s => [s.key, s.type]), opts.order ?? 0, opts.levels || [], opts.fixed || null]);
+  const setPane = (id, series, opts = {}) => {
+    if(destroyed) return;
+    const list = Array.isArray(series) ? series : [];
+    const sig = paneSig(list, opts), cur = panes.get(id);
+    if(cur && cur.sig === sig && cur.apis) {
+      cur.series = list; cur.opts = opts;
+      cur.apis.forEach((api, i) => api.applyOptions(paneSeriesOptions(opts, list[i])));
+      paintPane(cur);
+      return;
+    }
+    panes.set(id, { series: list, opts, sig, apis: cur?.apis || null });
+    rebuildPanes();
+  };
+  const removePane = id => {
+    if(destroyed || !panes.has(id)) return;
+    const p = panes.get(id);
+    for(const api of p.apis || []) chart.removeSeries(api);
+    p.apis = null;
+    panes.delete(id);
+    rebuildPanes();
+  };
+
+  // Where each indicator pane sits inside the container, for the pane titles MarketView draws
+  // over the canvas: [{ id, top, height }] in CSS px. Emitted after the library has laid out
+  // (next frame) and whenever a pane's size changes, including a separator drag.
+  const layoutSubs = new Set();
+  let layoutRaf = 0;
+  const paneRo = typeof ResizeObserver === 'function' ? new ResizeObserver(() => scheduleLayout()) : null;
+  function scheduleLayout() {
+    if(destroyed || layoutRaf) return;
+    layoutRaf = requestAnimationFrame(() => { layoutRaf = requestAnimationFrame(() => { layoutRaf = 0; emitLayout(); }); });
+  }
+  const emitLayout = () => {
+    if(destroyed) return;
+    const box = container.getBoundingClientRect();
+    const all = chart.panes();
+    paneRo?.disconnect();
+    const out = [];
+    all.forEach((pane, i) => {
+      const el = pane.getHTMLElement();
+      if(!el) return;
+      paneRo?.observe(el);
+      if(i === 0) return;
+      const r = el.getBoundingClientRect();
+      if(paneOrder[i - 1]) out.push({ id: paneOrder[i - 1], top: Math.round(r.top - box.top), height: Math.round(r.height) });
+    });
+    container.dataset.panes = String(all.length);
+    emit(layoutSubs, out);
   };
 
   const adapter = {
@@ -5071,8 +5409,10 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
     pan(nBars) { const r = logicalRange(); if(!destroyed && r) setLogical(r.from + nBars, r.to + nBars); },
     onCrosshair(cb) { subs.crosshair.add(cb); return () => subs.crosshair.delete(cb); },
     onVisibleRange(cb) { subs.range.add(cb); return () => subs.range.delete(cb); },
-    // Overlays, panes and markers arrive in Phases 5 and 7; until then they do nothing.
-    setOverlay() {}, removeOverlay() {}, setPane() {}, removePane() {}, setMarkers() {},
+    setOverlay, removeOverlay, setPane, removePane,
+    onLayout(cb) { layoutSubs.add(cb); scheduleLayout(); return () => layoutSubs.delete(cb); },
+    // Markers arrive in Phase 7; until then they do nothing.
+    setMarkers() {},
     onMarkerClick() { return () => {}; },
     setInteraction(next) {
       if(destroyed || next === interaction) return;
@@ -5087,20 +5427,25 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
       chart.applyOptions(themeOptions());
       candles.applyOptions(candleStyle());
       paint();
+      if(panes.size) rebuildPanes(); // the reference lines take the theme's colour
     },
     resize,
     destroy() {
       if(destroyed) return;
       destroyed = true;
       ro?.disconnect();
+      paneRo?.disconnect();
       if(raf) cancelAnimationFrame(raf);
+      if(layoutRaf) cancelAnimationFrame(layoutRaf);
       container.removeEventListener('focusin', onFocusIn);
       container.removeEventListener('focusout', onFocusOut);
       container.removeEventListener('pointerdown', onFocusIn);
       chart.unsubscribeCrosshairMove(onMove);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       chart.unsubscribeDblClick(onDbl);
-      subs.crosshair.clear(); subs.range.clear();
+      subs.crosshair.clear(); subs.range.clear(); layoutSubs.clear();
+      overlays.clear(); panes.clear();
+      delete container.dataset.overlays; delete container.dataset.panes;
       chart.remove();
       liveChartAdapters--; reportChartAdapters();
     },
@@ -5215,11 +5560,339 @@ class MarketErrorBoundary extends React.Component {
   }
 }
 
-function MarketView({ theme, btcPrice, priceUpdatedAt }) {
-  const [range, setRange] = useState('1Y');
-  const [explicit, setExplicit] = useState({}); // range → interval chosen for it this session (§9)
-  const [scale, setScale] = useState('linear');
+// ── Indicators on the chart ──
+// Which indicators are on, with their settings, labels and colours, derived from the
+// preferences. Every number comes from Indicators.calculateSegmented; nothing here computes a
+// formula. SMA and EMA may each have several lines; EMA lines are dashed so the two families
+// differ by more than colour.
+const MKT_COLORS = {
+  light: { sma: { 20:'#0d9488', 50:'#2563eb', 100:'#9333ea', 200:'#db2777' }, ema: { 12:'#0891b2', 21:'#b45309', 50:'#7c3aed', 200:'#be185d' },
+    extra: ['#4d7c0f', '#c2410c', '#0f766e', '#6d28d9', '#a21caf', '#1d4ed8'], bb: '#64748b', bbMid: '#94a3b8',
+    rsi: '#7c3aed', macd: '#2563eb', signal: '#ea580c', histUp: 'rgba(20,154,76,.55)', histDown: 'rgba(216,58,58,.55)', atr: '#0d9488', hv: '#c2410c' },
+  dark: { sma: { 20:'#2dd4bf', 50:'#60a5fa', 100:'#c084fc', 200:'#f472b6' }, ema: { 12:'#22d3ee', 21:'#facc15', 50:'#a78bfa', 200:'#f9a8d4' },
+    extra: ['#a3e635', '#fb923c', '#5eead4', '#c4b5fd', '#f0abfc', '#93c5fd'], bb: '#94a3b8', bbMid: '#64748b',
+    rsi: '#c084fc', macd: '#60a5fa', signal: '#fb923c', histUp: 'rgba(46,189,107,.55)', histDown: 'rgba(240,86,79,.55)', atr: '#2dd4bf', hv: '#fb923c' },
+};
+const MKT_PANE_ORDER = { rsi: 1, macd: 2, atr: 3, volatility: 4 };
+const MKT_PANE_LABEL = { rsi: 'RSI', macd: 'MACD', atr: 'ATR', volatility: 'Historical Volatility' };
+function marketIndicatorSpecs(prefs, theme) {
+  const col = MKT_COLORS[theme] || MKT_COLORS.light, ind = prefs.indicators, out = [];
+  let extra = 0;
+  const lineColor = (fam, p) => col[fam][p] || col.extra[extra++ % col.extra.length];
+  const src = s => s === 'close' ? '' : ` (${s})`;
+  for(const fam of ['sma', 'ema']) {
+    for(const period of ind[fam].periods) {
+      out.push({ key: `${fam}:${period}`, id: fam, settings: { period, source: ind[fam].source }, placement: 'overlay',
+        label: `${fam.toUpperCase()} ${period}${src(ind[fam].source)}`, format: 'usd',
+        lines: [{ series: fam, color: lineColor(fam, period), dashed: fam === 'ema' }] });
+    }
+  }
+  const b = ind.bollinger;
+  if(b.on) out.push({ key: 'bollinger', id: 'bollinger', settings: { period: b.period, multiplier: b.multiplier }, placement: 'overlay',
+    label: `BB ${b.period}, ${b.multiplier}`, format: 'usd',
+    lines: [{ series: 'upper', short: 'U', color: col.bb }, { series: 'middle', short: 'M', color: col.bbMid, dashed: true }, { series: 'lower', short: 'L', color: col.bb }] });
+  if(ind.rsi.on) out.push({ key: 'rsi', id: 'rsi', settings: { period: ind.rsi.period }, placement: 'pane', label: `RSI ${ind.rsi.period}`,
+    format: 'number', levels: [70, 50, 30], fixed: [0, 100], lines: [{ series: 'rsi', color: col.rsi }] });
+  const m = ind.macd;
+  if(m.on) out.push({ key: 'macd', id: 'macd', settings: { fast: m.fast, slow: m.slow, signal: m.signal }, placement: 'pane',
+    label: `MACD ${m.fast}, ${m.slow}, ${m.signal}`, format: 'number',
+    lines: [{ series: 'histogram', short: 'Hist', type: 'histogram', up: col.histUp, down: col.histDown },
+      { series: 'macd', short: 'MACD', color: col.macd }, { series: 'signal', short: 'Signal', color: col.signal }] });
+  if(ind.atr.on) out.push({ key: 'atr', id: 'atr', settings: { period: ind.atr.period }, placement: 'pane', label: `ATR ${ind.atr.period}`,
+    format: 'usd', lines: [{ series: 'atr', color: col.atr }] });
+  if(ind.volatility.on) out.push({ key: 'volatility', id: 'volatility', settings: { period: ind.volatility.period }, placement: 'pane',
+    label: `HV ${ind.volatility.period}`, format: 'percent', lines: [{ series: 'volatility', color: col.hv }] });
+  for(const s of out) if(s.placement === 'pane') { s.order = MKT_PANE_ORDER[s.id]; s.paneLabel = MKT_PANE_LABEL[s.id]; }
+  return out;
+}
+const mktFormatValue = (v, format) => v == null || !Number.isFinite(v) ? '—'
+  : format === 'usd' ? fmtUSD(v) : format === 'percent' ? `${(v * 100).toFixed(1)}%` : v.toFixed(2);
+const mktIndicatorCount = prefs => {
+  const i = prefs.indicators;
+  return i.sma.periods.length + i.ema.periods.length + ['bollinger', 'rsi', 'macd', 'atr', 'volatility'].filter(k => i[k].on).length;
+};
+// Mirrored on <html data-market-indicator-runs> so a test can prove that inspecting candles
+// does not recompute indicators.
+let marketIndicatorRuns = 0;
+const mktErrorText = e => { const m = String(e?.message || e).replace(/^Indicators: /, ''); return m.charAt(0).toUpperCase() + m.slice(1) + '.'; };
+
+// Bottom sheet on a phone, side panel on a wide screen (docs/mobile-chart-ux.md §7), on
+// useModalA11y: focus trap, Escape, focus restored, body scroll locked. Portalled, so it also
+// opens above the expanded chart.
+function MarketSheet({ title, onClose, children }) {
+  const ref = useModalA11y(onClose);
+  const titleId = useMemo(() => 'mkt-sheet-' + Math.random().toString(36).slice(2, 9), []);
+  return ReactDOM.createPortal(
+    <div className="mkt-sheet-backdrop" onMouseDown={backdropHandler(onClose)}>
+      <div ref={ref} className="mkt-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+        onMouseDown={e => e.stopPropagation()} data-market-sheet="1">
+        <div className="mkt-sheet-handle" aria-hidden="true" />
+        <div className="mkt-sheet-head">
+          <h2 id={titleId}>{title}</h2>
+          <button type="button" className="btn-icon" onClick={onClose} aria-label="Close">{Icon.X()}</button>
+        </div>
+        <div className="mkt-sheet-body">{children}</div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+// A numeric setting: edited as text, validated on blur or Enter by `commit`, which returns an
+// error message (shown, value not applied) or null.
+function MarketNumberField({ label, value, commit, decimal = false, name }) {
+  const [draft, setDraft] = useState(String(value));
+  const [error, setError] = useState('');
+  const id = useMemo(() => 'mkt-num-' + Math.random().toString(36).slice(2, 9), []);
+  useEffect(() => { setDraft(String(value)); setError(''); }, [value]);
+  const apply = () => {
+    const t = draft.trim();
+    if(t === String(value)) { setError(''); return; }
+    const ok = decimal ? /^\d+(\.\d+)?$/.test(t) : /^\d+$/.test(t);
+    const msg = ok ? commit(Number(t)) : `${label} must be a ${decimal ? 'number' : 'whole number'}.`;
+    setError(msg || '');
+  };
+  return (
+    <span className="mkt-field">
+      <label htmlFor={id}>{label}</label>
+      <input id={id} name={name} type="text" inputMode={decimal ? 'decimal' : 'numeric'} value={draft} aria-invalid={!!error}
+        aria-describedby={error ? id + '-err' : undefined}
+        onChange={e => setDraft(e.target.value)} onBlur={apply}
+        onKeyDown={e => { if(e.key === 'Enter') { e.preventDefault(); apply(); } }} />
+      {error ? <span className="mkt-field-error" id={id + '-err'} role="alert">{error}</span> : null}
+    </span>
+  );
+}
+
+const MktSwitch = ({ on, label, onChange, disabled }) => (
+  <button type="button" role="switch" aria-checked={on} className="mkt-switch" onClick={() => onChange(!on)} disabled={disabled}>
+    <span className="mkt-switch-track" aria-hidden="true"><span /></span>{label}
+  </button>
+);
+
+// SMA or EMA: preset lines as toggles, custom periods, and the price source.
+function MarketLineFamily({ id, name, prefs, update }) {
+  const fam = prefs.indicators[id], def = Indicators.get(id);
+  const [custom, setCustom] = useState('');
+  const [error, setError] = useState('');
+  const setFam = patch => update(p => ({ ...p, indicators: { ...p.indicators, [id]: { ...p.indicators[id], ...patch } } }));
+  const toggle = period => setFam({ periods: fam.periods.includes(period) ? fam.periods.filter(x => x !== period) : [...fam.periods, period] });
+  const addCustom = () => {
+    const t = custom.trim();
+    if(!/^\d+$/.test(t)) { setError('Period must be a whole number.'); return; }
+    const period = Number(t);
+    try { def.validate({ period }); } catch(e) { setError(mktErrorText(e)); return; }
+    if(fam.periods.includes(period)) { setError(`${id.toUpperCase()} ${period} is already on.`); return; }
+    if(fam.periods.length >= 6) { setError('At most six lines; turn one off first.'); return; }
+    setFam({ periods: [...fam.periods, period] }); setCustom(''); setError('');
+  };
+  const customs = fam.periods.filter(p => !def.presets.includes(p));
+  const inputId = `mkt-${id}-custom`;
+  return (
+    <div className="mkt-ind" data-indicator={id}>
+      <div className="mkt-ind-name">{name}</div>
+      <div className="mkt-chips" role="group" aria-label={`${name} lines`}>
+        {def.presets.map(p => (
+          <button key={p} type="button" className="mkt-btn" aria-pressed={fam.periods.includes(p)} onClick={() => toggle(p)}>{p}</button>
+        ))}
+        {customs.map(p => (
+          <button key={p} type="button" className="mkt-btn" aria-pressed="true" onClick={() => toggle(p)} aria-label={`Remove ${id.toUpperCase()} ${p}`}>{p} ×</button>
+        ))}
+      </div>
+      <div className="mkt-ind-settings">
+        <span className="mkt-field">
+          <label htmlFor={inputId}>Custom period</label>
+          <input id={inputId} type="text" inputMode="numeric" value={custom} aria-invalid={!!error}
+            onChange={e => { setCustom(e.target.value); setError(''); }}
+            onKeyDown={e => { if(e.key === 'Enter') { e.preventDefault(); addCustom(); } }} />
+        </span>
+        <button type="button" className="btn btn-secondary btn-sm" onClick={addCustom}>Add</button>
+        <span className="mkt-field">
+          <label htmlFor={`mkt-${id}-source`}>Source</label>
+          <select id={`mkt-${id}-source`} value={fam.source} onChange={e => setFam({ source: e.target.value })}>
+            {Indicators.SOURCES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </span>
+      </div>
+      {error ? <div className="mkt-field-error" role="alert">{error}</div> : null}
+    </div>
+  );
+}
+
+// An indicator that is on or off, with its numeric settings validated by Indicators.
+function MarketSingleIndicator({ id, name, fields, prefs, update, onToggle }) {
+  const cur = prefs.indicators[id];
+  const commitField = key => n => {
+    const next = { ...cur, [key]: n };
+    try { Indicators.get(id).validate(Object.fromEntries(fields.map(f => [f.key, next[f.key]]))); }
+    catch(e) { return mktErrorText(e); }
+    update(p => ({ ...p, indicators: { ...p.indicators, [id]: { ...p.indicators[id], [key]: n } } }));
+    return null;
+  };
+  return (
+    <div className="mkt-ind" data-indicator={id}>
+      <MktSwitch on={cur.on} label={name} onChange={on => onToggle(id, on)} />
+      <div className="mkt-ind-settings">
+        {fields.map(f => <MarketNumberField key={f.key} name={`${id}-${f.key}`} label={f.label} value={cur[f.key]} decimal={!!f.decimal} commit={commitField(f.key)} />)}
+      </div>
+    </div>
+  );
+}
+
+function MarketIndicatorPanel({ prefs, update, maxPanes, narrow }) {
+  const [note, setNote] = useState('');
+  const paneIds = ['rsi', 'macd', 'atr', 'volatility'];
+  const onToggle = (id, on) => {
+    if(on && paneIds.includes(id) && paneIds.filter(k => prefs.indicators[k].on).length >= maxPanes) {
+      setNote(narrow
+        ? `At most ${maxPanes} indicator panes fit on this screen. Turn one off first, or expand the chart for up to four.`
+        : `At most ${maxPanes} indicator panes at once. Turn one off first.`);
+      return;
+    }
+    setNote('');
+    update(p => ({ ...p, indicators: { ...p.indicators, [id]: { ...p.indicators[id], on } } }));
+  };
+  const single = (id, name, fields) => <MarketSingleIndicator id={id} name={name} fields={fields} prefs={prefs} update={update} onToggle={onToggle} />;
+  return (
+    <div className="mkt-ind-panel">
+      <section aria-labelledby="mkt-cat-trend">
+        <h3 id="mkt-cat-trend">Trend</h3>
+        <MarketLineFamily id="sma" name="Simple Moving Average (SMA)" prefs={prefs} update={update} />
+        <MarketLineFamily id="ema" name="Exponential Moving Average (EMA)" prefs={prefs} update={update} />
+      </section>
+      <section aria-labelledby="mkt-cat-momentum">
+        <h3 id="mkt-cat-momentum">Momentum</h3>
+        {single('rsi', 'Relative Strength Index (RSI)', [{ key: 'period', label: 'Period' }])}
+        {single('macd', 'MACD', [{ key: 'fast', label: 'Fast' }, { key: 'slow', label: 'Slow' }, { key: 'signal', label: 'Signal' }])}
+      </section>
+      <section aria-labelledby="mkt-cat-volatility">
+        <h3 id="mkt-cat-volatility">Volatility</h3>
+        {single('bollinger', 'Bollinger Bands', [{ key: 'period', label: 'Period' }, { key: 'multiplier', label: 'Multiplier', decimal: true }])}
+        {single('atr', 'Average True Range (ATR)', [{ key: 'period', label: 'Period' }])}
+        {single('volatility', 'Historical Volatility', [{ key: 'period', label: 'Period' }])}
+      </section>
+      <section aria-labelledby="mkt-cat-volume">
+        <h3 id="mkt-cat-volume">Volume</h3>
+        <div className="mkt-ind" data-indicator="volume">
+          <MktSwitch on={prefs.volume} label="Volume" onChange={on => update(p => ({ ...p, volume: on }))} />
+        </div>
+      </section>
+      {note ? <div className="mkt-banner" role="status" data-pane-limit>{note}</div> : null}
+      <p className="mkt-legal">RSI, MACD, ATR and Historical Volatility open in panes below the price; {narrow ? 'two fit on a phone (four when expanded)' : 'up to four at once'}. Indicators restart after a gap in the provider’s data.</p>
+    </div>
+  );
+}
+
+// ── Quantitative summary (docs/technical-indicators.md §11–12) ──
+// Daily figures use completed daily candles held on this device (the background backfill fills
+// them); "today" is the forming day. A figure whose input is missing is "—", never estimated.
+// Nothing is called an all-time high: Indicators.athLabels decides the wording (decision D18).
+function marketSummary({ daily, candles, interval, price, nowSec, earliestSec }) {
+  const DAY = 86400, today = Candles.bucketStart(nowSec, '1d');
+  const done = daily.filter(c => c.t + DAY <= nowSec);
+  const fresh = done.length > 0 && done[done.length - 1].t === today - DAY; // yesterday is held
+  const last = (id, settings, key) => {
+    if(!fresh) return null;
+    const r = Indicators.calculateSegmented(id, done, settings, '1d')[key];
+    return r[r.length - 1];
+  };
+  // The forming day's range: candles on screen that lie inside today, plus the current price.
+  let fh = null, fl = null;
+  if(Candles.intervalSeconds(interval) <= DAY) {
+    for(const c of candles) if(c.t >= today && c.t < today + DAY) { fh = fh == null ? c.h : Math.max(fh, c.h); fl = fl == null ? c.l : Math.min(fl, c.l); }
+  }
+  const p = price > 0 ? price : null;
+  if(p != null) { fh = fh == null ? p : Math.max(fh, p); fl = fl == null ? p : Math.min(fl, p); }
+
+  const labels = Indicators.athLabels({ seedVerified: false, earliestSec });
+  const ath = Indicators.previousAth(done, nowSec, { earliestSec });
+  const high = labels.loading ? null : ath == null && fh == null ? null : Math.max(ath ? ath.price : -Infinity, fh ?? -Infinity);
+  const highT = high == null ? null : ath && ath.price >= high ? ath.t : today;
+  const yearAgo = today - 364 * DAY;
+  const yr = Indicators.extremes(done.filter(c => c.t >= yearAgo));
+  const covers = done.length > 0 && done[0].t <= yearAgo;
+  const wk52 = yr && covers ? {
+    high: fh != null ? Math.max(yr.high, fh) : yr.high, low: fl != null ? Math.min(yr.low, fl) : yr.low,
+  } : null;
+  const sma50 = last('sma', { period: 50 }, 'sma'), sma200 = last('sma', { period: 200 }, 'sma');
+  const ext = Indicators.extremes(candles);
+  const dd = Indicators.drawdown(candles).max;
+  return {
+    labels,
+    rangeReturn: Indicators.returns.range(candles),
+    rangeHigh: ext ? ext.high : null, rangeHighT: ext ? ext.highT : null,
+    rangeLow: ext ? ext.low : null, rangeLowT: ext ? ext.lowT : null,
+    high52: wk52 ? wk52.high : null, low52: wk52 ? wk52.low : null,
+    high, highT,
+    drawdownFromHigh: high != null && p != null ? Indicators.returns.simple(high, p) : null,
+    sma50, sma200,
+    sma50Dist: sma50 != null && p != null ? Indicators.returns.simple(sma50, p) : null,
+    sma200Dist: sma200 != null && p != null ? Indicators.returns.simple(sma200, p) : null,
+    rsi14: last('rsi', { period: 14 }, 'rsi'),
+    atr14: last('atr', { period: 14 }, 'atr'),
+    hv30: last('volatility', { period: 30 }, 'volatility'),
+    maxDrawdown: dd ? dd.value : null, maxDrawdownPeakT: dd ? dd.peakT : null, maxDrawdownTroughT: dd ? dd.troughT : null,
+  };
+}
+const mktPct = v => v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(2)}%`;
+
+function MarketSummaryView({ s, rangeName, interval }) {
+  const item = (key, label, value, text, sub = null, tip = null) => (
+    <div className="mkt-stat" key={key}>
+      <dt>{label}{tip ? <InfoTip text={tip} /> : null}</dt>
+      <dd data-summary={key} data-value={value == null ? '' : String(value)}>{text}{sub ? <span className="mkt-stat-sub">{sub}</span> : null}</dd>
+    </div>
+  );
+  const usd = v => v == null ? '—' : fmtUSD(v);
+  const on = t => t == null ? null : (interval === '1d' || interval === '1w' ? `on ${mktDay(t)}` : `at ${mktCandleWhen(t, interval)}`);
+  const loadingHigh = s.labels.loading;
+  return (
+    <section className="mkt-summary" aria-labelledby="mkt-summary-title" data-market-summary="1">
+      <h2 id="mkt-summary-title" className="mkt-summary-title">Market summary</h2>
+      <dl className="mkt-stats">
+        {item('rangeReturn', `Return · ${rangeName}`, s.rangeReturn, mktPct(s.rangeReturn), null, 'Last close of the candles shown over the open of the first one.')}
+        {item('rangeHigh', `Range high`, s.rangeHigh, usd(s.rangeHigh), on(s.rangeHighT))}
+        {item('rangeLow', `Range low`, s.rangeLow, usd(s.rangeLow), on(s.rangeLowT))}
+        {item('high52', '52-week high', s.high52, usd(s.high52), null, 'Highest daily high over the last 365 days, including today.')}
+        {item('low52', '52-week low', s.low52, usd(s.low52))}
+        {item('high', loadingHigh ? 'High since …' : s.labels.summaryHigh, s.high, loadingHigh ? 'Loading full history…' : usd(s.high), loadingHigh ? null : on(s.highT),
+          'The highest price in the provider’s daily history on this device, which starts on the date shown. Bitcoin traded before that date, so this is not called an all-time high.')}
+        {item('drawdownFromHigh', loadingHigh ? 'Drawdown from High since …' : s.labels.summaryDrawdown, s.drawdownFromHigh, loadingHigh ? '…' : mktPct(s.drawdownFromHigh))}
+        {item('maxDrawdown', `Max drawdown · ${rangeName}`, s.maxDrawdown, mktPct(s.maxDrawdown),
+          s.maxDrawdownPeakT != null && s.maxDrawdown < 0 ? `${mktDay(s.maxDrawdownPeakT)} → ${mktDay(s.maxDrawdownTroughT)}` : null,
+          'Largest fall from a closing peak to a later close within the candles shown.')}
+        {item('sma50', 'SMA 50 (daily)', s.sma50, usd(s.sma50), s.sma50Dist == null ? null : `price ${mktPct(s.sma50Dist)} from it`)}
+        {item('sma200', 'SMA 200 (daily)', s.sma200, usd(s.sma200), s.sma200Dist == null ? null : `price ${mktPct(s.sma200Dist)} from it`)}
+        {item('rsi14', 'RSI 14 (daily)', s.rsi14, s.rsi14 == null ? '—' : s.rsi14.toFixed(1))}
+        {item('atr14', 'ATR 14 (daily)', s.atr14, usd(s.atr14))}
+        {item('hv30', '30-day volatility', s.hv30, s.hv30 == null ? '—' : `${(s.hv30 * 100).toFixed(1)}%`, 'annualized', 'Sample standard deviation of 30 daily log returns, times √365.')}
+      </dl>
+      <p className="mkt-legal">Daily figures use completed UTC days held on this device. Distances use the current price.</p>
+    </section>
+  );
+}
+
+function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPrefsChange = null }) {
+  // Preferences: stored per device, overridden on load by a #market?… URL (not saved until the
+  // user changes something). Every change is saved through onPrefsChange — a device view setting.
+  const [prefs, setPrefsState] = useState(() => {
+    const stored = normalizeMarketPrefs(storedPrefs);
+    return location.hash.startsWith('#market?') ? parseMarketHash(location.hash, stored) : stored;
+  });
+  const prefsRef = useRef(prefs); prefsRef.current = prefs;
+  const onPrefsChangeRef = useRef(onPrefsChange); onPrefsChangeRef.current = onPrefsChange;
+  const updatePrefs = useCallback(change => {
+    const next = normalizeMarketPrefs(typeof change === 'function' ? change(prefsRef.current) : change);
+    prefsRef.current = next;
+    setPrefsState(next);
+    onPrefsChangeRef.current?.(next);
+  }, []);
+  const range = prefs.range, scale = prefs.scale;
   const [expanded, setExpanded] = useState(false);
+  const [sheet, setSheet] = useState(false);
+  const [narrow, setNarrow] = useState(() => !!window.matchMedia?.('(max-width: 768px)').matches);
+  const [paneLayout, setPaneLayout] = useState([]);
+  const [daily, setDaily] = useState([]);
   const [lib, setLib] = useState(() => window.LightweightCharts ? 'ready' : 'loading');
   const [libTry, setLibTry] = useState(0);
   const [adapter, setAdapter] = useState(null);
@@ -5252,9 +5925,30 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
   const seqRef = useRef(0), announceTimer = useRef(null);
 
   const nowMs = Date.now(), nowSec = Math.floor(nowMs / 1000);
-  const requested = explicit[range] ?? Candles.defaultInterval(range);
+  const requested = prefs.intervals[range] ?? Candles.defaultInterval(range);
   const interval = Candles.resolveInterval(range, requested, nowSec, earliestSec);
   const allowed = Candles.allowedIntervals(range, nowSec, earliestSec);
+  const intervalRef = useRef(interval); intervalRef.current = interval;
+  const maxPanes = narrow && !expanded ? 2 : 4;
+
+  // ── URL: the hash mirrors the view (replaceState, so Back is not a list of indicator toggles);
+  // a hash edited by hand is applied ──
+  useEffect(() => {
+    const h = formatMarketHash(prefs, interval);
+    if(location.hash !== h) history.replaceState(null, '', h);
+  }, [prefs, interval]);
+  useEffect(() => {
+    const onHash = () => {
+      const h = location.hash;
+      if(!h.startsWith('#market?') || h === formatMarketHash(prefsRef.current, intervalRef.current)) return;
+      updatePrefs(p => parseMarketHash(h, p));
+    };
+    window.addEventListener('hashchange', onHash);
+    const mq = window.matchMedia?.('(max-width: 768px)');
+    const onMq = () => setNarrow(!!mq.matches);
+    mq?.addEventListener?.('change', onMq);
+    return () => { window.removeEventListener('hashchange', onHash); mq?.removeEventListener?.('change', onMq); };
+  }, []);
 
   const applyResult = useCallback((r, mode, forRange) => {
     setView({ ...r, mode, range: forRange, loadedAt: Date.now(), seq: ++seqRef.current });
@@ -5404,6 +6098,67 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
     adapter.updateLast(display[view.formingIndex]);
   }, [display]);
 
+  // ── indicators: computed once per (candles, settings); never on crosshair or UI events ──
+  const specs = useMemo(() => marketIndicatorSpecs(prefs, theme), [prefs.indicators, theme]);
+  const calcKey = JSON.stringify(specs.map(s => [s.key, s.id, s.settings]));
+  const viewInterval = view?.interval || null;
+  const indicatorValues = useMemo(() => {
+    const out = {};
+    if(!display?.length || !viewInterval) return out;
+    for(const s of specs) out[s.key] = Indicators.calculateSegmented(s.id, display, s.settings, viewInterval);
+    document.documentElement.dataset.marketIndicatorRuns = String(++marketIndicatorRuns);
+    return out;
+  }, [display, viewInterval, calcKey]);
+  const paneSpecs = specs.filter(s => s.placement === 'pane');
+  const shownPaneKeys = paneSpecs.slice(0, maxPanes).map(s => s.key);
+  const hiddenPanes = paneSpecs.length - shownPaneKeys.length;
+  const appliedOverlays = useRef(new Set()), appliedPanes = useRef(new Set());
+  useEffect(() => {
+    if(!adapter) return;
+    const times = (display || []).map(c => c.t);
+    const pts = (values, colorOf = null) => times.map((t, i) => {
+      const v = values ? values[i] : null;
+      return colorOf && v != null ? { t, v, color: colorOf(v) } : { t, v };
+    });
+    const wantO = new Set(), wantP = new Set();
+    for(const s of specs) {
+      const vals = indicatorValues[s.key];
+      if(s.placement === 'overlay') {
+        for(const ln of s.lines) {
+          const id = `${s.key}/${ln.series}`;
+          wantO.add(id);
+          adapter.setOverlay(id, pts(vals?.[ln.series]), { color: ln.color, dashed: !!ln.dashed, width: 2, format: s.format });
+        }
+      } else if(shownPaneKeys.includes(s.key)) {
+        wantP.add(s.key);
+        adapter.setPane(s.key, s.lines.map(ln => ({
+          key: ln.series, type: ln.type || 'line', color: ln.color, width: 2,
+          points: pts(vals?.[ln.series], ln.type === 'histogram' ? v => v >= 0 ? ln.up : ln.down : null),
+        })), { order: s.order, format: s.format, levels: s.levels, fixed: s.fixed });
+      }
+    }
+    for(const id of appliedOverlays.current) if(!wantO.has(id)) adapter.removeOverlay(id);
+    for(const id of appliedPanes.current) if(!wantP.has(id)) adapter.removePane(id);
+    appliedOverlays.current = wantO; appliedPanes.current = wantP;
+  }, [adapter, indicatorValues, specs, shownPaneKeys.join(',')]);
+  useEffect(() => { adapter?.setVolume(prefs.volume ? [] : null); }, [adapter, prefs.volume]);
+  useEffect(() => {
+    if(!adapter) return;
+    return adapter.onLayout(setPaneLayout);
+  }, [adapter]);
+
+  // ── daily history held on this device, for the summary: re-read after loads and backfill ──
+  const dailyTrigger = `${backfill.status}|${loading ? '' : view?.seq ?? ''}`;
+  useEffect(() => {
+    let alive = true;
+    getMarketService().then(s => s.readCached({ interval: '1d' })).then(d => { if(alive) setDaily(d); }).catch(() => {});
+    return () => { alive = false; };
+  }, [dailyTrigger]);
+  const today = Candles.bucketStart(nowSec, '1d');
+  const summary = useMemo(() => display?.length && view ? marketSummary({
+    daily, candles: display, interval: view.interval, price: btcPrice, nowSec: Math.floor(Date.now() / 1000), earliestSec,
+  }) : null, [daily, display, view?.interval, btcPrice, earliestSec, today]);
+
   // The forming bucket has closed: fetch it as a completed candle plus the new forming one.
   useEffect(() => {
     if(!view || view.formingIndex < 0 || loading) return;
@@ -5468,8 +6223,8 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
   }, [earliestSec]);
 
   // ── handlers ──
-  const chooseRange = r => { if(r !== range) setRange(r); };
-  const chooseInterval = iv => { setExplicit(e => ({ ...e, [range]: iv })); };
+  const chooseRange = r => { if(r !== range) updatePrefs(p => ({ ...p, range: r })); };
+  const chooseInterval = iv => { updatePrefs(p => ({ ...p, intervals: { ...p.intervals, [p.range]: iv } })); };
   const retryLoad = () => { setLoadError(null); setReloadKey(k => k + 1); };
   const resetView = () => {
     if(!adapter || !display?.length) return;
@@ -5552,7 +6307,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
   else if(candlesStale) chartState = 'stale';
 
   const firstOpen = hasCandles ? display[0].o : null, lastClose = hasCandles ? display[display.length - 1].c : null;
-  const rangeReturnPct = firstOpen > 0 ? (lastClose - firstOpen) / firstOpen * 100 : null;
+  const rangeReturnPct = firstOpen > 0 ? Indicators.returns.range(display) * 100 : null;
   const ariaLabel = hasCandles
     ? `BTC/USD ${MARKET_INTERVAL_NAMES[view.interval]} candles, ${MARKET_RANGE_NAMES[view.range] || view.range}. Last close ${fmtUSD(lastClose)}`
       + (rangeReturnPct != null ? `, return over the candles shown ${rangeReturnPct >= 0 ? '+' : '−'}${Math.abs(rangeReturnPct).toFixed(1)} %.` : '.')
@@ -5568,7 +6323,14 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
   });
 
   const scaleButton = (
-    <button type="button" className="mkt-btn" aria-pressed={scale === 'log'} onClick={() => setScale(s => s === 'log' ? 'linear' : 'log')} title="Logarithmic price scale">Log</button>
+    <button type="button" className="mkt-btn" aria-pressed={scale === 'log'} onClick={() => updatePrefs(p => ({ ...p, scale: p.scale === 'log' ? 'linear' : 'log' }))} title="Logarithmic price scale">Log</button>
+  );
+  const indicatorCount = mktIndicatorCount(prefs);
+  const indicatorsButton = (
+    <button type="button" className="mkt-btn" aria-haspopup="dialog" onClick={() => setSheet(true)} data-open-indicators="1"
+      aria-label={`Indicators${indicatorCount ? `, ${indicatorCount} on` : ''}`}>
+      Indicators{indicatorCount ? <span className="mkt-count" aria-hidden="true">{indicatorCount}</span> : null}
+    </button>
   );
   const navButtons = (
     <>
@@ -5609,7 +6371,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
       </div>
       <div className="mkt-scroll" role="toolbar" aria-label="Chart controls">
         <MarketRadioGroup label="Interval" options={intervalOptions} value={interval} onChange={chooseInterval} />
-        <div className="mkt-group">{scaleButton}</div>
+        <div className="mkt-group">{scaleButton}{indicatorsButton}</div>
         <div className="mkt-group">{navButtons}</div>
         <div className="mkt-group">
           <button type="button" className="mkt-btn" onClick={() => setExpanded(true)} aria-label="Expand chart" title="Expand chart">{Icon.Expand({width:15,height:15})}</button>
@@ -5630,7 +6392,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
         {expanded ? <MarketExpandedA11y nodeRef={shellRef} onClose={() => setExpanded(false)} /> : null}
         <div className="mkt-shell-bar mkt-scroll">
           <span className="mkt-shell-title">BTC / USD · {range} · {interval}{btcPrice ? ` · ${fmtUSD(btcPrice)}` : ''}</span>
-          <div className="mkt-group">{scaleButton}</div>
+          <div className="mkt-group">{scaleButton}{indicatorsButton}</div>
           <div className="mkt-group">{navButtons}</div>
           <div className="mkt-group">
             <button type="button" className="mkt-btn" onClick={() => setExpanded(false)} aria-label="Close expanded chart">{Icon.X({width:15,height:15})}</button>
@@ -5638,7 +6400,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
         </div>
 
         {/* Persistent readout: always the same height, so nothing jumps (§3) */}
-        <div className="mkt-readout" aria-live="off" data-readout>
+        <div className="mkt-readout" aria-live="off" data-readout data-t={shown ? shown.t : ''}>
           {shown ? (
             <>
               <span className="mkt-when">
@@ -5651,15 +6413,51 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
               <span>L <b>{fmtUSD(shown.l)}</b></span>
               <span>C <b>{fmtUSD(shown.c)}</b></span>
               <span className={shownChange ? 'mkt-' + shownChange.dir : ''}>{shownChange ? shownChange.text : '—'}</span>
-              <span>{volumeLabel} <b>{mktVolume(shown.v)}</b></span>
+              {prefs.volume ? <span>{volumeLabel} <b>{mktVolume(shown.v)}</b></span> : null}
             </>
           ) : <span className="mkt-when">{volumeLabel}</span>}
+          {specs.length ? (
+            <div className="mkt-readout-ind" data-readout-indicators>
+              {specs.filter(s => s.placement === 'overlay' || shownPaneKeys.includes(s.key)).map(s => (
+                <span key={s.key} className={shownForming ? 'mkt-prov' : ''}>
+                  <i className="mkt-swatch" style={{background: s.lines.find(l => l.color)?.color}} aria-hidden="true" />
+                  {s.label}{' '}
+                  {[...s.lines].sort((a, b) => (a.type === 'histogram') - (b.type === 'histogram')).map(ln => {
+                    const v = shownIdx >= 0 ? indicatorValues[s.key]?.[ln.series]?.[shownIdx] ?? null : null;
+                    return (
+                      <React.Fragment key={ln.series}>
+                        {s.lines.length > 1 ? <span className="mkt-ind-short">{ln.short}</span> : null}
+                        <b data-ind={s.key} data-series={ln.series} data-value={v == null ? '' : String(v)}>{mktFormatValue(v, s.format)}</b>{' '}
+                      </React.Fragment>
+                    );
+                  })}
+                </span>
+              ))}
+              {shownForming ? <span className="mkt-prov-note" title="The candle is still forming, so these values will change">provisional<span className="mkt-sr"> indicator values: the candle is still forming</span></span> : null}
+            </div>
+          ) : null}
         </div>
 
-        <div className="mkt-chart-wrap">
+        <div className="mkt-chart-wrap" data-panes={shownPaneKeys.length}>
           <div ref={chartRef} className="mkt-chart" role="img" tabIndex={0} aria-label={ariaLabel}
             data-state={chartState} data-candles={display?.length || 0} data-range={view?.range || range}
-            data-interval={view?.interval || interval} data-scale={scale} data-forming={view?.formingIndex ?? -1} />
+            data-interval={view?.interval || interval} data-scale={scale} data-forming={view?.formingIndex ?? -1}
+            data-from={view?.fromSec ?? ''} data-volume={prefs.volume ? 1 : 0} />
+          {chartState !== 'library-error' && chartState !== 'library-loading' ? paneLayout.map(l => {
+            const s = paneSpecs.find(x => x.key === l.id);
+            if(!s) return null;
+            const vals = indicatorValues[s.key];
+            return (
+              <div key={l.id} className="mkt-pane-legend" style={{top: l.top + 4}} data-pane-legend={l.id}>
+                <span className="mkt-pane-title">{s.label}</span>
+                {s.lines.filter(ln => ln.type !== 'histogram').map(ln => (
+                  <b key={ln.series} style={{color: ln.color}}>{mktFormatValue(shownIdx >= 0 ? vals?.[ln.series]?.[shownIdx] ?? null : null, s.format)}</b>
+                ))}
+                <button type="button" className="mkt-pane-close" aria-label={`Hide ${s.paneLabel}`} title={`Hide ${s.paneLabel}`}
+                  onClick={() => updatePrefs(p => ({ ...p, indicators: { ...p.indicators, [s.id]: { ...p.indicators[s.id], on: false } } }))}>×</button>
+              </div>
+            );
+          }) : null}
           {chartState === 'library-loading' || chartState === 'loading' ? (
             <div className="mkt-skeleton" aria-hidden="true">
               <span className="mkt-skeleton-label">{chartState === 'loading' ? 'Loading market data…' : 'Loading chart…'}</span>
@@ -5687,11 +6485,23 @@ function MarketView({ theme, btcPrice, priceUpdatedAt }) {
           {loading && hasCandles ? <div className="mkt-progress" aria-hidden="true" /> : null}
           {extending ? <div className="mkt-edge">Loading history…</div> : historyEnd === 'cap' ? <div className="mkt-edge">Choose a longer interval for older candles</div> : null}
         </div>
+        {hiddenPanes > 0 ? (
+          <div className="mkt-fresh" data-hidden-panes={hiddenPanes}>
+            {hiddenPanes} more indicator pane{hiddenPanes === 1 ? '' : 's'} on — {maxPanes} fit on this screen.
+            {!expanded ? <button type="button" className="btn btn-secondary btn-sm" onClick={() => setExpanded(true)}>Expand to see all</button> : null}
+          </div>
+        ) : null}
         <div className="mkt-legal">
           Market data: {view?.provider?.label || 'Coinbase'} (BTC-USD). Times in UTC. Charts by TradingView Lightweight Charts™ —
           Copyright (c) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">tradingview.com</a>
         </div>
       </div>
+      {summary ? <MarketSummaryView s={summary} rangeName={MARKET_RANGE_NAMES[view.range] || view.range} interval={view.interval} /> : null}
+      {sheet ? (
+        <MarketSheet title="Indicators" onClose={() => setSheet(false)}>
+          <MarketIndicatorPanel prefs={prefs} update={updatePrefs} maxPanes={maxPanes} narrow={narrow} />
+        </MarketSheet>
+      ) : null}
       <div className="mkt-sr" aria-live="polite">{announce}</div>
     </div>
   );
@@ -5806,6 +6616,7 @@ function App() {
   // App re-rendered. Always calls the latest updateSettings.
   const updateSettingsRef = useRef(updateSettings); updateSettingsRef.current = updateSettings;
   const stableUpdateSettings = useCallback(patch => updateSettingsRef.current(patch), []);
+  const marketPrefsChange = useCallback(market => updateSettingsRef.current({ market }), []);
   const handleRsiThresholdDraftChange = (key, value) => {
     const nextDraft = { ...rsiThresholdDraft, [key]: value };
     setRsiThresholdDraft(nextDraft);
@@ -7746,7 +8557,8 @@ function App() {
         {/* ── MARKET ── market data only; no transaction reaches it */}
         {tab==='market' && (
           <MarketErrorBoundary>
-            <MarketView theme={theme} btcPrice={btcPrice} priceUpdatedAt={priceUpdatedAt} />
+            <MarketView theme={theme} btcPrice={btcPrice} priceUpdatedAt={priceUpdatedAt}
+              storedPrefs={settings.market} onPrefsChange={marketPrefsChange} />
           </MarketErrorBoundary>
         )}
 

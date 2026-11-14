@@ -855,6 +855,28 @@ const SPAN_1D = 300 * D, SPAN_1H = 300 * H;
   eq(ex.candleCalls()[before].start, target * SPAN_1D, '…resuming at the failed page');
 }
 
+{
+  // readCached: completed candles already held, from the store only — no request, and no effect
+  // on a view in flight (the Market summary reads daily history this way, Phase 5)
+  let calls = 0;
+  const provider = {
+    id: 'coinbase', symbol: 'BTC-USD', label: 'Coinbase', maxCandlesPerRequest: 300,
+    getAvailableIntervals: () => ['1m', '5m', '15m', '1h', '1d'],
+    getCandles: async () => { calls++; return []; },
+  };
+  const store = MD.createMemoryStore();
+  const days = [0, 1, 2, 4].map(k => ({ t: B + k * D, o: 100, h: 110, l: 90, c: 105, v: 1 }));
+  await store.putCandles({ provider: 'coinbase', symbol: 'BTC-USD', interval: '1d', candles: days });
+  const service = MD.createMarketDataService({ provider, store, now: () => B + 10 * D });
+  eq(await service.readCached({ interval: '1d' }), days, 'readCached returns every held candle, ascending, gaps as they are');
+  eq((await service.readCached({ interval: '1d', fromSec: B + D, toSec: B + 4 * D })).map(c => c.t), [B + D, B + 2 * D], 'readCached window is [from, to)');
+  eq(await service.readCached({ interval: '1h' }), [], 'nothing held → empty');
+  eq(calls, 0, 'readCached makes no request');
+  let threw = false;
+  try { await service.readCached({ interval: '4h' }); } catch (e) { threw = e.code === 'interval'; }
+  ok(threw, 'readCached refuses a derived interval');
+}
+
 console.warn = realWarn;
 console.log(`${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

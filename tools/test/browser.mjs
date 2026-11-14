@@ -838,8 +838,9 @@ console.log('\n[Market candle store]');
   check('sidebar opens the Market tab', await show('Market'));
   check('chart draws candles', !!(await ready()), JSON.stringify(await chart()));
   let c = await chart();
-  check('hash is #market and the title says Market',
-    (await evaluate(`return location.hash + '|' + document.querySelector('.page-title').textContent;`)) === '#market|Market');
+  check('hash is #market with the view parameters and the title says Market',
+    (await evaluate(`return location.hash + '|' + document.querySelector('.page-title').textContent;`)) === '#market?range=1y&interval=1d&scale=linear&vol=1|Market',
+    await evaluate(`return location.hash;`));
   check('chart container has a size', c?.w > 100 && c?.h >= 300, JSON.stringify(c));
   check('default 1Y at 1d, about a year of daily candles', c?.range === '1Y' && c?.interval === '1d' && c.candles >= 360 && c.candles <= 370, JSON.stringify(c));
   check('the newest candle is marked forming', c?.forming === c?.candles - 1, JSON.stringify(c));
@@ -948,7 +949,7 @@ console.log('\n[Market candle store]');
   console.log('\n[Market navigation]');
   await evaluate(`history.replaceState(null, '', '#market?range=1y'); return 1;`);
   await reload();
-  check('#market?… opens the Market tab and keeps its suffix', await evaluate(`return !!document.querySelector('[data-market-view]') && location.hash === '#market?range=1y';`),
+  check('#market?… opens the Market tab and keeps its suffix', await evaluate(`return !!document.querySelector('[data-market-view]') && location.hash.startsWith('#market?range=1y&');`),
     await evaluate(`return location.hash;`));
   await evaluate(`location.hash = '#wallets'; return 1;`); await wait(300);
   check('hash navigation to another tab still works', await evaluate(`return document.querySelector('.page-title').textContent === 'Wallets' && location.hash === '#wallets';`));
@@ -974,6 +975,168 @@ console.log('\n[Market candle store]');
   await evaluate(`[...document.querySelectorAll('.mobile-bottom-nav-item')][1].click(); return 1;`);
   check('bottom nav opens the Market tab', !!(await ready()));
   await send('Emulation.clearDeviceMetricsOverride');
+
+  console.log('\n[Market indicators, summary and preferences]');
+  // A Drive session is faked so a data edit would stamp a commit and queue a push; a Market
+  // preference must do neither.
+  const STAMP = '2024-01-01T00:00:00.000Z';
+  await evaluate(`history.replaceState(null, '', '#market?range=1y&interval=1d'); return 1;`);
+  await reload();
+  await ready(`c.dataset.range === '1Y'`);
+  await evaluate(`GDriveSync.accessToken = 'stub'; GDriveSync.tokenExpiry = Date.now() + 3600e3;
+    localStorage.setItem('btc-last-modified', '${STAMP}'); localStorage.removeItem('btc-pending-push'); return 1;`);
+  const counts = () => evaluate(`const c = document.querySelector('.mkt-chart');
+    return { overlays: +(c.dataset.overlays || 0), panes: +(c.dataset.panes || 1), legends: document.querySelectorAll('[data-pane-legend]').length, volume: c.dataset.volume };`);
+  const inSheet = js => evaluate(`const s = document.querySelector('[data-market-sheet]'); if(!s) return 'no sheet'; ${js}`);
+  const chip = (fam, label) => inSheet(`const b = [...s.querySelectorAll('[data-indicator="${fam}"] .mkt-chips button')].find(x => x.textContent === '${label}');
+    if(!b) return 'missing'; b.click(); return 'clicked';`);
+  const toggle = id => inSheet(`const b = s.querySelector('[data-indicator="${id}"] [role=switch]'); if(!b) return 'missing'; b.click(); return b.getAttribute('aria-checked');`);
+  await evaluate(`document.querySelector('[data-open-indicators]').click(); return 1;`);
+  await wait(300);
+  check('Indicators opens a dialog with focus inside', await evaluate(`const s = document.querySelector('[data-market-sheet]');
+    return !!s && s.getAttribute('role') === 'dialog' && s.contains(document.activeElement);`));
+  check('grouped by category', (await inSheet(`return [...s.querySelectorAll('h3')].map(h => h.textContent).join(',');`)) === 'Trend,Momentum,Volatility,Volume');
+  const steps = [
+    ['SMA 50', () => chip('sma', '50'), { overlays: 1, panes: 1 }],
+    ['EMA 21', () => chip('ema', '21'), { overlays: 2, panes: 1 }],
+    ['Bollinger Bands', () => toggle('bollinger'), { overlays: 5, panes: 1 }],
+    ['RSI', () => toggle('rsi'), { overlays: 5, panes: 2 }],
+    ['MACD', () => toggle('macd'), { overlays: 5, panes: 3 }],
+    ['ATR', () => toggle('atr'), { overlays: 5, panes: 4 }],
+    ['Historical Volatility', () => toggle('volatility'), { overlays: 5, panes: 5 }],
+  ];
+  for (const [name, act, want] of steps) {
+    await act();
+    const got = await waitFor(`const c = document.querySelector('.mkt-chart');
+      return +(c.dataset.overlays || 0) === ${want.overlays} && +(c.dataset.panes || 1) === ${want.panes};`, 4000) && await counts();
+    check(`enabling ${name} adds its ${want.panes > 1 && name !== 'SMA 50' && !/EMA|Bollinger/.test(name) ? 'pane' : 'overlay'}`, !!got, JSON.stringify(await counts()));
+  }
+  await wait(400);
+  check('each indicator pane has a title with a close button', (await counts()).legends === 4
+    && await evaluate(`return [...document.querySelectorAll('[data-pane-legend] button')].map(b => b.getAttribute('aria-label')).join('|') === 'Hide RSI|Hide MACD|Hide ATR|Hide Historical Volatility';`));
+  check('panes are panes of one chart (one time scale, one crosshair)', await evaluate(`return document.querySelectorAll('.mkt-chart .tv-lightweight-charts').length === 1;`));
+  await toggle('volume');
+  await wait(200);
+  check('Volume can be hidden', (await counts()).volume === '0');
+  const bad = await inSheet(`const i = s.querySelector('[data-indicator="macd"] input[name="macd-fast"]');
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    set.call(i, '40'); i.dispatchEvent(new Event('input', { bubbles: true })); i.dispatchEvent(new Event('focusout', { bubbles: true })); i.blur();
+    return 1;`);
+  await wait(200);
+  check('an invalid setting shows a message and is not applied', bad === 1
+    && /fast must be smaller than slow/i.test(await inSheet(`return s.querySelector('[data-indicator="macd"] [role=alert]')?.textContent || '';`))
+    && (await evaluate(`return JSON.parse(localStorage.getItem('btc-settings')).market.indicators.macd.fast;`)) === 12);
+  await press('Escape', 'Escape');
+  await wait(300);
+  check('Escape closes the sheet', !(await evaluate(`return !!document.querySelector('[data-market-sheet]');`)));
+  const stored = await evaluate(`return JSON.parse(localStorage.getItem('btc-settings') || '{}').market;`);
+  check('preferences are saved in settings.market', JSON.stringify(stored?.indicators?.sma?.periods) === '[50]' && stored?.indicators?.rsi?.on === true && stored?.volume === false, JSON.stringify(stored));
+  check('the hash describes the view', (await evaluate(`return location.hash;`)) === '#market?range=1y&interval=1d&scale=linear&sma=50&ema=21&rsi=14&macd=12,26,9&bb=20,2&atr=14&hv=30&vol=0',
+    await evaluate(`return location.hash;`));
+  check('indicator changes did not stamp a commit', (await evaluate(`return localStorage.getItem('btc-last-modified');`)) === STAMP);
+  check('indicator changes did not mark anything dirty', !(await evaluate(`return localStorage.getItem('btc-pending-push');`)));
+  check('market is a device view setting, left out of sync comparisons', await evaluate(`return DEVICE_VIEW_SETTING_KEYS.includes('market')
+    && !('market' in withoutViewSettings({ market: { range: '1D' }, defaultTxType: 'Buy' }))
+    && keepLocalViewSettings({ market: { range: 'ALL' } }, { market: { range: '1D' } }).market.range === '1D';`));
+
+  // Readout values are Indicators' output for the inspected candle, recomputed here from the same
+  // cached candles; inspecting candles does not recompute indicators.
+  const runsBefore = await evaluate(`return document.documentElement.dataset.marketIndicatorRuns;`);
+  await evaluate(`document.querySelector('.mkt-chart').focus(); return 1;`);
+  for (let i = 0; i < 6; i++) {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 });
+  }
+  await wait(300);
+  check('moving the crosshair does not recompute indicators', runsBefore && runsBefore === await evaluate(`return document.documentElement.dataset.marketIndicatorRuns;`),
+    `${runsBefore} → ${await evaluate(`return document.documentElement.dataset.marketIndicatorRuns;`)}`);
+  const readoutCheck = await evaluate(`
+    const t = +document.querySelector('[data-readout]').dataset.t, from = +document.querySelector('.mkt-chart').dataset.from;
+    const shown = {};
+    for(const b of document.querySelectorAll('[data-readout-indicators] [data-ind]')) shown[b.dataset.ind + '/' + b.dataset.series] = b.dataset.value === '' ? null : +b.dataset.value;
+    return MarketCandleStore.open().then(s => s.getCandles({ provider: 'coinbase', symbol: 'BTC-USD', interval: '1d', fromSec: from, toSec: t + 1 })).then(cs => {
+      const calc = (id, settings, key) => { const r = Indicators.calculateSegmented(id, cs, settings, '1d')[key]; return r[r.length - 1]; };
+      const want = {
+        'sma:50/sma': calc('sma', { period: 50 }, 'sma'), 'ema:21/ema': calc('ema', { period: 21 }, 'ema'),
+        'bollinger/upper': calc('bollinger', {}, 'upper'), 'bollinger/lower': calc('bollinger', {}, 'lower'),
+        'rsi/rsi': calc('rsi', {}, 'rsi'), 'macd/macd': calc('macd', {}, 'macd'), 'macd/signal': calc('macd', {}, 'signal'),
+        'atr/atr': calc('atr', {}, 'atr'), 'volatility/volatility': calc('volatility', {}, 'volatility'),
+      };
+      const bad = Object.entries(want).filter(([k, v]) => !(v != null && shown[k] != null && Math.abs(shown[k] - v) <= 1e-9 * Math.abs(v)));
+      return { ok: cs[cs.length - 1].t === t && bad.length === 0, bad, n: cs.length };
+    });`);
+  check('readout indicator values equal Indicators output at the inspected candle', readoutCheck?.ok, JSON.stringify(readoutCheck));
+  await press('Escape', 'Escape');
+  await wait(200);
+  check('values on the forming candle are marked provisional', /provisional/.test(await evaluate(`return document.querySelector('[data-readout-indicators]').textContent;`)));
+
+  // Summary: the same figures recomputed from the daily candles held on this device.
+  const summary = await waitFor(`const d = document.querySelector('[data-summary="sma200"]'), h = document.querySelector('[data-summary="high"]');
+    return d && h && d.dataset.value !== '' && h.dataset.value !== '' && d.dataset.value;`, 30000);
+  const sumCheck = await evaluate(`
+    const val = k => { const d = document.querySelector('[data-summary="' + k + '"]'); return d && d.dataset.value !== '' ? +d.dataset.value : null; };
+    const now = Date.now() / 1000;
+    return MarketCandleStore.open().then(s => s.getCandles({ provider: 'coinbase', symbol: 'BTC-USD', interval: '1d' })).then(all => {
+      const cs = all.filter(c => c.t + 86400 <= now);
+      const last = (id, settings, key) => { const r = Indicators.calculateSegmented(id, cs, settings, '1d')[key]; return r[r.length - 1]; };
+      const want = { sma50: last('sma', { period: 50 }, 'sma'), sma200: last('sma', { period: 200 }, 'sma'), rsi14: last('rsi', { period: 14 }, 'rsi'),
+        atr14: last('atr', { period: 14 }, 'atr'), hv30: last('volatility', { period: 30 }, 'volatility') };
+      const bad = Object.entries(want).filter(([k, v]) => !(v != null && val(k) != null && Math.abs(val(k) - v) <= 1e-9 * Math.abs(v)));
+      const text = document.querySelector('[data-market-view]').innerText;
+      return { ok: bad.length === 0, bad, highLabel: /High since \\d{2}\\/\\d{2}\\/\\d{4}/.test(text), noAth: !/All-Time High|\\bATH\\b/.test(text),
+        dd: val('drawdownFromHigh'), high: val('high') };
+    });`);
+  check('summary daily figures match Indicators on the cached daily candles', !!summary && sumCheck?.ok, JSON.stringify(sumCheck));
+  check('the high is labelled "High since <date>", never all-time high', sumCheck?.highLabel && sumCheck?.noAth, JSON.stringify(sumCheck));
+  check('drawdown from that high is price / high − 1', sumCheck?.high > 0 && Math.abs(sumCheck.dd - (60000 / sumCheck.high - 1)) < 1e-9, JSON.stringify(sumCheck));
+
+  console.log('\n[Market preferences persist; the URL configures the view]');
+  await evaluate(`history.replaceState(null, '', '#dashboard'); return 1;`);
+  await reload();
+  await show('Market');
+  await ready();
+  await waitFor(`return +(document.querySelector('.mkt-chart').dataset.panes || 1) === 5;`, 5000);
+  check('indicators survive a reload', JSON.stringify(await counts()) === JSON.stringify({ overlays: 5, panes: 5, legends: 4, volume: '0' }), JSON.stringify(await counts()));
+  check('…and so does the hash they produce', (await evaluate(`return location.hash;`)).includes('&sma=50&ema=21&rsi=14&'));
+  await evaluate(`history.replaceState(null, '', '#market?range=3m&interval=1d&scale=log&rsi=9&vol=1'); return 1;`);
+  await reload();
+  c = await ready(`c.dataset.range === '3M'`) && await chart();
+  await waitFor(`return +(document.querySelector('.mkt-chart').dataset.panes || 1) === 2;`, 5000);
+  check('a hash with parameters configures range, interval and scale', c?.interval === '1d' && c.scale === 'log', JSON.stringify(c));
+  check('…and the indicator set (RSI 9 only)', JSON.stringify(await counts()) === JSON.stringify({ overlays: 0, panes: 2, legends: 1, volume: '1' })
+    && /RSI 9/.test(await evaluate(`return document.querySelector('[data-readout-indicators]').textContent;`)), JSON.stringify(await counts()));
+  check('opening a link does not overwrite the saved preferences',
+    await evaluate(`const m = JSON.parse(localStorage.getItem('btc-settings')).market; return m.range === '1Y' && m.indicators.sma.periods[0] === 50;`));
+  await evaluate(`location.hash = '#market?range=1m&sma=20'; return 1;`);
+  c = await ready(`c.dataset.range === '1M'`) && await chart();
+  check('a hash edited by hand is applied', c?.range === '1M' && JSON.stringify(await counts()) === JSON.stringify({ overlays: 1, panes: 1, legends: 0, volume: '1' }), JSON.stringify([c, await counts()]));
+  // (1h, not 1M's default 4h: the 1h chosen for 1M earlier in this run is a saved preference)
+  check('the URL holds only view parameters', /^#market\?range=1m&interval=1h&scale=log&sma=20&vol=1$/.test(await evaluate(`return location.hash;`)), await evaluate(`return location.hash;`));
+
+  // Narrow screen: two indicator panes; a third is refused with a reason.
+  await evaluate(`location.hash = '#market?range=1y&rsi=14&macd=12,26,9&atr=14'; return 1;`);
+  await ready(`c.dataset.range === '1Y'`);
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await wait(800);
+  check('a phone shows at most two indicator panes', await evaluate(`return document.querySelector('.mkt-chart-wrap').dataset.panes === '2' && document.querySelector('[data-hidden-panes]')?.dataset.hiddenPanes === '1';`));
+  await evaluate(`document.querySelector('[data-open-indicators]').click(); return 1;`);
+  await wait(300);
+  await toggle('volatility');
+  await wait(200);
+  check('enabling a third pane on a phone is refused with a reason', !!(await inSheet(`return s.querySelector('[data-pane-limit]')?.textContent;`))
+    && (await inSheet(`return s.querySelector('[data-indicator="volatility"] [role=switch]').getAttribute('aria-checked');`)) === 'false');
+  await press('Escape', 'Escape');
+  await wait(200);
+  await send('Emulation.clearDeviceMetricsOverride');
+
+  // Malformed settings.market from a backup or Drive must not break the tab.
+  for (const market of ['x', [1, 2], { range: 5, intervals: 'a', indicators: { sma: 'x', macd: { on: true, fast: 'a' }, rsi: null } }]) {
+    await seed({ 'btc-tx-v2': [tx({ id: 'mkt1' })], 'btc-wallets': WALLETS, 'btc-settings': { market } });
+    await evaluate(`history.replaceState(null, '', '#market'); return 1;`);
+    await reload();
+    check(`malformed settings.market ${JSON.stringify(market).slice(0, 40)} still draws the chart`, !!(await ready())
+      && !(await evaluate(`return !!document.querySelector('[data-market-error]');`)));
+  }
 
   console.log('\n[Market chart library fails to load]');
   failVendor = true;

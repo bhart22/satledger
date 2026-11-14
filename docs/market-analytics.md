@@ -172,6 +172,7 @@ references the library's global. `MarketView` talks to it through this surface:
 | `setVolume(points \| null)` | Volume histogram in the price pane's lower band |
 | `setOverlay(id, points, style)` / `removeOverlay(id)` | Lines on the price pane: SMA, EMA, Bollinger, average acquisition |
 | `setPane(id, series[], opts)` / `removePane(id)` | A synchronized pane: RSI, MACD, ATR, volatility, BTC balance |
+| `onLayout(cb)` | Each indicator pane's `{ id, top, height }` inside the container, so the view can draw the pane's title, value and close button over it (added in Phase 5) |
 | `setMarkers(markers)` | Transaction markers on the candle series |
 | `setScale('linear' \| 'log')` | Price scale mode |
 | `setVisibleRange(from, to)`, `fit()`, `scrollToTime(t)` | Navigation |
@@ -343,14 +344,14 @@ Details: `docs/mobile-chart-ux.md`.
 Created:
 
 - `vendor/lightweight-charts-<x.y.z>.standalone.production.js`, `vendor/LICENSE-lightweight-charts`, `vendor/NOTICE-lightweight-charts`
-- `tools/test/market-data.mjs`, `tools/test/market-indicators.mjs`, `tools/test/market-personal.mjs`
+- `tools/test/market-data.mjs`, `tools/test/market-indicators.mjs`, `tools/test/market-prefs.mjs`, `tools/test/market-personal.mjs`
 - `tools/test/fixtures/btc-usd-1d.json`, `tools/test/fixtures/coinledger-golden-input.json`, `tools/test/fixtures/coinledger-golden.csv`
 
 Modified:
 
 - `app.dev.html` (and generated `app.html`, `version.json`)
 - `sw.js` (precache the vendor file; bump `CACHE_NAME`)
-- `package.json` (`test` script runs the three new test files)
+- `package.json` (`test` script runs the new test files)
 - `tools/test/browser.mjs` (golden export test; Market sections)
 - `README.md`, `CLAUDE.md`, `index.html` (version footer at release)
 
