@@ -78,6 +78,12 @@ export async function launch({ page = 'app.html', port = 8790, debugPort = 9290,
   const ws = new WebSocket(wsUrl);
   const pending = new Map();
   const errors = [], warnings = [];
+  const handlers = new Map(); // DevTools event name → listeners (e.g. Fetch.requestPaused)
+  const on = (method, fn) => {
+    if (!handlers.has(method)) handlers.set(method, new Set());
+    handlers.get(method).add(fn);
+    return () => handlers.get(method).delete(fn);
+  };
   let msgId = 0;
   const send = (method, params = {}) => new Promise(res => {
     const id = ++msgId; pending.set(id, res);
@@ -87,6 +93,7 @@ export async function launch({ page = 'app.html', port = 8790, debugPort = 9290,
   ws.addEventListener('message', e => {
     const m = JSON.parse(e.data);
     if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result); pending.delete(m.id); return; }
+    if (m.method && handlers.has(m.method)) for (const fn of handlers.get(m.method)) fn(m.params);
     if (m.method === 'Runtime.exceptionThrown') {
       const d = m.params.exceptionDetails;
       errors.push('UNCAUGHT: ' + (d.exception?.description || d.text));
@@ -107,7 +114,17 @@ export async function launch({ page = 'app.html', port = 8790, debugPort = 9290,
     if (r?.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description || r.exceptionDetails.text);
     return r?.result?.value;
   };
-  const reload = async (ms = 4500) => { await send('Page.reload', {}); await new Promise(r => setTimeout(r, ms)); };
+  // A fixed settle time, then up to 10 s more until React has rendered something: app.dev.html
+  // compiles its JSX in the browser, and on a busy machine that can outlast the fixed wait.
+  const reload = async (ms = 4500) => {
+    await send('Page.reload', {});
+    await new Promise(r => setTimeout(r, ms));
+    for (let i = 0; i < 50; i++) {
+      const r = await send('Runtime.evaluate', { expression: `!!document.getElementById('root')?.childElementCount`, returnByValue: true });
+      if (r?.result?.value) break;
+      await new Promise(res => setTimeout(res, 200));
+    }
+  };
   const wait = ms => new Promise(r => setTimeout(r, ms));
   const seed = (obj) => evaluate(
     `localStorage.clear();` +
@@ -122,7 +139,7 @@ export async function launch({ page = 'app.html', port = 8790, debugPort = 9290,
   };
   const close = () => { try { ws.close(); } catch {} chrome.kill(); server.close(); };
 
-  return { send, evaluate, reload, wait, seed, press, close, errors, warnings };
+  return { send, on, evaluate, reload, wait, seed, press, close, errors, warnings };
 }
 
 // Minimal assertion collector

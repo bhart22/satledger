@@ -1,5 +1,5 @@
 // SatLedger service worker — offline support and CDN asset caching
-const CACHE_NAME = 'satledger-v5';
+const CACHE_NAME = 'satledger-v6';
 const NETWORK_TIMEOUT_MS = 4000;
 
 // Split so one unreachable URL can't silently disable offline support entirely.
@@ -25,6 +25,9 @@ const OPTIONAL_URLS = [
   './images/logo-white-128.png',
   './images/tip-lightning.png',
   './images/tip-onchain.png',
+  // The Market chart library, self-hosted and loaded on first open of the Market tab. The version
+  // is in the filename, so a new version is a new URL (and a CACHE_NAME bump).
+  './vendor/lightweight-charts-5.3.0.standalone.production.js',
   // Pinned CDN scripts — immutable, safe to cache forever (SRI still verified on use)
   'https://unpkg.com/react@18.3.1/umd/react.production.min.js',
   'https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js',

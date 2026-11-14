@@ -15,7 +15,7 @@ if (!(await findChrome())) {
   process.exit(0);
 }
 
-const { send, evaluate, reload, wait, seed, press, close, errors } =
+const { send, on, evaluate, reload, wait, seed, press, close, errors } =
   await launch({ page: process.env.SATLEDGER_PAGE || 'app.html', port: 8791, debugPort: 9291, label: 'browser' });
 const { check, report } = createChecks();
 
@@ -28,6 +28,9 @@ const WALLETS = [
   { id:'w1', name:'Kraken', type:'Exchange', address:'' },
   { id:'w2', name:'Ledger', type:'Cold Storage', address:'' },
 ];
+// In-browser Babel (app.dev.html only) reports through console.error that it skips
+// pretty-printing a script over 500 KB. A note about its output formatting, not a failure.
+const BABEL_SIZE_NOTE = /\[BABEL\] Note: The code generator has deoptimised/;
 const clickByText = (text) => evaluate(`
   const b=[...document.querySelectorAll('button,a')].find(x=>new RegExp('^\\\\s*${text}\\\\s*$').test(x.textContent));
   if(!b) return 'not found'; b.click(); return 'clicked';`);
@@ -744,8 +747,253 @@ console.log('\n[Market candle store]');
   })()`);
   check('falls back to the in-memory store', f?.kind === 'memory' && f?.n === 1, JSON.stringify(f));
   check('open() is lazy and shared', f?.same === true);
-  check('nothing thrown', errors.length === errorsBefore, errors.slice(errorsBefore).join(' | '));
+  const thrown = errors.slice(errorsBefore).filter(e => !BABEL_SIZE_NOTE.test(e));
+  check('nothing thrown', thrown.length === 0, thrown.join(' | '));
   await send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  await reload();
+}
+
+// ── Market tab ───────────────────────────────────────────────────────────────
+// Every Coinbase request is intercepted through the DevTools Fetch domain and answered from a
+// synthetic, deterministic candle history — no real network, no test hook in the app. The
+// vendored chart library is intercepted too, so its load can be made to fail.
+{
+  const DAY = 86400;
+  const EARLIEST = Math.floor(Date.now() / 1000 / DAY) * DAY - 420 * DAY; // synthetic history start
+  const priceAt = t => 50000 + 8000 * Math.sin(t / DAY / 40) + 1500 * Math.sin(t / 3600 / 7);
+  // Coinbase shape: newest first, [time, low, high, open, close, volume], `end` inclusive.
+  const rowsFor = (g, start, end) => {
+    const now = Date.now() / 1000, rows = [];
+    for (let t = Math.ceil(Math.max(start, EARLIEST) / g) * g; t <= end && t <= now; t += g) {
+      const o = priceAt(t), c = priceAt(t + g);
+      rows.push([t, Math.min(o, c) - 40, Math.max(o, c) + 40, o, c, 5 + (t / g) % 7]);
+    }
+    return rows.reverse();
+  };
+  const requests = [];
+  let failCandles = false, failVendor = false;
+  on('Fetch.requestPaused', p => {
+    const url = p.request.url;
+    if (url.includes('/vendor/lightweight-charts')) {
+      send(failVendor ? 'Fetch.failRequest' : 'Fetch.continueRequest',
+        failVendor ? { requestId: p.requestId, errorReason: 'Failed' } : { requestId: p.requestId });
+      return;
+    }
+    requests.push(url);
+    const u = new URL(url);
+    let status = 200, body = '{}';
+    if (u.pathname.endsWith('/candles')) {
+      if (failCandles) { status = 503; body = '{"message":"unavailable"}'; }
+      else body = JSON.stringify(rowsFor(+u.searchParams.get('granularity'),
+        Date.parse(u.searchParams.get('start')) / 1000, Date.parse(u.searchParams.get('end')) / 1000));
+    } else if (u.pathname.endsWith('/stats')) {
+      body = JSON.stringify({ open: '58000', high: '61000', low: '57000', last: '60000', volume: '1234.5', volume_30day: '40000' });
+    } else if (u.pathname.includes('/prices/')) {
+      body = JSON.stringify({ data: { amount: '60000.00', base: 'BTC', currency: 'USD' } });
+    } else status = 404;
+    send('Fetch.fulfillRequest', {
+      requestId: p.requestId, responseCode: status,
+      responseHeaders: [{ name: 'Content-Type', value: 'application/json' }, { name: 'Access-Control-Allow-Origin', value: '*' }],
+      body: Buffer.from(body).toString('base64'),
+    });
+  });
+  await send('Network.enable');
+  await send('Network.setBypassServiceWorker', { bypass: true }); // let interception see the vendor file
+  await send('Fetch.enable', { patterns: [
+    { urlPattern: '*api.exchange.coinbase.com*' }, { urlPattern: '*api.coinbase.com*' }, { urlPattern: '*/vendor/lightweight-charts*' },
+  ] });
+
+  const waitFor = async (js, ms = 15000) => {
+    const end = Date.now() + ms;
+    for (;;) {
+      const v = await evaluate(js);
+      if (v || Date.now() > end) return v;
+      await wait(150);
+    }
+  };
+  const chart = () => evaluate(`const c = document.querySelector('.mkt-chart'); if(!c) return null;
+    const r = c.getBoundingClientRect();
+    return { state: c.dataset.state, candles: +c.dataset.candles, range: c.dataset.range, interval: c.dataset.interval,
+      scale: c.dataset.scale, forming: +c.dataset.forming, w: Math.round(r.width), h: Math.round(r.height) };`);
+  const radio = (group, label) => evaluate(`const b = [...document.querySelectorAll('[role=radiogroup][aria-label="${group}"] [role=radio]')]
+    .find(x => x.childNodes[0].textContent === '${label}'); if(!b) return 'missing'; if(b.disabled) return 'disabled'; b.click(); return 'clicked';`);
+  const ready = (cond = 'true') => waitFor(`const c = document.querySelector('.mkt-chart');
+    return !!c && c.dataset.state !== 'loading' && c.dataset.state !== 'library-loading' && +c.dataset.candles > 0 && (${cond});`, 20000);
+  const candleWindows = () => requests.filter(u => u.includes('/candles?')).map(u => {
+    const q = new URL(u).searchParams, g = +q.get('granularity');
+    return { g, start: Date.parse(q.get('start')) / 1000, end: Date.parse(q.get('end')) / 1000 };
+  });
+  const allPageAligned = list => list.every(w => w.start % (w.g * 300) === 0 && w.end - w.start === w.g * 300);
+  const show = (tabTitle) => evaluate(`const b = document.querySelector('.sidebar-item[title="${tabTitle}"]'); if(!b) return false; b.click(); return true;`);
+
+  console.log('\n[Market tab opens and draws candles]');
+  await seed({ 'btc-tx-v2': [tx({ id: 'mkt1' })], 'btc-wallets': WALLETS });
+  await evaluate(`history.replaceState(null, '', '#dashboard'); return 1;`);
+  await reload();
+  await wait(2500); // the Dashboard's own price-history fetch settles before requests are judged
+  requests.length = 0;
+  await evaluate(`window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI)); return 1;`);
+  const navOrder = await evaluate(`return [...document.querySelectorAll('.sidebar-item')].map(b => b.title);`);
+  check('Market is the second sidebar item', navOrder?.[1] === 'Market', JSON.stringify(navOrder));
+  check('sidebar opens the Market tab', await show('Market'));
+  check('chart draws candles', !!(await ready()), JSON.stringify(await chart()));
+  let c = await chart();
+  check('hash is #market and the title says Market',
+    (await evaluate(`return location.hash + '|' + document.querySelector('.page-title').textContent;`)) === '#market|Market');
+  check('chart container has a size', c?.w > 100 && c?.h >= 300, JSON.stringify(c));
+  check('default 1Y at 1d, about a year of daily candles', c?.range === '1Y' && c?.interval === '1d' && c.candles >= 360 && c.candles <= 370, JSON.stringify(c));
+  check('the newest candle is marked forming', c?.forming === c?.candles - 1, JSON.stringify(c));
+  check('the library drew into the container', await evaluate(`return document.querySelectorAll('.mkt-chart .tv-lightweight-charts').length === 1;`));
+  check('price header shows the current price', /\$60,000\.00/.test(await evaluate(`return document.querySelector('.mkt-price').textContent;`)));
+  check('24 h change comes from the stats endpoint', /\+\$2,000\.00 \(\+3\.45%\)/.test(await waitFor(`const t = document.querySelector('[data-change24]').textContent; return /\\$/.test(t) && t;`)),
+    await evaluate(`return document.querySelector('[data-change24]').textContent;`));
+  const readout = await evaluate(`return document.querySelector('[data-readout]').textContent;`);
+  check('readout labels volume "Volume (Coinbase)" and marks the forming candle', /Volume \(Coinbase\)/.test(readout) && /forming/.test(readout), readout);
+  check('TradingView notice and link are on the page', await evaluate(`return !!document.querySelector('.mkt-legal a[href="https://www.tradingview.com/"]') && /Copyright \\(c\\) 2025 TradingView, Inc\\./.test(document.querySelector('.mkt-legal').textContent);`));
+  check('library attribution logo is kept', await evaluate(`return !!document.querySelector('.mkt-chart a#tv-attr-logo');`));
+  check('every candle request is one page-aligned window', allPageAligned(candleWindows()), JSON.stringify(candleWindows().slice(0, 4)));
+  check('the background daily backfill ran', await waitFor(`return !/Loading full daily history/.test(document.querySelector('[data-freshness]').textContent);`, 20000)
+    && candleWindows().filter(w => w.g === 86400).length >= 3, candleWindows().filter(w => w.g === 86400).length);
+
+  console.log('\n[Market range and interval]');
+  requests.length = 0;
+  await radio('Range', '1M');
+  c = await ready(`c.dataset.range === '1M'`) && await chart();
+  check('1M defaults to 4h', c?.interval === '4h' && c.candles >= 170 && c.candles <= 190, JSON.stringify(c));
+  check('1m is not offered for 1M', (await radio('Interval', '1m')) === 'disabled');
+  check('1d is offered for 1M', await evaluate(`return [...document.querySelectorAll('[aria-label="Interval"] [role=radio]')].some(b => b.childNodes[0].textContent === '1d' && !b.disabled);`));
+  await radio('Interval', '1h');
+  c = await ready(`c.dataset.interval === '1h'`) && await chart();
+  check('switching to 1h updates the count', c?.range === '1M' && c.candles >= 700 && c.candles <= 750, JSON.stringify(c));
+  check('range and interval changes requested only page-aligned windows', candleWindows().length > 0 && allPageAligned(candleWindows()),
+    JSON.stringify(candleWindows().filter(w => !(w.start % (w.g * 300) === 0 && w.end - w.start === w.g * 300)).slice(0, 3)));
+  for (const r of ['1W', '3M', '6M', 'YTD', '1D']) await radio('Range', r); // no waiting in between
+  await ready(`c.dataset.range === '1D'`);
+  await wait(1500); // anything superseded and still in flight would land now
+  c = await chart();
+  check('rapid range changes end on the last one (1D at 5m)', c?.range === '1D' && c.interval === '5m' && c.candles >= 287 && c.candles <= 290, JSON.stringify(c));
+  check('every range is selectable', (await evaluate(`return [...document.querySelectorAll('[aria-label="Range"] [role=radio]')].filter(b => !b.disabled).map(b => b.textContent).join(' ');`)) === '1D 1W 1M 3M 6M YTD 1Y 3Y 5Y ALL');
+  await radio('Range', 'ALL');
+  c = await ready(`c.dataset.range === 'ALL'`) && await chart();
+  check('ALL starts at the discovered earliest candle', c?.interval === '1w' && c.candles >= 59 && c.candles <= 62, JSON.stringify(c));
+  await radio('Range', '1Y');
+  await ready(`c.dataset.range === '1Y'`);
+
+  console.log('\n[Market scale, keyboard, expand]');
+  await evaluate(`[...document.querySelectorAll('.mkt-btn')].find(b => b.textContent === 'Log').click(); return 1;`);
+  check('Log toggles the price scale', (await chart())?.scale === 'log' && await evaluate(`return [...document.querySelectorAll('.mkt-btn')].find(b => b.textContent === 'Log').getAttribute('aria-pressed') === 'true';`));
+  await evaluate(`[...document.querySelectorAll('.mkt-btn')].find(b => b.textContent === 'Log').click(); return 1;`);
+  await evaluate(`document.querySelector('.mkt-chart').focus(); return 1;`);
+  await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 });
+  await send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37 });
+  await wait(200);
+  const inspected = await evaluate(`return document.querySelector('[data-readout]').textContent;`);
+  check('Left arrow inspects the previous candle', !/forming/.test(inspected) && /O \$/.test(inspected) && /[+−]\$/.test(inspected), inspected);
+  await press('Escape', 'Escape');
+  await wait(200);
+  check('Escape returns the readout to the latest candle', /forming/.test(await evaluate(`return document.querySelector('[data-readout]').textContent;`)));
+  const before = await chart();
+  await evaluate(`const b = document.querySelector('button[aria-label="Expand chart"]'); b.focus(); b.click(); return 1;`);
+  await wait(400);
+  const exp = await evaluate(`const s = document.querySelector('.mkt-shell'); return { open: s.classList.contains('expanded'), dialog: s.getAttribute('role'), body: document.body.classList.contains('mkt-expanded'), inside: s.contains(document.activeElement) };`);
+  const big = await chart();
+  check('Expand opens a full-viewport dialog with focus inside', exp.open && exp.dialog === 'dialog' && exp.body && exp.inside, JSON.stringify(exp));
+  check('the expanded chart is larger and keeps its candles', big.h > before.h && big.candles === before.candles, JSON.stringify([before, big]));
+  await press('Escape', 'Escape');
+  await wait(400);
+  const closed = await evaluate(`return { open: !!document.querySelector('.mkt-shell.expanded'), body: document.body.classList.contains('mkt-expanded'), focus: document.activeElement?.getAttribute('aria-label') };`);
+  check('Escape closes it and returns focus to Expand', !closed.open && !closed.body && closed.focus === 'Expand chart', JSON.stringify(closed));
+  check('the chart is the same instance after closing', (await chart())?.candles === before.candles && await evaluate(`return document.documentElement.dataset.marketCharts === '1';`));
+
+  console.log('\n[Market stale and failure states]');
+  await evaluate(`window.__realNow = Date.now; const skew = 3 * 3600e3; Date.now = () => window.__realNow.call(Date) + skew; return 1;`);
+  await radio('Range', '1D');
+  const stale = await waitFor(`return !!document.querySelector('[data-stale="candles"]') && !!document.querySelector('[data-stale="price"]') && document.querySelector('.mkt-chart').dataset.state;`, 20000);
+  check('stale badges for price and candles after the clock moves on', stale === 'stale', stale);
+  await evaluate(`Date.now = window.__realNow; return 1;`);
+  // The skewed clock marked cached pages complete too early; start the failure check from empty.
+  await evaluate(`return MarketCandleStore.open().then(s => s.clear()).then(() => 1);`);
+  failCandles = true;
+  await radio('Range', '6M');
+  const err = await waitFor(`const c = document.querySelector('.mkt-chart'); return c.dataset.range === '6M' || c.dataset.state === 'error' ? c.dataset.state : '';`, 25000);
+  check('provider failure with nothing cached shows an error with Retry', err === 'error'
+    && await evaluate(`return [...document.querySelectorAll('.mkt-overlay button')].some(b => b.textContent === 'Retry');`), err);
+  failCandles = false;
+  await evaluate(`[...document.querySelectorAll('.mkt-overlay button')].find(b => b.textContent === 'Retry').click(); return 1;`);
+  c = await ready(`c.dataset.range === '6M'`) && await chart();
+  check('Retry recovers', c?.state === 'ready' && c.interval === '1d', JSON.stringify(c));
+
+  console.log('\n[Market tab lifecycle]');
+  for (let i = 0; i < 10; i++) { await show('Dashboard'); await wait(120); await show('Market'); await wait(120); }
+  await ready();
+  check('ten visits leave exactly one chart instance', await evaluate(`return document.querySelectorAll('.tv-lightweight-charts').length === 1 && document.documentElement.dataset.marketCharts === '1';`),
+    await evaluate(`return document.querySelectorAll('.tv-lightweight-charts').length + ' / ' + document.documentElement.dataset.marketCharts;`));
+  await show('Dashboard'); await wait(300);
+  check('leaving the tab destroys the chart', await evaluate(`return document.documentElement.dataset.marketCharts === '0' && !document.querySelector('.tv-lightweight-charts');`));
+  check('no CSP violations on the Market tab', (await evaluate(`return window.__csp;`)).length === 0, JSON.stringify(await evaluate(`return window.__csp;`)));
+
+  // A throw inside the Market view stays inside the Market tab.
+  const errorsBefore = errors.length;
+  await evaluate(`window.__lc = window.LightweightCharts; window.LightweightCharts = { ...window.__lc, createChart() { throw new Error('boom-from-test'); } }; return 1;`);
+  await show('Market');
+  check('a throw in the view shows the Market error boundary', !!(await waitFor(`return !!document.querySelector('[data-market-error]');`, 5000)));
+  await show('Dashboard'); await wait(300);
+  check('other tabs still work after it', await evaluate(`return !!document.querySelector('.stats-grid');`));
+  await evaluate(`window.LightweightCharts = window.__lc; return 1;`);
+  await show('Market');
+  check('the Market tab works again afterwards', !!(await ready()));
+  errors.splice(errorsBefore, errors.length - errorsBefore,
+    ...errors.slice(errorsBefore).filter(e => !/boom-from-test|Market view error|above error occurred|componentStack/i.test(e)));
+
+  console.log('\n[Market navigation]');
+  await evaluate(`history.replaceState(null, '', '#market?range=1y'); return 1;`);
+  await reload();
+  check('#market?… opens the Market tab and keeps its suffix', await evaluate(`return !!document.querySelector('[data-market-view]') && location.hash === '#market?range=1y';`),
+    await evaluate(`return location.hash;`));
+  await evaluate(`location.hash = '#wallets'; return 1;`); await wait(300);
+  check('hash navigation to another tab still works', await evaluate(`return document.querySelector('.page-title').textContent === 'Wallets' && location.hash === '#wallets';`));
+  await evaluate(`location.hash = '#dashboard?x=1'; return 1;`); await wait(300);
+  check('other tabs still drop a ?suffix', await evaluate(`return document.querySelector('.page-title').textContent === 'Dashboard' && location.hash === '#dashboard';`),
+    await evaluate(`return location.hash;`));
+  await evaluate(`location.hash = '#market'; return 1;`);
+  check('#market opens the Market tab', !!(await ready()));
+
+  await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await wait(600);
+  const bar = await evaluate(`const row = document.querySelector('.mobile-bottom-nav-row');
+    return { labels: [...row.querySelectorAll('.mobile-bottom-nav-item')].map(b => b.getAttribute('aria-label')),
+      overflow: row.scrollWidth > row.clientWidth, more: row.parentElement.dataset.more };`);
+  check('bottom nav: Market is second', bar?.labels?.[1] === 'Market', JSON.stringify(bar));
+  check('bottom nav scrolls sideways with a trailing fade', bar?.overflow === true && bar.more === '1', JSON.stringify(bar));
+  await evaluate(`const items = document.querySelectorAll('.mobile-bottom-nav-item'); items[items.length - 1].click(); return 1;`);
+  await wait(900);
+  const inView = await evaluate(`const row = document.querySelector('.mobile-bottom-nav-row'), items = row.querySelectorAll('.mobile-bottom-nav-item');
+    const a = items[items.length - 1].getBoundingClientRect(), r = row.getBoundingClientRect();
+    return { ok: a.left >= r.left - 1 && a.right <= r.right + 1, active: items[items.length - 1].classList.contains('active'), title: document.querySelector('.page-title').textContent };`);
+  check('activating the last item scrolls it into view', inView?.ok && inView.active, JSON.stringify(inView));
+  await evaluate(`[...document.querySelectorAll('.mobile-bottom-nav-item')][1].click(); return 1;`);
+  check('bottom nav opens the Market tab', !!(await ready()));
+  await send('Emulation.clearDeviceMetricsOverride');
+
+  console.log('\n[Market chart library fails to load]');
+  failVendor = true;
+  await send('Network.setCacheDisabled', { cacheDisabled: true }); // the file must be requested again
+  await evaluate(`history.replaceState(null, '', '#market'); return 1;`);
+  await reload();
+  const libState = await waitFor(`const c = document.querySelector('.mkt-chart'); return c && c.dataset.state === 'library-error' && c.dataset.state;`, 10000);
+  check('library failure shows an error with Retry', libState === 'library-error'
+    && await evaluate(`return [...document.querySelectorAll('.mkt-overlay button')].some(b => b.textContent === 'Retry');`), libState);
+  await show('Transactions'); await wait(300);
+  check('the rest of the app still works', await evaluate(`return document.querySelector('.page-title').textContent === 'Transactions' && !/Something went wrong/.test(document.body.innerText);`));
+  failVendor = false;
+  await show('Market'); await wait(300);
+  await evaluate(`[...document.querySelectorAll('.mkt-overlay button')].find(b => b.textContent === 'Retry')?.click(); return 1;`);
+  check('Retry loads the library and draws the chart', !!(await ready()));
+
+  await send('Fetch.disable');
+  await send('Network.setCacheDisabled', { cacheDisabled: false });
+  await send('Network.setBypassServiceWorker', { bypass: false });
+  await evaluate(`history.replaceState(null, '', '#dashboard'); return 1;`);
   await reload();
 }
 
@@ -769,7 +1017,7 @@ if (!process.env.SATLEDGER_PAGE || process.env.SATLEDGER_PAGE === 'app.html') {
 }
 
 // Offline price failures are expected in CI — they are warnings now, not errors
-const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e));
+const unexpected = errors.filter(e => !/Failed to fetch|price|Stored data unreadable/i.test(e) && !BABEL_SIZE_NOTE.test(e));
 if (unexpected.length) {
   console.log(`\nunexpected console errors: ${unexpected.length}`);
   unexpected.slice(0, 8).forEach(e => console.log('  ✗ ' + e.slice(0, 250)));

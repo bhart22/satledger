@@ -141,6 +141,11 @@ Sync has a history of silent data loss; keep these invariants when touching it:
   `CRITICAL_URLS` is atomic on purpose; `OPTIONAL_URLS` are added one by one.
 - CDN scripts are version-pinned with SRI; changing a version means updating the integrity hash
   and the matching URL in `sw.js`.
+- `vendor/` holds the self-hosted Market chart library (Lightweight Charts, version in the
+  filename, upstream `LICENSE`/`NOTICE` beside it, byte-exact via `.gitattributes`). It is loaded
+  lazily by `loadChartLibrary()` under `script-src 'self'`, so `tools/build.mjs` does not see it.
+  Changing the version means a new filename in `CHART_LIBRARY_SRC`, `sw.js` `OPTIONAL_URLS` and
+  a `CACHE_NAME` bump.
 
 ## Conventions
 

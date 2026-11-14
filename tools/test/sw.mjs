@@ -7,7 +7,9 @@
 // navigation from cache instead — with a cached response that was itself reached through a
 // redirect, which browsers refuse for a navigation. Opening /app.html then failed outright.
 // Skips cleanly (exit 0) if no Chrome/Edge is installed.
-import { launch, createChecks, findChrome } from './lib/harness.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { launch, createChecks, findChrome, REPO_ROOT } from './lib/harness.mjs';
 
 if (!(await findChrome())) {
   console.log('No Chrome/Edge found — skipping service worker tests. Set CHROME_PATH to enable them.');
@@ -25,6 +27,15 @@ console.log('\n[service worker behind pretty URLs]');
 const ready = await evaluate(`
   return navigator.serviceWorker.ready.then(r => !!r.active).catch(() => false);`);
 check('service worker installed and active', ready === true);
+// The precache list and cache name come from sw.js itself, so this follows any future bump.
+const swSource = readFileSync(join(REPO_ROOT, 'sw.js'), 'utf8');
+const cacheName = swSource.match(/const CACHE_NAME = '([^']+)'/)?.[1];
+const vendorFiles = [...swSource.matchAll(/'\.\/(vendor\/[^']+)'/g)].map(m => m[1]);
+check('sw.js precaches the vendored chart library', vendorFiles.some(f => /^vendor\/lightweight-charts-\d+\.\d+\.\d+\.standalone\.production\.js$/.test(f)), JSON.stringify(vendorFiles));
+const cached = await evaluate(`return caches.keys().then(async keys => ({ keys,
+  files: await Promise.all(${JSON.stringify(vendorFiles)}.map(f => caches.open(${JSON.stringify(cacheName)}).then(c => c.match('/' + f)).then(r => !!r && r.ok))) }));`);
+check(`install created ${cacheName} and nothing older`, JSON.stringify(cached?.keys) === JSON.stringify([cacheName]), JSON.stringify(cached?.keys));
+check('the vendored chart library is in the cache', cached?.files?.length > 0 && cached.files.every(Boolean), JSON.stringify(cached));
 await navigate('/app');            // now controlled by the worker
 check('page is controlled by the worker', await evaluate(`return !!navigator.serviceWorker.controller;`));
 

@@ -967,6 +967,86 @@
       .mobile-bottom-nav { left:.75rem; right:.75rem; bottom:.75rem; border-radius:999px; border:1px solid var(--border-color); box-shadow:var(--shadow-lg); overflow:hidden; }
       [data-theme="dark"] .mobile-bottom-nav { background:rgba(17,20,27,.92); backdrop-filter:blur(14px); }
     }
+
+    /* ── Mobile bottom navigation: one horizontally scrolling row (docs/mobile-chart-ux.md §1).
+         The pill keeps its rounded container; the inner row is the scroll area. Items stop
+         shrinking, so eight never squeeze into 0.58rem labels; a trailing fade (which ignores
+         touches) says more items exist. ── */
+    .mobile-bottom-nav-row {
+      display:flex; flex:1 1 auto; min-width:0; gap:.35rem; align-items:stretch;
+      flex-wrap:nowrap; overflow-x:auto; overflow-y:hidden;
+      -webkit-overflow-scrolling:touch; overscroll-behavior-x:contain;
+      scrollbar-width:none; scroll-snap-type:x proximity;
+    }
+    .mobile-bottom-nav-row::-webkit-scrollbar { display:none; }
+    .mobile-bottom-nav-row .mobile-bottom-nav-item {
+      flex:0 0 auto; width:auto; min-width:64px; min-height:50px; padding:0 .45rem;
+      font-size:.625rem; scroll-snap-align:center;
+    }
+    .mobile-bottom-nav-row .mobile-bottom-nav-label { overflow:visible; text-overflow:clip; }
+    .mobile-bottom-nav::after {
+      content:''; position:absolute; top:0; bottom:0; right:0; width:32px; pointer-events:none;
+      opacity:0; transition:opacity .15s; border-radius:0 999px 999px 0;
+      background:linear-gradient(to right, rgba(255,255,255,0), rgba(255,255,255,.96) 75%);
+    }
+    [data-theme="dark"] .mobile-bottom-nav::after { background:linear-gradient(to right, rgba(17,20,27,0), rgba(17,20,27,.92) 75%); }
+    .mobile-bottom-nav[data-more="1"]::after { opacity:1; }
+    body.mkt-expanded .mobile-bottom-nav { display:none !important; }
+
+    /* ── Market tab (.mkt-*) ── */
+    .mkt { display:flex; flex-direction:column; gap:.75rem; max-width:1200px; margin:0 auto; }
+    .mkt-header { display:flex; flex-wrap:wrap; align-items:baseline; gap:.25rem 1rem; }
+    .mkt-pair { font-size:.75rem; font-weight:700; letter-spacing:.08em; color:var(--text-tertiary); text-transform:uppercase; }
+    .mkt-price { font-size:1.875rem; font-weight:700; letter-spacing:-.02em; font-variant-numeric:tabular-nums; font-family:var(--font-display); }
+    .mkt-change { font-size:.9375rem; font-weight:600; font-variant-numeric:tabular-nums; }
+    .mkt-up { color:var(--green); }
+    .mkt-down { color:var(--red, #dc2626); }
+    .mkt-badge { display:inline-flex; align-items:center; gap:.25rem; padding:.1rem .5rem; border-radius:999px; font-size:.6875rem; font-weight:700; background:rgba(217,119,6,.14); color:#b45309; vertical-align:middle; }
+    [data-theme="dark"] .mkt-badge { color:#fbbf24; }
+    .mkt-fresh { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:.25rem .75rem; font-size:.75rem; color:var(--text-secondary); }
+    .mkt-fresh button { font:inherit; }
+    .mkt-spinner { display:inline-block; width:10px; height:10px; border-radius:50%; border:2px solid var(--border-color); border-top-color:var(--bitcoin-orange); animation:mktSpin .8s linear infinite; vertical-align:-1px; }
+    @keyframes mktSpin { to { transform:rotate(360deg); } }
+    .mkt-scroll { display:flex; flex-wrap:nowrap; gap:.5rem; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; -webkit-overflow-scrolling:touch; padding:.125rem; }
+    .mkt-scroll::-webkit-scrollbar { display:none; }
+    .mkt-group { display:flex; flex-wrap:nowrap; gap:.25rem; flex:0 0 auto; align-items:center; }
+    .mkt-group + .mkt-group { padding-left:.5rem; border-left:1px solid var(--border-color); }
+    .mkt-btn { flex:0 0 auto; min-width:44px; min-height:36px; padding:0 .7rem; border-radius:999px; border:1px solid var(--border-color); background:var(--bg-secondary); color:var(--text-secondary); font:inherit; font-size:.8125rem; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; justify-content:center; gap:.3rem; font-variant-numeric:tabular-nums; }
+    .mkt-btn:hover:not(:disabled) { border-color:var(--bitcoin-orange); color:var(--text-primary); }
+    .mkt-btn[aria-checked="true"], .mkt-btn[aria-pressed="true"] { background:var(--bitcoin-orange); border-color:var(--bitcoin-orange); color:#fff; }
+    .mkt-btn:disabled { opacity:.4; cursor:not-allowed; }
+    .mkt-btn:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; }
+    @media(max-width:768px) { .mkt-btn { min-height:44px; } }
+    .mkt-shell { display:flex; flex-direction:column; gap:.5rem; background:var(--bg-secondary); border:1px solid var(--border-color); border-radius:var(--radius); padding:.75rem; }
+    .mkt-shell.expanded { position:fixed; inset:0; z-index:9999; border-radius:0; border:none; padding:.5rem .75rem calc(.5rem + env(safe-area-inset-bottom, 0px)); }
+    .mkt-shell-bar { display:none; align-items:center; gap:.5rem; }
+    .mkt-shell.expanded .mkt-shell-bar { display:flex; }
+    .mkt-shell-title { font-weight:700; font-size:.875rem; white-space:nowrap; }
+    .mkt-readout { min-height:3.6rem; display:flex; flex-wrap:wrap; align-content:flex-start; gap:.125rem .875rem; font-size:.75rem; font-variant-numeric:tabular-nums; color:var(--text-secondary); overflow-x:auto; scrollbar-width:none; }
+    .mkt-readout::-webkit-scrollbar { display:none; }
+    .mkt-readout b { color:var(--text-primary); font-weight:600; }
+    .mkt-readout .mkt-when { color:var(--text-primary); font-weight:600; flex-basis:100%; }
+    .mkt-shell.expanded .mkt-readout { min-height:0; flex-wrap:nowrap; white-space:nowrap; }
+    .mkt-chart-wrap { position:relative; height:clamp(320px, 62vh, 560px); }
+    .mkt-shell.expanded .mkt-chart-wrap { flex:1 1 auto; height:auto; min-height:0; }
+    .mkt-chart { position:absolute; inset:0; outline:none; border-radius:8px; }
+    .mkt-chart:focus-visible { box-shadow:0 0 0 2px var(--bitcoin-orange); }
+    .mkt-shell.expanded .mkt-chart { touch-action:none; }
+    .mkt-overlay { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:.75rem; text-align:center; padding:1rem; border-radius:8px; background:var(--bg-secondary); z-index:3; font-size:.875rem; color:var(--text-secondary); }
+    .mkt-skeleton { position:absolute; inset:0; display:flex; align-items:flex-end; gap:3%; padding:12% 4% 20%; border:1px dashed var(--border-color); border-radius:8px; background:var(--bg-secondary); z-index:2; }
+    .mkt-skeleton span { flex:1; border-radius:3px; background:var(--border-color); opacity:.6; }
+    .mkt-skeleton-label { position:absolute; top:.75rem; left:.75rem; font-size:.75rem; color:var(--text-tertiary); }
+    .mkt-progress { position:absolute; top:0; left:0; right:0; height:2px; overflow:hidden; z-index:4; border-radius:2px; }
+    .mkt-progress::before { content:''; position:absolute; top:0; bottom:0; width:30%; background:var(--bitcoin-orange); animation:mktSlide 1.1s ease-in-out infinite; }
+    @keyframes mktSlide { from { left:-30%; } to { left:100%; } }
+    .mkt-edge { position:absolute; left:.5rem; top:50%; transform:translateY(-50%); z-index:4; font-size:.6875rem; padding:.2rem .5rem; border-radius:999px; background:var(--bg-tertiary); border:1px solid var(--border-color); color:var(--text-secondary); }
+    .mkt-banner { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem .75rem; padding:.5rem .75rem; border-radius:10px; font-size:.8125rem; background:rgba(217,119,6,.1); border:1px solid rgba(217,119,6,.3); }
+    .mkt-legal { font-size:.6875rem; color:var(--text-tertiary); }
+    .mkt-legal a { color:inherit; }
+    .mkt-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+    @media (prefers-reduced-motion: reduce) {
+      .mkt-spinner, .mkt-progress::before { animation:none; }
+    }
   </style>
 </head>
 <body>
@@ -3049,11 +3129,15 @@ const Icon = {
   Zap: (s)=><svg {...sz} {...s}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>,
   Copy: (s)=><svg {...sz} {...s}><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>,
   Eye: (s)=><svg {...sz} {...s}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
+  // Two candlesticks: wick lines with bodies, in the same stroke style as the rest.
+  Candles: (s)=><svg {...sz} {...s}><line x1="8" y1="2" x2="8" y2="6"/><rect x="5" y="6" width="6" height="9" rx="1"/><line x1="8" y1="15" x2="8" y2="20"/><line x1="16" y1="5" x2="16" y2="9"/><rect x="13" y="9" width="6" height="8" rx="1"/><line x1="16" y1="17" x2="16" y2="22"/></svg>,
+  Expand: (s)=><svg {...sz} {...s}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>,
   EyeOff: (s)=><svg {...sz} {...s}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
 };
 
 const NAV_ITEMS = [
   { key:'dashboard', label:'Dashboard', icon:'Home' },
+  { key:'market', label:'Market', icon:'Candles' },
   { key:'transactions', label:'Transactions', icon:'List' },
   { key:'wallets', label:'Wallets', icon:'Wallet' },
   { key:'harvest', label:'Harvest', icon:'Zap' },
@@ -4780,6 +4864,839 @@ const MarketCandleStore = (() => {
   return Object.freeze({ DB_NAME, DB_VERSION, open, create });
 })();
 
+// ─── Market: Chart adapter ───────────────────────────────────────────────────
+// The only code that touches TradingView Lightweight Charts (docs/market-analytics.md §7). The
+// library is vendored — pinned 5.3.0, Apache 2.0, NOTICE under vendor/ — and loaded lazily the
+// first time the Market tab opens. MarketView talks to the adapter in plain data: candles in the
+// { t, o, h, l, c, v } model in, { index, t } and index ranges out. No library object crosses.
+const CHART_LIBRARY_SRC = 'vendor/lightweight-charts-5.3.0.standalone.production.js';
+const CHART_LIBRARY_TIMEOUT_MS = 20000;
+let chartLibraryPromise = null;
+// One shared promise. A failure removes the tag and forgets the promise, so Retry starts over.
+function loadChartLibrary() {
+  if(window.LightweightCharts) return Promise.resolve(window.LightweightCharts);
+  if(chartLibraryPromise) return chartLibraryPromise;
+  const p = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    let timer = null;
+    const done = err => {
+      clearTimeout(timer);
+      s.onload = s.onerror = null;
+      if(!err && window.LightweightCharts) { resolve(window.LightweightCharts); return; }
+      s.remove();
+      if(chartLibraryPromise === p) chartLibraryPromise = null;
+      reject(err || new Error('the chart library did not initialise'));
+    };
+    s.src = CHART_LIBRARY_SRC;
+    s.async = true;
+    s.onload = () => done(null);
+    s.onerror = () => done(new Error('the chart library could not be loaded'));
+    timer = setTimeout(() => done(new Error('the chart library took too long to load')), CHART_LIBRARY_TIMEOUT_MS);
+    document.head.appendChild(s);
+  });
+  chartLibraryPromise = p;
+  return p;
+}
+
+// Fixed palettes rather than CSS variables: the library parses colours itself and would throw
+// on color-mix(). Up candles are hollow and down candles solid, so they differ by more than hue.
+const CHART_PALETTES = {
+  light: { text:'#5b6271', grid:'rgba(19,21,26,.06)', border:'rgba(19,21,26,.14)', up:'#149a4c', down:'#d83a3a',
+    forming:'#f7931a', formingFill:'rgba(247,147,26,.30)', volUp:'rgba(20,154,76,.28)', volDown:'rgba(216,58,58,.28)',
+    volForming:'rgba(247,147,26,.40)', cross:'#9aa1b0', label:'#13151a' },
+  dark: { text:'#9aa1b2', grid:'rgba(236,238,244,.06)', border:'rgba(236,238,244,.14)', up:'#2ebd6b', down:'#f0564f',
+    forming:'#f7931a', formingFill:'rgba(247,147,26,.32)', volUp:'rgba(46,189,107,.28)', volDown:'rgba(240,86,79,.28)',
+    volForming:'rgba(247,147,26,.45)', cross:'#646b7c', label:'#2a2f3a' },
+};
+
+// Live adapter count, mirrored on <html data-market-charts> so a test can see a leak.
+let liveChartAdapters = 0;
+const reportChartAdapters = () => { document.documentElement.dataset.marketCharts = String(liveChartAdapters); };
+
+function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}) {
+  const LC = window.LightweightCharts;
+  if(!LC || typeof LC.createChart !== 'function') throw new Error('createChartAdapter: the chart library is not loaded');
+  let pal = CHART_PALETTES[theme] || CHART_PALETTES.light;
+  let interaction = mode;
+  let wheel = false;      // wheel zoom/scroll only once the chart is clicked or focused (§4)
+  let destroyed = false;
+  let bars = [];          // the candles on screen, with a `forming` flag
+  let byTime = new Map(); // t → index
+  let quietUntil = 0;     // range changes before this come from our own calls, not the user
+  const quiet = () => { quietUntil = performance.now() + 300; };
+
+  const interactionOptions = () => ({
+    handleScroll: { mouseWheel: wheel, pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: interaction === 'expanded' },
+    handleScale: { mouseWheel: wheel, pinch: true, axisPressedMouseMove: true, axisDoubleClickReset: true },
+    kineticScroll: { touch: true, mouse: false },
+    trackingMode: { exitMode: LC.TrackingModeExitMode.OnNextTap },
+  });
+  const themeOptions = () => ({
+    layout: { background: { type: LC.ColorType.Solid, color: 'rgba(0,0,0,0)' }, textColor: pal.text, attributionLogo: true },
+    grid: { vertLines: { color: pal.grid }, horzLines: { color: pal.grid } },
+    rightPriceScale: { borderColor: pal.border },
+    timeScale: { borderColor: pal.border },
+    crosshair: { vertLine: { color: pal.cross, labelBackgroundColor: pal.label }, horzLine: { color: pal.cross, labelBackgroundColor: pal.label } },
+  });
+  const candleStyle = () => ({
+    upColor: 'rgba(0,0,0,0)', downColor: pal.down, borderUpColor: pal.up, borderDownColor: pal.down,
+    wickUpColor: pal.up, wickDownColor: pal.down,
+  });
+
+  const chart = LC.createChart(container, {
+    width: Math.max(1, container.clientWidth), height: Math.max(1, container.clientHeight),
+    ...themeOptions(),
+    ...interactionOptions(),
+    layout: { ...themeOptions().layout, fontFamily: getComputedStyle(container).fontFamily || undefined },
+    rightPriceScale: { borderColor: pal.border, scaleMargins: { top: 0.08, bottom: 0.24 }, ensureEdgeTickMarksVisible: true },
+    timeScale: { borderColor: pal.border, timeVisible: false, secondsVisible: false, rightOffset: 3 },
+    crosshair: { ...themeOptions().crosshair, mode: LC.CrosshairMode.Normal },
+    localization: { priceFormatter: p => '$' + Number(p).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+  });
+  const candles = chart.addSeries(LC.CandlestickSeries, candleStyle());
+  const volume = chart.addSeries(LC.HistogramSeries, { priceScaleId: 'volume', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false });
+  chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
+  liveChartAdapters++; reportChartAdapters();
+
+  const toCandle = b => b.forming
+    ? { time: b.t, open: b.o, high: b.h, low: b.l, close: b.c, color: pal.formingFill, borderColor: pal.forming, wickColor: pal.forming }
+    : { time: b.t, open: b.o, high: b.h, low: b.l, close: b.c };
+  const toVolume = b => b.v == null ? { time: b.t }
+    : { time: b.t, value: b.v, color: b.forming ? pal.volForming : b.c >= b.o ? pal.volUp : pal.volDown };
+  const paint = () => { candles.setData(bars.map(toCandle)); volume.setData(bars.map(toVolume)); };
+
+  // ── events ──
+  const subs = { crosshair: new Set(), range: new Set() };
+  const emit = (set, v) => { for(const cb of set) { try { cb(v); } catch(e) { console.error('Market chart listener failed:', e); } } };
+  const onMove = p => {
+    const i = p && p.point && p.time != null ? byTime.get(p.time) : undefined;
+    emit(subs.crosshair, i === undefined ? null : { index: i, t: bars[i].t });
+  };
+  const onRange = r => {
+    if(!r) return;
+    emit(subs.range, { fromIndex: r.from, toIndex: r.to, count: bars.length, user: performance.now() > quietUntil });
+  };
+  const onDbl = () => fit();
+  chart.subscribeCrosshairMove(onMove);
+  chart.timeScale().subscribeVisibleLogicalRangeChange(onRange);
+  chart.subscribeDblClick(onDbl);
+  const setWheel = on => { if(wheel === on) return; wheel = on; chart.applyOptions(interactionOptions()); };
+  const onFocusIn = () => setWheel(true);
+  const onFocusOut = e => { if(!container.contains(e.relatedTarget)) setWheel(interaction === 'expanded'); };
+  container.addEventListener('focusin', onFocusIn);
+  container.addEventListener('focusout', onFocusOut);
+  container.addEventListener('pointerdown', onFocusIn);
+
+  // ── size: one observer, at most one resize per frame, visible range kept ──
+  let raf = 0;
+  const resize = () => {
+    if(destroyed) return;
+    const w = container.clientWidth, h = container.clientHeight;
+    if(w <= 0 || h <= 0) return; // hidden: keep the last size
+    const ts = chart.timeScale();
+    const r = ts.getVisibleLogicalRange();
+    chart.resize(w, h);
+    if(r) { quiet(); ts.setVisibleLogicalRange(r); }
+  };
+  const ro = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => { if(!raf) raf = requestAnimationFrame(() => { raf = 0; resize(); }); })
+    : null;
+  ro?.observe(container);
+
+  // ── navigation ──
+  const logicalRange = () => chart.timeScale().getVisibleLogicalRange();
+  const setLogical = (from, to) => { quiet(); chart.timeScale().setVisibleLogicalRange({ from, to }); };
+  function fit() { if(bars.length) { quiet(); chart.timeScale().fitContent(); } }
+  const setVisibleRange = (fromSec, toSec) => {
+    if(!bars.length || !(toSec > fromSec)) return;
+    quiet();
+    try { chart.timeScale().setVisibleRange({ from: fromSec, to: toSec }); } catch { fit(); }
+  };
+  const nearestIndex = t => {
+    if(!bars.length) return -1;
+    let lo = 0, hi = bars.length - 1;
+    while(lo < hi) { const mid = (lo + hi) >> 1; if(bars[mid].t < t) lo = mid + 1; else hi = mid; }
+    return lo > 0 && Math.abs(bars[lo - 1].t - t) < Math.abs(bars[lo].t - t) ? lo - 1 : lo;
+  };
+  const scrollToIndex = i => {
+    const r = logicalRange();
+    if(!r) return;
+    const w = r.to - r.from;
+    if(i >= r.from + 1 && i <= r.to - 1) return; // already in view
+    setLogical(i - w / 2, i + w / 2);
+  };
+
+  const adapter = {
+    setCandles(list, { formingIndex = -1, interval = null, keepView = false } = {}) {
+      if(destroyed) return;
+      const prev = keepView && bars.length ? chart.timeScale().getVisibleRange() : null;
+      bars = (Array.isArray(list) ? list : []).map((c, i) => ({ t: c.t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v ?? null, forming: i === formingIndex }));
+      byTime = new Map(bars.map((b, i) => [b.t, i]));
+      if(interval) chart.applyOptions({ timeScale: { timeVisible: Candles.intervalSeconds(interval) < 86400 } });
+      quiet();
+      paint();
+      if(prev) { try { chart.timeScale().setVisibleRange(prev); } catch {} }
+    },
+    // The forming candle, updated in place from the spot poll (docs/market-data.md §16).
+    updateLast(c) {
+      if(destroyed || !c || !bars.length) return;
+      const last = bars[bars.length - 1];
+      if(c.t < last.t) return;
+      const b = { t: c.t, o: c.o, h: c.h, l: c.l, c: c.c, v: c.v ?? null, forming: true };
+      if(c.t === last.t) bars[bars.length - 1] = b; else { bars.push(b); byTime.set(b.t, bars.length - 1); }
+      candles.update(toCandle(b));
+      volume.update(toVolume(b));
+    },
+    setVolume(points) { if(!destroyed) volume.applyOptions({ visible: points !== null }); },
+    setScale(scale) {
+      if(destroyed) return;
+      chart.priceScale('right').applyOptions({ mode: scale === 'log' ? LC.PriceScaleMode.Logarithmic : LC.PriceScaleMode.Normal });
+    },
+    setVisibleRange, fit,
+    scrollToTime(t) { const i = nearestIndex(t); if(i >= 0) scrollToIndex(i); },
+    // Keyboard support (docs/mobile-chart-ux.md §10): crosshair on a candle, zoom, pan.
+    showCrosshair(i) {
+      const b = bars[i];
+      if(destroyed || !b) return;
+      scrollToIndex(i);
+      chart.setCrosshairPosition(b.c, b.t, candles);
+    },
+    clearCrosshair() { if(!destroyed) chart.clearCrosshairPosition(); },
+    zoom(factor) {
+      const r = logicalRange();
+      if(destroyed || !r) return;
+      const w = Math.max(5, (r.to - r.from) * factor), right = r.to; // anchored at the right edge
+      setLogical(right - w, right);
+    },
+    pan(nBars) { const r = logicalRange(); if(!destroyed && r) setLogical(r.from + nBars, r.to + nBars); },
+    onCrosshair(cb) { subs.crosshair.add(cb); return () => subs.crosshair.delete(cb); },
+    onVisibleRange(cb) { subs.range.add(cb); return () => subs.range.delete(cb); },
+    // Overlays, panes and markers arrive in Phases 5 and 7; until then they do nothing.
+    setOverlay() {}, removeOverlay() {}, setPane() {}, removePane() {}, setMarkers() {},
+    onMarkerClick() { return () => {}; },
+    setInteraction(next) {
+      if(destroyed || next === interaction) return;
+      interaction = next;
+      wheel = next === 'expanded' || container.contains(document.activeElement);
+      chart.applyOptions(interactionOptions());
+    },
+    setTheme(next) {
+      const p = CHART_PALETTES[next];
+      if(destroyed || !p || p === pal) return;
+      pal = p;
+      chart.applyOptions(themeOptions());
+      candles.applyOptions(candleStyle());
+      paint();
+    },
+    resize,
+    destroy() {
+      if(destroyed) return;
+      destroyed = true;
+      ro?.disconnect();
+      if(raf) cancelAnimationFrame(raf);
+      container.removeEventListener('focusin', onFocusIn);
+      container.removeEventListener('focusout', onFocusOut);
+      container.removeEventListener('pointerdown', onFocusIn);
+      chart.unsubscribeCrosshairMove(onMove);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
+      chart.unsubscribeDblClick(onDbl);
+      subs.crosshair.clear(); subs.range.clear();
+      chart.remove();
+      liveChartAdapters--; reportChartAdapters();
+    },
+  };
+  return Object.freeze(adapter);
+}
+
+// ─── Market: View ────────────────────────────────────────────────────────────
+// The Market tab: price header, range and interval, a candlestick chart with volume, and the
+// persistent readout. Candles come only through MarketData's service (IndexedDB first, then
+// Coinbase in page-aligned windows); the chart only through createChartAdapter. Nothing here
+// reads, receives or sends transactions. Layout and states: docs/mobile-chart-ux.md §2–3, §12.
+let marketServicePromise = null;
+const getMarketService = () => marketServicePromise || (marketServicePromise = MarketCandleStore.open()
+  .then(store => MarketData.createMarketDataService({
+    provider: MarketData.providers.coinbase.create({ fetchImpl: (url, init) => fetch(url, init) }),
+    store,
+  }))
+  .catch(e => { marketServicePromise = null; throw e; }));
+
+const MARKET_RANGE_NAMES = { '1D':'1 day', '1W':'1 week', '1M':'1 month', '3M':'3 months', '6M':'6 months',
+  'YTD':'year to date', '1Y':'1 year', '3Y':'3 years', '5Y':'5 years', 'ALL':'all available history' };
+const MARKET_INTERVAL_NAMES = { '1m':'1-minute', '5m':'5-minute', '15m':'15-minute', '30m':'30-minute',
+  '1h':'hourly', '4h':'4-hour', '1d':'daily', '1w':'weekly' };
+const mktPad = n => String(n).padStart(2, '0');
+const mktDay = tSec => { const d = new Date(tSec * 1000); return `${mktPad(d.getUTCMonth()+1)}/${mktPad(d.getUTCDate())}/${d.getUTCFullYear()}`; };
+// Candle time in UTC: the bucket's day, week or start time.
+const mktCandleWhen = (tSec, interval) => {
+  if(interval === '1w') return `Week of ${mktDay(tSec)} (UTC)`;
+  if(interval === '1d') return `${mktDay(tSec)} (UTC day)`;
+  const d = new Date(tSec * 1000);
+  return `${mktDay(tSec)} ${mktPad(d.getUTCHours())}:${mktPad(d.getUTCMinutes())} UTC`;
+};
+const mktAge = ms => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if(s < 60) return `${s}s`;
+  if(s < 3600) return `${Math.round(s / 60)} min`;
+  if(s < 86400) return `${Math.round(s / 3600)} h`;
+  return `${Math.round(s / 86400)} d`;
+};
+const mktClock = ms => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const mktSigned = (diff, base) => {
+  if(!Number.isFinite(diff) || !(base > 0)) return null;
+  const sign = diff > 0 ? '+' : diff < 0 ? '−' : '';
+  return { text: `${sign}${fmtUSD(Math.abs(diff))} (${sign}${Math.abs(diff / base * 100).toFixed(2)}%)`, dir: diff > 0 ? 'up' : diff < 0 ? 'down' : '' };
+};
+const mktVolume = v => v == null ? '—' : `${Number(v).toLocaleString('en-US', { maximumFractionDigits: 2 })} BTC`;
+
+// A row of mutually exclusive buttons: role="radiogroup", roving tabindex, arrow keys move.
+function MarketRadioGroup({ label, options, value, onChange }) {
+  const refs = useRef({});
+  const enabled = options.filter(o => !o.disabled);
+  const tabStop = enabled.some(o => o.value === value) ? value : enabled[0]?.value;
+  const onKeyDown = (e, v) => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if(step === undefined && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault();
+    if(!enabled.length) return;
+    const i = enabled.findIndex(o => o.value === v);
+    const next = e.key === 'Home' ? 0 : e.key === 'End' ? enabled.length - 1 : (i + step + enabled.length) % enabled.length;
+    const o = enabled[next];
+    onChange(o.value);
+    refs.current[o.value]?.focus();
+  };
+  return (
+    <div role="radiogroup" aria-label={label} className="mkt-group">
+      {options.map(o => (
+        <button key={o.value} type="button" role="radio" className="mkt-btn"
+          aria-checked={o.value === value} tabIndex={o.value === tabStop ? 0 : -1}
+          disabled={o.disabled} title={o.title || undefined}
+          ref={el => { refs.current[o.value] = el; }}
+          onClick={() => onChange(o.value)} onKeyDown={e => onKeyDown(e, o.value)}>
+          {o.label}{o.disabled && o.title ? <span className="mkt-sr">{`, unavailable: ${o.title}`}</span> : null}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Dialog behaviour for the expanded chart, reusing useModalA11y (Tab trap, Escape, body scroll
+// lock, focus restored) on the chart shell that is already mounted — expanding moves nothing,
+// so the chart keeps its range, zoom and state.
+function MarketExpandedA11y({ nodeRef, onClose }) {
+  const ref = useModalA11y(onClose);
+  React.useLayoutEffect(() => { ref.current = nodeRef.current; }, []); // before useModalA11y's effect
+  return null;
+}
+
+// A throw in the Market view stays in the Market tab: every other tab keeps working.
+class MarketErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('Market view error caught by boundary:', error, info?.componentStack); }
+  componentWillUnmount() { document.body.classList.remove('mkt-expanded'); }
+  render() {
+    if(!this.state.error) return this.props.children;
+    return (
+      <div className="mkt">
+        <div className="mkt-shell" role="alert" data-market-error="1">
+          <strong>The Market view ran into a problem.</strong>
+          <span style={{fontSize:'.875rem',color:'var(--text-secondary)'}}>
+            Your transactions are not affected, and every other tab still works.
+          </span>
+          <div><button type="button" className="btn btn-secondary btn-sm" onClick={() => this.setState({ error: null })}>Try again</button></div>
+          <details style={{fontSize:'.75rem',color:'var(--text-tertiary)'}}>
+            <summary style={{cursor:'pointer'}}>Technical details</summary>
+            <pre style={{whiteSpace:'pre-wrap'}}>{String(this.state.error?.message || this.state.error)}</pre>
+          </details>
+        </div>
+      </div>
+    );
+  }
+}
+
+function MarketView({ theme, btcPrice, priceUpdatedAt }) {
+  const [range, setRange] = useState('1Y');
+  const [explicit, setExplicit] = useState({}); // range → interval chosen for it this session (§9)
+  const [scale, setScale] = useState('linear');
+  const [expanded, setExpanded] = useState(false);
+  const [lib, setLib] = useState(() => window.LightweightCharts ? 'ready' : 'loading');
+  const [libTry, setLibTry] = useState(0);
+  const [adapter, setAdapter] = useState(null);
+  const [crash, setCrash] = useState(null);
+  const [view, setView] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [loadedOnce, setLoadedOnce] = useState(false);
+  const [earliestSec, setEarliestSec] = useState(null);
+  const [extending, setExtending] = useState(false);
+  const [historyEnd, setHistoryEnd] = useState(null); // null | 'start' | 'cap'
+  const [inspectT, setInspectT] = useState(null);     // candle time under the crosshair; null = latest
+  const [stats, setStats] = useState(null);
+  const [statsError, setStatsError] = useState(false);
+  const [backfill, setBackfill] = useState({ status: 'idle' });
+  const [backfillRun, setBackfillRun] = useState(0);
+  const [online, setOnline] = useState(() => navigator.onLine !== false);
+  const [tick, setTick] = useState(0); // re-render every 15 s so ages and staleness move on
+  const [announce, setAnnounce] = useState('');
+  if(crash) throw crash;
+
+  const chartRef = useRef(null), shellRef = useRef(null);
+  const viewRef = useRef(null); viewRef.current = view;
+  const loadingRef = useRef(true); loadingRef.current = loading;
+  const earliestRef = useRef(null); earliestRef.current = earliestSec;
+  const historyEndRef = useRef(null); historyEndRef.current = historyEnd;
+  const expandedRef = useRef(false); expandedRef.current = expanded;
+  const extendingRef = useRef(false), refreshingRef = useRef(false), appliedViewRef = useRef(null);
+  const seqRef = useRef(0), announceTimer = useRef(null);
+
+  const nowMs = Date.now(), nowSec = Math.floor(nowMs / 1000);
+  const requested = explicit[range] ?? Candles.defaultInterval(range);
+  const interval = Candles.resolveInterval(range, requested, nowSec, earliestSec);
+  const allowed = Candles.allowedIntervals(range, nowSec, earliestSec);
+
+  const applyResult = useCallback((r, mode, forRange) => {
+    setView({ ...r, mode, range: forRange, loadedAt: Date.now(), seq: ++seqRef.current });
+  }, []);
+
+  // ── clock, connectivity ──
+  useEffect(() => {
+    const id = setInterval(() => setTick(n => n + 1), 15000);
+    const on = () => setOnline(true), off = () => setOnline(false);
+    window.addEventListener('online', on); window.addEventListener('offline', off);
+    return () => { clearInterval(id); window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+
+  // ── chart library, then the adapter once the container has a size ──
+  useEffect(() => {
+    if(window.LightweightCharts) { setLib('ready'); return; }
+    let alive = true;
+    setLib('loading');
+    loadChartLibrary().then(() => { if(alive) setLib('ready'); }, e => {
+      console.warn('Market: chart library failed to load:', e?.message || e);
+      if(alive) setLib('error');
+    });
+    return () => { alive = false; };
+  }, [libTry]);
+
+  useEffect(() => {
+    if(lib !== 'ready') return;
+    const el = chartRef.current;
+    if(!el) return;
+    let a = null, ro = null;
+    const tryCreate = () => {
+      if(a || el.clientWidth === 0 || el.clientHeight === 0) return;
+      try { a = createChartAdapter(el, { theme, mode: expandedRef.current ? 'expanded' : 'inline' }); }
+      catch(e) { setCrash(e); return; }
+      setAdapter(a);
+    };
+    tryCreate();
+    if(!a && typeof ResizeObserver === 'function') {
+      ro = new ResizeObserver(() => { tryCreate(); if(a) { ro.disconnect(); ro = null; } });
+      ro.observe(el);
+    }
+    return () => { ro?.disconnect(); a?.destroy(); appliedViewRef.current = null; setAdapter(null); };
+  }, [lib]);
+
+  useEffect(() => { adapter?.setTheme(theme); }, [adapter, theme]);
+  useEffect(() => { adapter?.setScale(scale); }, [adapter, scale]);
+  useEffect(() => { adapter?.setInteraction(expanded ? 'expanded' : 'inline'); }, [adapter, expanded]);
+  useEffect(() => {
+    if(!expanded) return;
+    document.body.classList.add('mkt-expanded');
+    return () => document.body.classList.remove('mkt-expanded');
+  }, [expanded]);
+
+  // ── the view for the selected range and interval ──
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setLoadError(null); setHistoryEnd(null); setInspectT(null);
+    (async () => {
+      const svc = await getMarketService();
+      if(!alive) return;
+      const r = await svc.loadView({ range, interval, onUpdate: u => { if(alive && u.candles.length) applyResult(u, 'fit', range); } });
+      if(!alive || r.status === 'superseded') return;
+      applyResult(r, 'fit', range);
+      if(r.earliestSec != null) setEarliestSec(r.earliestSec);
+      setLoading(false);
+      setLoadedOnce(true);
+    })().catch(e => {
+      if(!alive) return;
+      console.warn('Market: view failed to load:', e?.code || e?.message || e);
+      setLoadError(e?.code || 'error');
+      setLoading(false);
+    });
+    return () => { alive = false; };
+  }, [range, interval, reloadKey]);
+
+  // Leaving the tab aborts whatever the view still has in flight.
+  useEffect(() => () => { marketServicePromise?.then(s => s.cancel()).catch(() => {}); }, []);
+
+  useEffect(() => {
+    let alive = true;
+    getMarketService().then(s => s.getEarliest('1d')).then(e => { if(alive && e) setEarliestSec(e.earliestSec); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  // Same window, fresh data, view kept: used when the forming candle's bucket has closed.
+  const refreshView = useCallback(async () => {
+    const v = viewRef.current;
+    if(!v || refreshingRef.current || loadingRef.current) return;
+    refreshingRef.current = true;
+    try {
+      const svc = await getMarketService();
+      const r = await svc.loadView({ interval: v.interval, fromSec: v.fromSec, toSec: Math.floor(Date.now() / 1000) });
+      const cur = viewRef.current;
+      if(r.status !== 'superseded' && cur && cur.range === v.range && cur.interval === v.interval) applyResult(r, 'keep', v.range);
+    } catch(e) { console.warn('Market: refresh failed:', e?.code || e?.message || e); }
+    finally { refreshingRef.current = false; }
+  }, [applyResult]);
+
+  // Older history when the user pans to within one screen of the oldest candle: one more native
+  // page per gesture (docs/market-data.md §7, §10), never past the discovered earliest candle.
+  const extend = useCallback(async () => {
+    const v = viewRef.current;
+    if(!v || extendingRef.current) return;
+    const svc = await getMarketService();
+    const span = Candles.pageSpan(v.sourceInterval, svc.provider.maxCandlesPerRequest);
+    const oldest = v.candles.length ? v.candles[0].t : v.fromSec;
+    const known = earliestRef.current;
+    if(known != null && oldest <= known) { setHistoryEnd('start'); return; }
+    const now = Math.floor(Date.now() / 1000);
+    const from = Candles.bucketStart(known != null ? Math.max(oldest - span, known) : oldest - span, v.interval);
+    if(v.sourceInterval !== '1d' && Math.ceil((now - from) / Candles.intervalSeconds(v.sourceInterval)) > Candles.MAX_NATIVE_CANDLES) {
+      setHistoryEnd('cap'); return;
+    }
+    extendingRef.current = true; setExtending(true);
+    try {
+      const r = await svc.loadView({ interval: v.interval, fromSec: from, toSec: now });
+      const cur = viewRef.current;
+      if(r.status === 'superseded' || !cur || cur.range !== v.range || cur.interval !== v.interval) return;
+      if(!r.failedPages.length && (!r.candles.length || r.candles[0].t >= oldest)) setHistoryEnd('start');
+      applyResult(r, 'keep', v.range);
+    } catch(e) { console.warn('Market: older history failed:', e?.code || e?.message || e); }
+    finally { extendingRef.current = false; setExtending(false); }
+  }, [applyResult]);
+  const extendRef = useRef(extend); extendRef.current = extend;
+
+  // ── the forming candle follows the 60 s spot poll (docs/market-data.md §16) ──
+  const display = useMemo(() => {
+    if(!view) return null;
+    const fi = view.formingIndex;
+    if(fi < 0 || !(btcPrice > 0) || !priceUpdatedAt || priceUpdatedAt <= view.loadedAt) return view.candles;
+    const f = view.candles[fi], at = priceUpdatedAt / 1000;
+    if(at < f.t || at >= f.t + Candles.intervalSeconds(view.interval)) return view.candles;
+    const out = view.candles.slice();
+    out[fi] = { ...f, c: btcPrice, h: Math.max(f.h, btcPrice), l: Math.min(f.l, btcPrice) };
+    return out;
+  }, [view, btcPrice, priceUpdatedAt]);
+  const indexOfT = useMemo(() => new Map((display || []).map((c, i) => [c.t, i])), [display]);
+
+  useEffect(() => {
+    if(!adapter || !view) return;
+    adapter.setCandles(display, { formingIndex: view.formingIndex, interval: view.interval, keepView: view.mode === 'keep' && appliedViewRef.current != null });
+    if(view.mode === 'fit') adapter.fit();
+    appliedViewRef.current = view;
+  }, [adapter, view]);
+  useEffect(() => {
+    if(!adapter || !view || appliedViewRef.current !== view || view.formingIndex < 0) return;
+    adapter.updateLast(display[view.formingIndex]);
+  }, [display]);
+
+  // The forming bucket has closed: fetch it as a completed candle plus the new forming one.
+  useEffect(() => {
+    if(!view || view.formingIndex < 0 || loading) return;
+    const f = view.candles[view.formingIndex];
+    if(Date.now() / 1000 >= f.t + Candles.intervalSeconds(view.interval) && Date.now() - view.loadedAt > 5000) refreshView();
+  }, [tick, priceUpdatedAt, view, loading, refreshView]);
+
+  useEffect(() => {
+    if(!adapter) return;
+    const offCross = adapter.onCrosshair(p => setInspectT(p ? p.t : null));
+    const offRange = adapter.onVisibleRange(r => {
+      if(!r.user || loadingRef.current || historyEndRef.current || !r.count) return;
+      if(r.fromIndex <= r.toIndex - r.fromIndex) extendRef.current();
+    });
+    return () => { offCross(); offRange(); };
+  }, [adapter]);
+
+  // ── 24 h change: only from the stats endpoint, never from candles on screen ──
+  useEffect(() => {
+    let alive = true;
+    const ctl = new AbortController();
+    const load = async () => {
+      if(document.visibilityState === 'hidden') return;
+      try {
+        const svc = await getMarketService();
+        const s = await svc.get24HourStats({ signal: ctl.signal });
+        if(alive) { setStats(s); setStatsError(false); }
+      } catch(e) { if(alive && e?.name !== 'AbortError') setStatsError(true); }
+    };
+    load();
+    const id = setInterval(load, 120000);
+    return () => { alive = false; ctl.abort(); clearInterval(id); };
+  }, []);
+
+  // ── full daily history in the background, after the first view (docs/market-data.md §18) ──
+  useEffect(() => {
+    if(!loadedOnce) return;
+    let stopped = false, ctl = null;
+    const start = async () => {
+      if(stopped || ctl || document.visibilityState === 'hidden') return;
+      ctl = new AbortController();
+      const mine = ctl;
+      setBackfill({ status: 'running' });
+      let r;
+      try { r = await (await getMarketService()).backfill({ signal: mine.signal }); }
+      catch(e) { r = { status: 'failed', error: e?.code || 'error' }; }
+      ctl = null;
+      if(stopped) return;
+      setBackfill(r);
+      if(r.status === 'complete' && r.earliestSec != null) setEarliestSec(r.earliestSec);
+      if(r.status === 'paused' && document.visibilityState !== 'hidden') start();
+    };
+    const onVisibility = () => { if(document.visibilityState === 'hidden') ctl?.abort(); else start(); };
+    start();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => { stopped = true; ctl?.abort(); document.removeEventListener('visibilitychange', onVisibility); };
+  }, [loadedOnce, backfillRun]);
+
+  // ALL drawn before the earliest candle was known is redrawn from it once it is.
+  useEffect(() => {
+    if(range === 'ALL' && earliestSec != null && view && view.earliestSec == null && !loading) setReloadKey(k => k + 1);
+  }, [earliestSec]);
+
+  // ── handlers ──
+  const chooseRange = r => { if(r !== range) setRange(r); };
+  const chooseInterval = iv => { setExplicit(e => ({ ...e, [range]: iv })); };
+  const retryLoad = () => { setLoadError(null); setReloadKey(k => k + 1); };
+  const resetView = () => {
+    if(!adapter || !display?.length) return;
+    adapter.clearCrosshair(); setInspectT(null);
+    const from = Candles.rangeStart(range, Math.floor(Date.now() / 1000), earliestSec);
+    if(from == null) adapter.fit(); else adapter.setVisibleRange(from, Math.floor(Date.now() / 1000) + Candles.intervalSeconds(interval));
+  };
+  const say = text => {
+    clearTimeout(announceTimer.current);
+    announceTimer.current = setTimeout(() => setAnnounce(text), 400);
+  };
+  useEffect(() => () => clearTimeout(announceTimer.current), []);
+
+  const inspectIdx = inspectT != null && indexOfT.has(inspectT) ? indexOfT.get(inspectT) : null;
+  const shownIdx = display?.length ? (inspectIdx ?? display.length - 1) : -1;
+  const shown = shownIdx >= 0 ? display[shownIdx] : null;
+  const prevClose = shownIdx > 0 ? display[shownIdx - 1].c : null;
+  const shownChange = shown && prevClose != null ? mktSigned(shown.c - prevClose, prevClose) : null;
+  const shownForming = !!view && shownIdx === view.formingIndex && shownIdx >= 0;
+
+  const onChartKey = e => {
+    if(!adapter || !display?.length) return;
+    const n = display.length, cur = inspectIdx ?? n - 1;
+    let next;
+    switch(e.key) {
+      case 'ArrowLeft': next = cur - (e.shiftKey ? 10 : 1); break;
+      case 'ArrowRight': next = cur + (e.shiftKey ? 10 : 1); break;
+      case 'Home': next = 0; break;
+      case 'End': next = n - 1; break;
+      case '+': case '=': e.preventDefault(); adapter.zoom(0.8); return;
+      case '-': case '_': e.preventDefault(); adapter.zoom(1.25); return;
+      case 'Escape':
+        if(inspectT == null) return;
+        e.preventDefault(); e.stopPropagation();
+        adapter.clearCrosshair(); setInspectT(null);
+        return;
+      default: return;
+    }
+    e.preventDefault();
+    next = Math.max(0, Math.min(n - 1, next));
+    adapter.showCrosshair(next);
+    const c = display[next];
+    setInspectT(c.t);
+    say(`${mktCandleWhen(c.t, view.interval)}: open ${fmtUSD(c.o)}, high ${fmtUSD(c.h)}, low ${fmtUSD(c.l)}, close ${fmtUSD(c.c)}`);
+  };
+  // Bound natively on the chart element: the expanded shell's Escape listener (useModalA11y) is
+  // native too, and a React handler would run only after it had already closed the overlay.
+  const chartKeyRef = useRef(onChartKey); chartKeyRef.current = onChartKey;
+  useEffect(() => {
+    const el = chartRef.current;
+    if(!el) return;
+    const onKey = e => chartKeyRef.current(e);
+    el.addEventListener('keydown', onKey);
+    return () => el.removeEventListener('keydown', onKey);
+  }, []);
+
+  // ── derived status ──
+  const sec = Candles.intervalSeconds(view?.interval || interval);
+  const lastDone = view && display?.length ? display[view.formingIndex >= 0 ? view.formingIndex - 1 : display.length - 1] : null;
+  const candlesStale = !!lastDone && nowSec - (lastDone.t + sec) > 2 * sec;
+  const priceAge = priceUpdatedAt ? nowMs - priceUpdatedAt : null;
+  const priceStale = priceAge == null || priceAge > 180000;
+  const statsStale = !!stats && nowMs - stats.at * 1000 > 300000;
+  const change24 = stats ? mktSigned(stats.last - stats.open, stats.open) : null;
+  const hasCandles = !!display?.length;
+  const providerGaps = (view?.gaps || []).filter(g => g.kind === 'provider').reduce((n, g) => n + g.missing, 0);
+  const failed = !!view && view.failedPages.length > 0;
+  const volumeLabel = `Volume (${view?.provider?.label || 'Coinbase'})`;
+  const newestCandleEnd = hasCandles ? (display[display.length - 1].t + sec) * 1000 : null;
+
+  let chartState = 'ready';
+  if(lib === 'loading') chartState = 'library-loading';
+  else if(lib === 'error') chartState = 'library-error';
+  else if(!hasCandles && loading) chartState = 'loading';
+  else if(!hasCandles && !online) chartState = 'offline';
+  else if(!hasCandles && (loadError || failed)) chartState = 'error';
+  else if(!hasCandles) chartState = 'empty';
+  else if(!online) chartState = 'offline-cached';
+  else if(failed) chartState = 'partial';
+  else if(candlesStale) chartState = 'stale';
+
+  const firstOpen = hasCandles ? display[0].o : null, lastClose = hasCandles ? display[display.length - 1].c : null;
+  const rangeReturnPct = firstOpen > 0 ? (lastClose - firstOpen) / firstOpen * 100 : null;
+  const ariaLabel = hasCandles
+    ? `BTC/USD ${MARKET_INTERVAL_NAMES[view.interval]} candles, ${MARKET_RANGE_NAMES[view.range] || view.range}. Last close ${fmtUSD(lastClose)}`
+      + (rangeReturnPct != null ? `, return over the candles shown ${rangeReturnPct >= 0 ? '+' : '−'}${Math.abs(rangeReturnPct).toFixed(1)} %.` : '.')
+    : 'BTC/USD candlestick chart — no data shown yet.';
+
+  const rangeOptions = Candles.RANGES.map(r => ({ value: r, label: r }));
+  const intervalOptions = Candles.INTERVAL_KEYS.map(iv => {
+    if(allowed.includes(iv)) return { value: iv, label: iv };
+    const start = Candles.rangeStart(range, nowSec, earliestSec);
+    const tooLong = start != null && Candles.intervalSeconds(iv) >= nowSec - start;
+    return { value: iv, label: iv, disabled: true, title: start == null ? 'Daily or weekly until full history has loaded'
+      : tooLong ? 'Longer than the range' : 'Too many candles for this range' };
+  });
+
+  const scaleButton = (
+    <button type="button" className="mkt-btn" aria-pressed={scale === 'log'} onClick={() => setScale(s => s === 'log' ? 'linear' : 'log')} title="Logarithmic price scale">Log</button>
+  );
+  const navButtons = (
+    <>
+      <button type="button" className="mkt-btn" onClick={() => adapter?.zoom(0.8)} aria-label="Zoom in" title="Zoom in" disabled={!hasCandles}>+</button>
+      <button type="button" className="mkt-btn" onClick={() => adapter?.zoom(1.25)} aria-label="Zoom out" title="Zoom out" disabled={!hasCandles}>−</button>
+      <button type="button" className="mkt-btn" onClick={() => adapter?.fit()} title="Show every loaded candle" disabled={!hasCandles}>Fit</button>
+      <button type="button" className="mkt-btn" onClick={resetView} title="Back to the selected range" disabled={!hasCandles}>Reset</button>
+    </>
+  );
+
+  return (
+    <div className="mkt" data-market-view="1">
+      {/* Price header */}
+      <div className="mkt-header">
+        <span className="mkt-pair">BTC / USD</span>
+        <span className="mkt-price" aria-label={btcPrice ? `Bitcoin price ${fmtUSD(btcPrice)}` : 'Bitcoin price unavailable'}>
+          {btcPrice ? fmtUSD(btcPrice) : '—'}
+        </span>
+        {priceStale && btcPrice ? <span className="mkt-badge" data-stale="price">Stale · {priceAge == null ? 'age unknown' : mktAge(priceAge)}</span> : null}
+        <span className={`mkt-change ${change24 ? 'mkt-' + change24.dir : ''}`} data-change24>
+          {change24 ? <>{change24.text} <span style={{fontWeight:500,color:'var(--text-tertiary)'}}>24 h</span></> : statsError ? '24 h change unavailable' : '24 h …'}
+          {statsStale ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>Stale · {mktAge(nowMs - stats.at * 1000)}</span> : null}
+        </span>
+        <div className="mkt-fresh" data-freshness>
+          {loading && hasCandles ? <span><span className="mkt-spinner" aria-hidden="true" /> Updating…</span> : null}
+          <span>Price {priceUpdatedAt ? `updated ${mktClock(priceUpdatedAt)}` : 'not loaded yet'}{priceStale && priceAge != null ? ` (${mktAge(priceAge)} ago)` : ''}</span>
+          {view ? <span>Candles updated {mktClock(view.loadedAt)}</span> : null}
+          {candlesStale ? <span className="mkt-badge" data-stale="candles">Candles stale · newest {mktAge(nowMs - (lastDone.t + sec) * 1000)} old</span> : null}
+          {providerGaps ? <span>{providerGaps} missing candle{providerGaps === 1 ? '' : 's'} from the provider</span> : null}
+          {backfill.status === 'running' ? <span>Loading full daily history…</span> : null}
+          {backfill.status === 'failed' ? <span>History incomplete · <button type="button" className="btn btn-secondary btn-sm" onClick={() => setBackfillRun(n => n + 1)}>Retry</button></span> : null}
+        </div>
+      </div>
+
+      {/* Range row and toolbar: one line each, scrolling sideways on a phone */}
+      <div className="mkt-scroll">
+        <MarketRadioGroup label="Range" options={rangeOptions} value={range} onChange={chooseRange} />
+      </div>
+      <div className="mkt-scroll" role="toolbar" aria-label="Chart controls">
+        <MarketRadioGroup label="Interval" options={intervalOptions} value={interval} onChange={chooseInterval} />
+        <div className="mkt-group">{scaleButton}</div>
+        <div className="mkt-group">{navButtons}</div>
+        <div className="mkt-group">
+          <button type="button" className="mkt-btn" onClick={() => setExpanded(true)} aria-label="Expand chart" title="Expand chart">{Icon.Expand({width:15,height:15})}</button>
+        </div>
+      </div>
+
+      {!online && hasCandles ? (
+        <div className="mkt-banner" role="status">Offline — showing saved data from {newestCandleEnd ? new Date(Math.min(newestCandleEnd, Date.now())).toLocaleString() : 'earlier'}</div>
+      ) : failed && hasCandles ? (
+        <div className="mkt-banner" role="status" data-partial>
+          Some history could not be loaded.
+          <button type="button" className="btn btn-secondary btn-sm" onClick={retryLoad}>Retry</button>
+        </div>
+      ) : null}
+
+      <div ref={shellRef} className={`mkt-shell${expanded ? ' expanded' : ''}`}
+        {...(expanded ? { role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Expanded BTC/USD chart', tabIndex: -1 } : {})}>
+        {expanded ? <MarketExpandedA11y nodeRef={shellRef} onClose={() => setExpanded(false)} /> : null}
+        <div className="mkt-shell-bar mkt-scroll">
+          <span className="mkt-shell-title">BTC / USD · {range} · {interval}{btcPrice ? ` · ${fmtUSD(btcPrice)}` : ''}</span>
+          <div className="mkt-group">{scaleButton}</div>
+          <div className="mkt-group">{navButtons}</div>
+          <div className="mkt-group">
+            <button type="button" className="mkt-btn" onClick={() => setExpanded(false)} aria-label="Close expanded chart">{Icon.X({width:15,height:15})}</button>
+          </div>
+        </div>
+
+        {/* Persistent readout: always the same height, so nothing jumps (§3) */}
+        <div className="mkt-readout" aria-live="off" data-readout>
+          {shown ? (
+            <>
+              <span className="mkt-when">
+                {mktCandleWhen(shown.t, view.interval)}
+                {shownForming ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>forming</span> : null}
+                {shown.partial && !shownForming ? <span className="mkt-badge" style={{marginLeft:'.375rem'}}>incomplete bucket</span> : null}
+              </span>
+              <span>O <b>{fmtUSD(shown.o)}</b></span>
+              <span>H <b>{fmtUSD(shown.h)}</b></span>
+              <span>L <b>{fmtUSD(shown.l)}</b></span>
+              <span>C <b>{fmtUSD(shown.c)}</b></span>
+              <span className={shownChange ? 'mkt-' + shownChange.dir : ''}>{shownChange ? shownChange.text : '—'}</span>
+              <span>{volumeLabel} <b>{mktVolume(shown.v)}</b></span>
+            </>
+          ) : <span className="mkt-when">{volumeLabel}</span>}
+        </div>
+
+        <div className="mkt-chart-wrap">
+          <div ref={chartRef} className="mkt-chart" role="img" tabIndex={0} aria-label={ariaLabel}
+            data-state={chartState} data-candles={display?.length || 0} data-range={view?.range || range}
+            data-interval={view?.interval || interval} data-scale={scale} data-forming={view?.formingIndex ?? -1} />
+          {chartState === 'library-loading' || chartState === 'loading' ? (
+            <div className="mkt-skeleton" aria-hidden="true">
+              <span className="mkt-skeleton-label">{chartState === 'loading' ? 'Loading market data…' : 'Loading chart…'}</span>
+              {[38,52,44,63,58,71,49,66,80,72,86,78].map((h, i) => <span key={i} style={{height:h + '%'}} />)}
+            </div>
+          ) : null}
+          {chartState === 'library-error' ? (
+            <div className="mkt-overlay" role="alert">
+              <span>The chart couldn’t be loaded. Check your connection and try again — the rest of SatLedger still works.</span>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => setLibTry(n => n + 1)}>Retry</button>
+            </div>
+          ) : chartState === 'offline' ? (
+            <div className="mkt-overlay" role="status">
+              <span>You’re offline and no market data is saved on this device yet. The rest of SatLedger still works.</span>
+              <button type="button" className="btn btn-secondary btn-sm" onClick={retryLoad}>Try again</button>
+            </div>
+          ) : chartState === 'error' ? (
+            <div className="mkt-overlay" role="alert">
+              <span>Couldn’t load market data from {view?.provider?.label || 'Coinbase'}.</span>
+              <button type="button" className="btn btn-primary btn-sm" onClick={retryLoad}>Retry</button>
+            </div>
+          ) : chartState === 'empty' ? (
+            <div className="mkt-overlay" role="status"><span>No market data for this range.</span></div>
+          ) : null}
+          {loading && hasCandles ? <div className="mkt-progress" aria-hidden="true" /> : null}
+          {extending ? <div className="mkt-edge">Loading history…</div> : historyEnd === 'cap' ? <div className="mkt-edge">Choose a longer interval for older candles</div> : null}
+        </div>
+        <div className="mkt-legal">
+          Market data: {view?.provider?.label || 'Coinbase'} (BTC-USD). Times in UTC. Charts by TradingView Lightweight Charts™ —
+          Copyright (c) 2025 TradingView, Inc. <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">tradingview.com</a>
+        </div>
+      </div>
+      <div className="mkt-sr" aria-live="polite">{announce}</div>
+    </div>
+  );
+}
+
 // Every keystroke in the transaction modal re-renders App (the form state lives there), and
 // with it every chart: RSI segments and MA paths over thousands of points, rebuilt per key.
 // Memoised on props, which are all state, memo results or the stable updateSettings below.
@@ -4899,8 +5816,9 @@ function App() {
     if(current.overbought === validation.overbought && current.oversold === validation.oversold) return;
     updateSettings({ rsiThresholds: { overbought: validation.overbought, oversold: validation.oversold } });
   };
+  // The tab is the hash up to any '?': #market?… carries Market view parameters (Phase 5).
   const [tab, setTab] = useState(() => {
-    const hash = location.hash.slice(1);
+    const hash = location.hash.slice(1).split('?')[0];
     return NAV_ITEMS.some(n => n.key === hash) ? hash : 'dashboard';
   });
   // Harvest view: wallet and price are the user's choice; until they touch them the wallet is
@@ -5274,16 +6192,42 @@ function App() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+  // Bottom navigation scrolls sideways (docs/mobile-chart-ux.md §1). The trailing fade shows
+  // only while items remain to the right, and the active item is scrolled into view whatever
+  // changed the tab — the bar itself, the drawer, a hash change or a shortcut.
+  const bottomNavRowRef = useRef(null);
+  const bottomNavScrolled = useRef(false);
+  useEffect(() => {
+    const row = bottomNavRowRef.current;
+    if(!row || !isMobileViewport) return;
+    const nav = row.parentElement;
+    const update = () => { nav.dataset.more = row.scrollLeft + row.clientWidth < row.scrollWidth - 2 ? '1' : '0'; };
+    update();
+    row.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+    return () => { row.removeEventListener('scroll', update); window.removeEventListener('resize', update); };
+  }, [isMobileViewport, settings.showVault]);
+  useEffect(() => {
+    const row = bottomNavRowRef.current;
+    if(!row || !isMobileViewport) return;
+    const active = row.querySelector('.mobile-bottom-nav-item.active');
+    if(!active) return;
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    active.scrollIntoView({ inline: 'center', block: 'nearest', behavior: bottomNavScrolled.current && !reduce ? 'smooth' : 'auto' });
+    bottomNavScrolled.current = true;
+  }, [tab, isMobileViewport]);
   // replaceState, not `location.hash =`, so Back leaves the app instead of walking backwards
   // through every tab visited. replaceState doesn't fire hashchange, so the listener below
   // won't loop.
+  // A '?…' suffix is kept while the tab is market; every other tab keeps its exact hash.
   useEffect(() => {
-    if(location.hash.slice(1) === tab) return;
+    const hash = location.hash.slice(1);
+    if(hash === tab || (tab === 'market' && hash.split('?')[0] === tab)) return;
     history.replaceState(null, '', '#' + tab);
   }, [tab]);
   useEffect(() => {
     const onHash = () => {
-      const hash = location.hash.slice(1);
+      const hash = location.hash.slice(1).split('?')[0];
       if (NAV_ITEMS.some(n => n.key === hash)) setTab(hash);
     };
     window.addEventListener('hashchange', onHash);
@@ -6319,7 +7263,7 @@ function App() {
   };
   useEffect(() => {
     let gPressedAt = 0;
-    const TABS = { d:'dashboard', t:'transactions', w:'wallets', v:'vault', e:'export', s:'settings' };
+    const TABS = { d:'dashboard', m:'market', t:'transactions', w:'wallets', v:'vault', e:'export', s:'settings' };
     const onKey = (e) => {
       const t = e.target;
       const typing = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -6347,7 +7291,7 @@ function App() {
       }
       if(e.key === '?') {
         e.preventDefault();
-        showToast('Shortcuts: n new transaction · / search · g then d, t, w, e or s to switch tabs · Ctrl+Z undo a delete', 9000);
+        showToast('Shortcuts: n new transaction · / search · g then d, m, t, w, e or s to switch tabs · Ctrl+Z undo a delete', 9000);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -6799,6 +7743,13 @@ function App() {
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
+        {/* ── MARKET ── market data only; no transaction reaches it */}
+        {tab==='market' && (
+          <MarketErrorBoundary>
+            <MarketView theme={theme} btcPrice={btcPrice} priceUpdatedAt={priceUpdatedAt} />
+          </MarketErrorBoundary>
+        )}
+
         {/* ── DASHBOARD ── */}
         {tab==='dashboard' && (
           <>
@@ -8616,18 +9567,20 @@ function App() {
           pointerEvents:'auto',
         } : { display:'none' }}
       >
-        {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
-          <button
-            key={item.key}
-            className={`mobile-bottom-nav-item ${tab===item.key?'active':''}`}
-            onClick={()=>setTab(item.key)}
-            aria-current={tab===item.key ? 'page' : undefined}
-            aria-label={item.label}
-          >
-            {Icon[item.icon]({width:18,height:18})}
-            <span className="mobile-bottom-nav-label">{item.label}</span>
-          </button>
-        ))}
+        <div className="mobile-bottom-nav-row" ref={bottomNavRowRef}>
+          {NAV_ITEMS.filter(item=> item.key!=='vault' || effectiveSettings.showVault!==false).map(item=>(
+            <button
+              key={item.key}
+              className={`mobile-bottom-nav-item ${tab===item.key?'active':''}`}
+              onClick={()=>setTab(item.key)}
+              aria-current={tab===item.key ? 'page' : undefined}
+              aria-label={item.label}
+            >
+              {Icon[item.icon]({width:18,height:18})}
+              <span className="mobile-bottom-nav-label">{item.label}</span>
+            </button>
+          ))}
+        </div>
       </nav>
 
       {/* Toast */}

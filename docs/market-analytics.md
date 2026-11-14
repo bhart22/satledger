@@ -228,7 +228,10 @@ Consequences for this design:
 
 - The `ChartAdapter` surface above stands unchanged. `setMarkers` is implemented over the
   markers plugin; `onMarkerClick` over `subscribeClick` plus the adapter's own nearest-marker
-  hit test.
+  hit test. Phase 4 adds four keyboard helpers beside it — `showCrosshair(index)`,
+  `clearCrosshair()`, `zoom(factor)`, `pan(bars)` — plus `setInteraction('inline' | 'expanded')`
+  for the touch options below; `onVisibleRange` events carry `user: false` for range changes
+  the adapter itself caused, so loading older history reacts only to the user's pan.
 - `docs/mobile-chart-ux.md` §4 is corrected: no CSS `touch-action: pan-y` on the chart (it
   would hand vertical moves to the browser before the library's 240 ms long press could claim
   them), and the long press is the library's 240 ms rather than ≈ 350 ms.
