@@ -276,7 +276,7 @@ anything.
 
 ---
 
-## Phase 4 — Market UI / chart foundation
+## ✅ Phase 4 — Market UI / chart foundation
 
 **Objective.** A working Market tab: live price header, candlesticks, volume, range and
 interval selection, zoom/pan, crosshair readout, log scale, expanded view. No indicators yet,
