@@ -34,6 +34,8 @@ const BABEL_SIZE_NOTE = /\[BABEL\] Note: The code generator has deoptimised/;
 const clickByText = (text) => evaluate(`
   const b=[...document.querySelectorAll('button,a')].find(x=>new RegExp('^\\\\s*${text}\\\\s*$').test(x.textContent));
   if(!b) return 'not found'; b.click(); return 'clicked';`);
+// Wallets and Export are tabs inside Settings: open Settings, then the section.
+const openSettingsTab = async (label) => { await clickByText('Settings'); await wait(150); return clickByText(label); };
 
 // ── corrupt storage is quarantined, never silently emptied ───────────────────
 console.log('\n[corrupt storage recovery]');
@@ -72,7 +74,7 @@ check('no NaN in any chart path', await evaluate(
 console.log('\n[unregistered wallet names]');
 await seed({ 'btc-tx-v2': [tx({}), tx({ wallet:'Krakn', date:'2024-02-01' })], 'btc-wallets': [WALLETS[0]] });
 await reload();
-await clickByText('Wallets');
+await openSettingsTab('Wallets');
 await wait(1200);
 const wtext = await evaluate(`return document.body.innerText;`);
 check('orphaned wallet name is reported', /Unregistered Wallet Names/i.test(wtext) && /Krakn/.test(wtext));
@@ -85,7 +87,7 @@ check('orphaned wallet name is reported', /Unregistered Wallet Names/i.test(wtex
 console.log('\n[offline edits are marked dirty]');
 await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS });
 await reload();
-await clickByText('Wallets');
+await openSettingsTab('Wallets');
 await wait(900);
 check('archive control present', await evaluate(`
   const b=document.querySelector('button[aria-label="Archive wallet"]');
@@ -301,7 +303,7 @@ console.log('\n[reconciliation audit colours]');
     'btc-settings': { defaultTxType:'Buy', displayUnit:'sats' },
   });
   await reload(6000);
-  await clickByText('Wallets');
+  await openSettingsTab('Wallets');
   await wait(1300);
   const audit = await evaluate(`
     const out={};
@@ -412,7 +414,7 @@ await evaluate(`
     setTimeout(() => { localStorage.setItem('btc-drive-seen-mtime', 'rev' + window.__pushes.length); res(true); }, 1000);
   });
   return 1;`);
-await clickByText('Wallets');
+await openSettingsTab('Wallets');
 await wait(900);
 const archiveNth = (n) => evaluate(`
   const b=[...document.querySelectorAll('button[aria-label="Archive wallet"]')][${n}];
@@ -529,7 +531,8 @@ console.log('\n[content security policy]');
 await seed({ 'btc-tx-v2': [tx({})], 'btc-wallets': WALLETS });
 await reload();
 await evaluate(`window.__csp = []; document.addEventListener('securitypolicyviolation', e => window.__csp.push(e.violatedDirective + ' ' + e.blockedURI)); return 1;`);
-for (const t of ['Transactions', 'Wallets', 'Export', 'Settings', 'Dashboard']) { await clickByText(t); await wait(300); }
+// Wallets and Export are tabs inside Settings, so they are reachable only once Settings is open.
+for (const t of ['Transactions', 'Settings', 'Wallets', 'Export', 'Dashboard']) { await clickByText(t); await wait(300); }
 await evaluate(`GDriveSync.loadScript(); return 1;`);
 await wait(2500);
 const csp = await evaluate(`return window.__csp;`);
@@ -648,6 +651,8 @@ console.log('\n[CoinLedger export is unchanged]');
   ];
   await seed({ 'btc-tx-v2': fixture.transactions, 'btc-wallets': fixture.wallets });
   await reload();
+  await clickByText('Settings');
+  await wait(300);
   await clickByText('Export');
   await wait(900);
   for (const g of GOLDENS) {
@@ -953,7 +958,9 @@ console.log('\n[Market candle store]');
   check('#market?… opens the Market tab and keeps its suffix', await evaluate(`return !!document.querySelector('[data-market-view]') && location.hash.startsWith('#market?range=1y&');`),
     await evaluate(`return location.hash;`));
   await evaluate(`location.hash = '#wallets'; return 1;`); await wait(300);
-  check('hash navigation to another tab still works', await evaluate(`return document.querySelector('.page-title').textContent === 'Wallets' && location.hash === '#wallets';`));
+  check('hash navigation to another tab still works', await evaluate(`return document.querySelector('.page-title').textContent === 'Settings' && location.hash === '#wallets'
+    && document.querySelector('.sidebar-item.active')?.title === 'Settings'
+    && document.querySelector('.settings-tab[aria-current="page"]')?.textContent.trim() === 'Wallets';`));
   await evaluate(`location.hash = '#dashboard?x=1'; return 1;`); await wait(300);
   check('other tabs still drop a ?suffix', await evaluate(`return document.querySelector('.page-title').textContent === 'Dashboard' && location.hash === '#dashboard';`),
     await evaluate(`return location.hash;`));
@@ -966,7 +973,8 @@ console.log('\n[Market candle store]');
     return { labels: [...row.querySelectorAll('.mobile-bottom-nav-item')].map(b => b.getAttribute('aria-label')),
       overflow: row.scrollWidth > row.clientWidth, more: row.parentElement.dataset.more };`);
   check('bottom nav: Market is second', bar?.labels?.[1] === 'Market', JSON.stringify(bar));
-  check('bottom nav scrolls sideways with a trailing fade', bar?.overflow === true && bar.more === '1', JSON.stringify(bar));
+  // With Wallets and Export moved into Settings the bar may fit outright; the fade must then stay off.
+  check('bottom nav shows the trailing fade exactly when it overflows', bar?.more === (bar?.overflow ? '1' : '0'), JSON.stringify(bar));
   await evaluate(`const items = document.querySelectorAll('.mobile-bottom-nav-item'); items[items.length - 1].click(); return 1;`);
   await wait(900);
   const inView = await evaluate(`const row = document.querySelector('.mobile-bottom-nav-row'), items = row.querySelectorAll('.mobile-bottom-nav-item');
