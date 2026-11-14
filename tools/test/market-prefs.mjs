@@ -26,6 +26,7 @@ const DEFAULTS = {
     bollinger: { on: false, period: 20, multiplier: 2 }, rsi: { on: false, period: 14 },
     macd: { on: false, fast: 12, slow: 26, signal: 9 }, atr: { on: false, period: 14 }, volatility: { on: false, period: 30 },
   },
+  personal: { showTx: true, purchases: true, sales: true, rewards: true, transfers: false, wallets: null, avgLine: 'off', balancePane: false },
 };
 
 // ── Scope ────────────────────────────────────────────────────────────────────
@@ -37,8 +38,9 @@ const DEFAULTS = {
   const names = [...section.matchAll(/^(?:const|let|var|function|class)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)/gm)].map(m => m[1].replace(/\s+/g, ' '));
   eq(names, ['{ normalizeMarketPrefs, parseMarketHash, formatMarketHash }'], 'the section declares only its three functions at top level');
   const code = section.replace(/^\s*\/\/.*$/gm, '');
-  eq(code.match(/\btransactions?\b|\btxs?\b|btc-tx|localStorage|sessionStorage|wallets?\b/gi), null,
-    'preferences code references no transactions, wallets or storage');
+  // Phase 7 adds a wallet-name filter to `personal`; transactions and storage stay out.
+  eq(code.match(/\btransactions?\b|\btxs?\b|btc-tx|localStorage|sessionStorage/gi), null,
+    'preferences code references no transactions or storage');
 }
 
 // ── normalizeMarketPrefs ─────────────────────────────────────────────────────
@@ -54,6 +56,7 @@ const DEFAULTS = {
       bollinger: { on: true, period: 10, multiplier: 2.5 }, rsi: { on: true, period: 9 },
       macd: { on: true, fast: 5, slow: 35, signal: 5 }, atr: { on: false, period: 7 }, volatility: { on: true, period: 90 },
     },
+    personal: { showTx: false, purchases: true, sales: false, rewards: true, transfers: true, wallets: ['Ledger', 'Kraken'], avgLine: 'historical', balancePane: true },
   };
   const n = norm(deepFreeze(clone(good)));
   eq(n.indicators.sma.periods, [50, 200], 'periods sorted ascending');
@@ -79,6 +82,17 @@ const DEFAULTS = {
   eq(norm({ indicators: { sma: { periods: [2, 3, 4, 5, 6, 7, 8, 9] } } }).indicators.sma.periods, [2, 3, 4, 5, 6, 7], 'at most six lines');
   eq(norm(JSON.parse('{"__proto__":{"range":"ALL"},"indicators":{"__proto__":{"rsi":{"on":true}}}}')), DEFAULTS, '__proto__ keys are ignored');
   eq(norm({ indicators: { rsi: { on: true, period: 14, overbought: 'x', extra: 1 } } }).indicators.rsi, { on: true, period: 14 }, 'unknown indicator keys are dropped');
+
+  // personal (Phase 7): switches, wallet filter, Average Acquisition Price line
+  for (const bad of [null, 5, 'x', [], true]) eq(norm({ personal: bad }).personal, DEFAULTS.personal, `personal ${JSON.stringify(bad)} → defaults`);
+  eq(norm({ personal: { showTx: 'no', purchases: 0, sales: null, transfers: 'true', balancePane: 1, avgLine: 'always', wallets: 'Kraken', extra: 1 } }).personal,
+    DEFAULTS.personal, 'wrong-typed personal values are dropped');
+  eq(norm({ personal: { wallets: ['Kraken', '', 5, null, 'Kraken', 'x'.repeat(201), 'Ledger'] } }).personal.wallets, ['Kraken', 'Ledger'],
+    'wallet filter keeps distinct non-empty names');
+  eq(norm({ personal: { wallets: [] } }).personal.wallets, [], 'an empty wallet filter (nothing selected) is kept');
+  eq(norm({ personal: { wallets: Array.from({ length: 150 }, (_, i) => 'w' + i) } }).personal.wallets.length, 100, 'at most 100 wallets');
+  for (const m of ['off', 'current', 'historical']) eq(norm({ personal: { avgLine: m } }).personal.avgLine, m, `avgLine ${m}`);
+  eq(norm(JSON.parse('{"personal":{"__proto__":{"showTx":false}}}')).personal, DEFAULTS.personal, 'personal __proto__ is ignored');
 }
 
 // ── formatMarketHash / parseMarketHash ───────────────────────────────────────
@@ -148,6 +162,10 @@ const SPEC = '#market?range=1y&interval=1d&scale=log&sma=50,200&ema=21&rsi=14&ma
   // formatMarketHash: never personal data; total over junk
   eq(format(null), format(DEFAULTS), 'format(null) is the default hash');
   eq(format({ range: '1Y', note: 'secret wallet', amount: 1.5 }), format(DEFAULTS), 'unknown keys never reach the URL');
+  eq(format({ personal: { showTx: false, transfers: true, wallets: ['My Secret Wallet'], avgLine: 'historical', balancePane: true } }), format(DEFAULTS),
+    'personal preferences (wallet names included) never reach the URL');
+  const kept = parse('#market?range=1m&rsi=14', norm({ personal: { wallets: ['Kraken'], avgLine: 'current' } }));
+  eq([kept.personal.wallets, kept.personal.avgLine], [['Kraken'], 'current'], 'a hash leaves the stored personal preferences as they are');
   eq(format(DEFAULTS, 'bogus'), format(DEFAULTS), 'an unknown interval argument is ignored');
   ok(/^#market\?range=[a-z0-9]+&interval=\w+&scale=(linear|log)(&(sma|ema|rsi|macd|bb|atr|hv)=[\d.,]+)*&vol=[01]$/.test(format(parse(SPEC))), 'hash grammar');
   // every setting the URL accepts is one Indicators accepts

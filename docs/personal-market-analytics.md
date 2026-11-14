@@ -148,8 +148,11 @@ Rules:
   transaction, so it is an **estimate of value**, clearly labelled, and is never described as
   the price the user got. It is used for marker placement and reward valuation only, never as
   an input to the "known at the time" context in §12.
-- A marker whose source is `HISTORICAL_MARKET_LOOKUP` or `UNKNOWN` is drawn with a hollow style
-  so that estimated positions are distinguishable without reading the panel.
+- A marker whose source is `HISTORICAL_MARKET_LOOKUP` or `UNKNOWN` is drawn in a distinct,
+  translucent style so that estimated positions are distinguishable without reading the panel,
+  is never placed at an exact price, and the readout says "position estimated" when it is
+  selected. (Phase 7: the pinned Lightweight Charts 5.3.0 markers plugin fills every shape and
+  has no outline-only option, so "hollow" is realised as a translucent fill.)
 - When the daily candle is missing, the source is `UNKNOWN`.
 
 ## 4. BTC precision
@@ -362,9 +365,12 @@ one opens the detail panel.
 
 ## 10. Filters
 
-Stored in `settings.market`:
+Stored in `settings.market.personal` as
+`{ showTx, purchases, sales, rewards, transfers, wallets, avgLine, balancePane }` (normalized by
+`normalizeMarketPrefs`; never written to the URL hash). `avgLine` is `'off'` (default),
+`'current'` or `'historical'`; `balancePane` defaults to off.
 
-- `showTx` (master toggle, "Show My Transactions").
+- `showTx` (master toggle, "Show My Transactions", default on).
 - Category toggles: Purchases (on), Sales (on), Rewards (on), Transfers (off — covers
   internal, sent, received and consolidation fee rows).
 - Wallet filter: optional list of wallet names; a transaction matches if `wallet` or `wallet2`
@@ -382,7 +388,9 @@ case both are labelled with the scope (the Dashboard's "scope-badge" pattern).
   to the Market tab.
 - `MarketView` reads the focus request, chooses a range that surrounds the transaction
   (the smallest of `1M`, `3M`, `1Y`, `5Y`, `ALL` in which the transaction is at least 20 % from
-  either edge, with that range's default interval), scrolls to it, enables "Show My
+  either edge, with that range's default interval; every range ends now, so a recent
+  transaction is near the right edge of all of them — then the smallest range in which it is at
+  least 20 % from the start is used, else `ALL`), scrolls to it, enables "Show My
   Transactions" and the transaction's category if they were off for this view, highlights the
   marker and opens the detail panel. Then it clears the focus request.
 - The id is never placed in the URL. Candle requests remain page-aligned

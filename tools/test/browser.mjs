@@ -1138,6 +1138,229 @@ console.log('\n[Market candle store]');
       && !(await evaluate(`return !!document.querySelector('[data-market-error]');`)));
   }
 
+  // ── Phase 7: the user's transactions on the chart ──
+  console.log('\n[Market transaction markers]');
+  const NOW = Math.floor(Date.now() / 1000), TODAY = NOW - NOW % DAY;
+  const at = (daysAgo, hh, mm) => new Date((TODAY - daysAgo * DAY + hh * 3600 + mm * 60) * 1000).toISOString();
+  const dayOf = daysAgo => new Date((TODAY - daysAgo * DAY) * 1000).toISOString().slice(0, 10);
+  const PTX = [
+    tx({ id: 'pb1', date: dayOf(200), datetimeUtc: at(200, 14, 30), sequence: 0, amount: '0.10000000', price: '50000', totalUsd: '5000', fee: '10' }),
+    tx({ id: 'pb2', date: dayOf(70), datetimeUtc: at(70, 9, 15), sequence: 0, amount: '0.05', price: '52000', totalUsd: '2600', fee: '5' }),
+    tx({ id: 'pb3', date: dayOf(70), datetimeUtc: at(70, 18, 0), sequence: 0, amount: '0.02', price: '48000', totalUsd: '960', fee: '' }),
+    tx({ id: 'pd1', date: dayOf(150), amount: '0.01', price: '', totalUsd: '' }), // date only, no price: an estimated position
+    tx({ id: 'pr1', type: 'Reward', date: dayOf(60), datetimeUtc: at(60, 8, 0), sequence: 0, amount: '0.001', price: '', totalUsd: '',
+      usdValueAtReceipt: '55.000000', usdValueSource: 'manual', rewardCategory: 'cash_back' }),
+    tx({ id: 'ps1', type: 'Sell', date: dayOf(30), datetimeUtc: at(30, 16, 0), sequence: 0, amount: '0.03', price: '60000', totalUsd: '1800', fee: '3', notes: 'trim' }),
+    tx({ id: 'pt1', type: 'Transfer', date: dayOf(20), datetimeUtc: at(20, 10, 0), sequence: 0, wallet: 'Kraken', wallet2: 'Ledger', amount: '0.05', price: '', totalUsd: '', fee: '0.0001' }),
+  ];
+  // Average Acquisition Price by hand: buys with their fees plus the reward at receipt; the
+  // date-only buy has no value and is left out of both sides; the sale changes nothing.
+  const AAP = (5000 + 10 + 2600 + 5 + 960 + 55) / ((10_000_000 + 5_000_000 + 2_000_000 + 100_000) / 1e8);
+  const FINAL_SATS = 10_000_000 + 5_000_000 + 2_000_000 + 1_000_000 + 100_000 - 3_000_000 - 10_000; // the transfer costs its fee only
+  const dayStartOf = s => s - (s % DAY);
+  const markerCount = () => evaluate(`return +(document.querySelector('.mkt-chart').dataset.markers || 0);`);
+  const key = async (k, code, vk, shift = false) => {
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: k, code, windowsVirtualKeyCode: vk, modifiers: shift ? 8 : 0, ...(k === 'Enter' ? { text: '\r' } : {}) });
+    await send('Input.dispatchKeyEvent', { type: 'keyUp', key: k, code, windowsVirtualKeyCode: vk, modifiers: shift ? 8 : 0 });
+  };
+  // Inspect the daily candle `daysAgo` before today, then press Enter on it.
+  const enterOnDay = async daysAgo => {
+    await evaluate(`document.querySelector('.mkt-chart').focus(); return 1;`);
+    await key('End', 'End', 35);
+    await wait(100);
+    for (let i = 0; i < Math.floor(daysAgo / 10); i++) await key('ArrowLeft', 'ArrowLeft', 37, true);
+    for (let i = 0; i < daysAgo % 10; i++) await key('ArrowLeft', 'ArrowLeft', 37);
+    await wait(150);
+    await key('Enter', 'Enter', 13);
+    await wait(300);
+  };
+  const txSheet = js => evaluate(`const s = document.querySelector('[data-market-sheet]'); if(!s) return 'no sheet'; ${js}`);
+  const txSwitch = name => txSheet(`const b = s.querySelector('[data-tx-filter="${name}"] [role=switch]'); if(!b) return 'missing'; b.click(); return b.getAttribute('aria-checked');`);
+  const openTxOptions = async () => { await evaluate(`document.querySelector('[data-open-tx-options]').click(); return 1;`); await wait(250); };
+  const closeSheet = async () => { await press('Escape', 'Escape'); await wait(250); };
+
+  await seed({ 'btc-tx-v2': PTX, 'btc-wallets': WALLETS });
+  await evaluate(`history.replaceState(null, '', '#market'); return 1;`);
+  requests.length = 0; // from here on, every request is judged for privacy
+  await reload();
+  await ready(`c.dataset.range === '1Y'`);
+  const keysBefore = await evaluate(`return Object.keys(localStorage).sort().join(',');`);
+  check('buys, rewards and sales are marked; the transfer is hidden by default',
+    await waitFor(`return +(document.querySelector('.mkt-chart').dataset.markers || 0) === 5;`, 8000), await markerCount());
+  await openTxOptions();
+  check('transfers are off in the filter by default', (await txSheet(`return s.querySelector('[data-tx-filter="transfers"] [role=switch]').getAttribute('aria-checked');`)) === 'false');
+  // BTC Acquired counts every purchase's satoshis, the value-unknown one included (0.18 BTC).
+  const acquiredOff = await evaluate(`return document.querySelector('[data-personal="rAcquired"]')?.dataset.value;`);
+  await txSwitch('transfers'); await wait(250);
+  check('enabling Transfers adds the transfer marker', (await markerCount()) === 6, await markerCount());
+  check('a shown transfer is never counted as acquired or sold', acquiredOff === '18000000'
+    && (await evaluate(`return document.querySelector('[data-personal="rAcquired"]').dataset.value + '/' + document.querySelector('[data-personal="rSold"]').dataset.value;`)) === '18000000/3000000',
+    await evaluate(`return document.querySelector('[data-personal="rAcquired"]').dataset.value + '/' + document.querySelector('[data-personal="rSold"]').dataset.value;`));
+  await txSwitch('transfers'); await txSwitch('purchases'); await wait(250);
+  check('turning Purchases off leaves the reward and the sale', (await markerCount()) === 2, await markerCount());
+  await txSwitch('purchases');
+  await txSheet(`s.querySelector('[data-wallet="Kraken"]').click(); return 1;`); await wait(250);
+  check('a wallet filter (Ledger only) hides Kraken rows and labels the scope', (await markerCount()) === 0
+    && await evaluate(`return /Selected wallets/.test(document.querySelector('[data-my-activity]').textContent);`));
+  await txSheet(`s.querySelector('[data-wallet-all]').click(); return 1;`); await wait(150);
+  await txSwitch('showTx'); await wait(250);
+  check('Show My Transactions off removes every marker', (await markerCount()) === 0);
+  await txSwitch('showTx'); await wait(250);
+  check('…and on brings them back', (await markerCount()) === 5, await markerCount());
+  await closeSheet();
+
+  console.log('\n[Market marker aggregation and detail]');
+  await enterOnDay(70);
+  check('two purchases in one daily candle are one marker listing two members',
+    (await evaluate(`return document.querySelector('[data-marker-members]')?.dataset.markerMembers;`)) === '2',
+    await evaluate(`return document.querySelector('[data-market-sheet]')?.textContent;`));
+  await closeSheet();
+  await radio('Range', '3M');
+  await ready(`c.dataset.range === '3M' && c.dataset.interval === '4h'`);
+  await wait(300);
+  check('at 4h the two purchases separate (3M: two buys, the reward, the sale)', (await markerCount()) === 4, await markerCount());
+  await radio('Interval', '1d');
+  await ready(`c.dataset.interval === '1d'`); await wait(300);
+  check('…and merge again at 1d', (await markerCount()) === 3, await markerCount());
+  await radio('Range', '1Y');
+  await ready(`c.dataset.range === '1Y'`); await wait(300);
+
+  await enterOnDay(200);
+  const d1 = await evaluate(`const d = document.querySelector('[data-tx-detail]'); if(!d) return null;
+    const v = k => d.querySelector('[data-detail="' + k + '"]')?.textContent || '';
+    return { id: d.dataset.txDetail, amount: v('amount'), usd: v('usd'), price: v('price'), allIn: d.textContent.includes('Cost per BTC including fees') ? v('allIn') : '',
+      wallet: v('wallet'), fee: v('fee'), focus: d.closest('[data-market-sheet]').contains(document.activeElement) };`);
+  check('a single marker opens its detail panel', d1?.id === 'pb1' && d1.focus, JSON.stringify(d1));
+  check('detail shows BTC, satoshis, USD value, price and its source', d1 && /^0\.10000000 BTC/.test(d1.amount) && /10,000,000 sats/.test(d1.amount)
+    && d1.usd === '$5,000.00' && /^\$50,000\.00Recorded price \(before fees\)$/.test(d1.price), JSON.stringify(d1));
+  check('detail shows the all-in figure, wallet and fee', d1?.allIn === '$50,100.00' && d1.wallet === 'Kraken' && d1.fee === '$10.00', JSON.stringify(d1));
+  check('the selected marker is summarised in the readout', /Selected: 1 Purchase/.test(await evaluate(`return document.querySelector('[data-readout-marker]')?.textContent || '';`)));
+  await closeSheet();
+  await enterOnDay(60);
+  check('a reward shows its value at receipt as the price source', /Value at receipt \(entered by hand\)/.test(await evaluate(`return document.querySelector('[data-detail="price"]')?.textContent || '';`)));
+  await closeSheet();
+  await enterOnDay(150);
+  const est = await evaluate(`const d = document.querySelector('[data-tx-detail]'); return d ? d.dataset.txDetail + '|' + d.textContent : '';`);
+  check('a date-only row without a price is an estimated position, its time "not recorded"', /^pd1\|/.test(est) && /Time not recorded/.test(est)
+    && /(Estimated from that day’s closing price|Estimated from that day's closing price|Price unknown)/.test(est), est);
+  check('…drawn differently: the readout says the position is estimated', /position estimated/.test(await evaluate(`return document.querySelector('[data-readout-marker]')?.textContent || '';`)));
+  await closeSheet();
+
+  // A real click on the sale's marker: the crosshair finds its candle's x, then a vertical sweep.
+  const saleT = TODAY - 30 * DAY;
+  const box = await evaluate(`const r = document.querySelector('.mkt-chart').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };`);
+  let lo = box.x + 5, hi = box.x + box.w - 70, sx = null;
+  for (let i = 0; i < 20 && sx == null; i++) {
+    const mid = (lo + hi) / 2;
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: mid, y: box.y + box.h * 0.3 });
+    await wait(40);
+    const t = await evaluate(`return +document.querySelector('[data-readout]').dataset.t;`);
+    if (t === saleT) sx = mid; else if (t < saleT) lo = mid; else hi = mid;
+  }
+  let clicked = false;
+  for (let y = box.y + 4; sx != null && y < box.y + box.h * 0.66 && !clicked; y += 6) {
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: sx, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: sx, y, button: 'left', clickCount: 1 });
+    await wait(60);
+    clicked = (await evaluate(`return document.querySelector('[data-tx-detail]')?.dataset.txDetail || '';`)) === 'ps1';
+  }
+  check('clicking the sale marker opens its detail', clicked, `x=${sx}`);
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2 }); // off the chart, so the crosshair follows the keyboard
+  check('the sale shows its net per BTC after fees and notes', /Net per BTC after fees/.test(await evaluate(`return document.querySelector('[data-tx-detail]')?.textContent || '';`))
+    && (await evaluate(`return document.querySelector('[data-detail="notes"]')?.textContent;`)) === 'trim');
+
+  console.log('\n[Market ↔ Transactions navigation]');
+  await evaluate(`document.querySelector('[data-view-transaction]').click(); return 1;`);
+  await wait(500);
+  const edit = await evaluate(`const m = document.querySelector('.modal[role=dialog]'); return { title: document.querySelector('.page-title').textContent,
+    modal: m ? m.querySelector('.modal-title')?.textContent : null, amount: [...m.querySelectorAll('input')].find(i => i.value === '0.03') ? 'ok' : 'missing' };`);
+  check('"View Transaction" opens the existing edit dialog for that transaction', edit.title === 'Transactions' && edit.modal === 'Edit Transaction' && edit.amount === 'ok', JSON.stringify(edit));
+  await press('Escape', 'Escape'); await wait(300);
+  // The Dashboard's own price-history fetch (pre-existing, outside Market) has finished by now;
+  // what follows is the Market's response to "View on Chart".
+  const focusFrom = requests.length;
+  await evaluate(`document.querySelector('.tx-table-wrap [data-view-on-chart="ps1"]').click(); return 1;`);
+  const landed = await waitFor(`const d = document.querySelector('[data-tx-detail]'); return d && d.dataset.txDetail;`, 20000);
+  const after = await chart();
+  check('"View on Chart" lands on the Market tab with that transaction open', landed === 'ps1' && after?.range === '3M', JSON.stringify([landed, after]));
+  check('…its marker highlighted', /Selected: 1 Sale/.test(await evaluate(`return document.querySelector('[data-readout-marker]')?.textContent || '';`)));
+  const hash = await evaluate(`return location.hash;`);
+  check('the URL carries no transaction id, amount, wallet or date', /^#market\?range=3m&interval=4h&scale=linear&vol=1$/.test(hash), hash);
+  const focusWindows = candleWindows().slice(candleWindows().length - requests.slice(focusFrom).filter(u => u.includes('/candles?')).length);
+  check('every candle request "View on Chart" made is page-aligned', focusWindows.length > 0 && allPageAligned(focusWindows), JSON.stringify(focusWindows.slice(0, 3)));
+  const txDays = new Set(PTX.map(t => Date.parse(t.date + 'T00:00:00Z') / 1000));
+  const onTxDay = candleWindows().filter(w => txDays.has(w.start) || txDays.has(w.end) || txDays.has(dayStartOf((w.start + w.end) / 2)));
+  check('no candle request starts, ends or is centred on a transaction day', onTxDay.length === 0, JSON.stringify(onTxDay.slice(0, 2)));
+  await closeSheet();
+
+  console.log('\n[Market Average Acquisition Price, balance, hide values]');
+  await radio('Range', '1Y'); await ready(`c.dataset.range === '1Y'`);
+  const aap = await evaluate(`return +document.querySelector('[data-personal="aap"]').dataset.value;`);
+  check('Average Acquisition Price equals the hand computation', Math.abs(aap - AAP) < 1e-6, `${aap} vs ${AAP}`);
+  const diff = await evaluate(`return +document.querySelector('[data-personal="diffPct"]').dataset.value;`);
+  check('"Difference" is current price over it, minus one', Math.abs(diff - (60000 / AAP - 1)) < 1e-9
+    && await evaluate(`return [...document.querySelectorAll('[data-my-activity] dt')].some(d => d.textContent === 'Difference');`), diff);
+  await evaluate(`document.querySelector('[data-personal="aap"]').closest('.mkt-stat').querySelector('.info-tip-btn').click(); return 1;`);
+  await wait(150);
+  const help = await evaluate(`return document.querySelector('[role=tooltip]')?.textContent;`);
+  check('the help text is the specified wording', help === 'An analytical weighted average of what your BTC cost to acquire — purchases at what you paid including fees, rewards at their USD value when received. Sales do not change it. It is not tax cost basis; see Harvest for tax lots and the Dashboard for Average Cost.', help);
+  await evaluate(`document.querySelector('[data-personal="aap"]').closest('.mkt-stat').querySelector('.info-tip-btn').click(); document.activeElement.blur(); return 1;`);
+  await wait(150);
+  const words = await evaluate(`return (document.querySelector('[data-market-view]').innerText.match(/\\bcost basis\\b|\\bgains?\\b|\\bloss(es)?\\b/gi) || []).join(',');`);
+  check('"cost basis", "gain" and "loss" do not appear in the Market tab', words === '', words);
+  const overlaysBefore = (await counts()).overlays;
+  await openTxOptions();
+  await txSheet(`[...s.querySelectorAll('[aria-label="Average Acquisition Price line"] [role=radio]')].find(b => b.textContent === 'Historical').click(); return 1;`);
+  await wait(250);
+  check('the Average Acquisition Price line can be drawn', (await counts()).overlays === overlaysBefore + 1, JSON.stringify(await counts()));
+  await txSwitch('balancePane'); await wait(600);
+  await closeSheet();
+  const bal = await evaluate(`const l = document.querySelector('[data-pane-legend="balance"] [data-balance-sats]'); return l ? +l.dataset.balanceSats : null;`);
+  check('the BTC Balance pane ends at total holdings, in whole satoshis', bal === FINAL_SATS, `${bal} vs ${FINAL_SATS}`);
+  const holdings = await evaluate(`return PersonalMarket.balanceHistory(JSON.parse(localStorage.getItem('btc-tx-v2'))).at(-1).sats;`);
+  check('…and matches the balance rules over the stored transactions', holdings === FINAL_SATS, holdings);
+  await evaluate(`document.querySelector('button[aria-label="Hide financial values"]').click(); return 1;`);
+  await wait(250);
+  const blur = await evaluate(`const f = el => getComputedStyle(el).filter;
+    return { aap: f(document.querySelector('[data-personal="aap"]')), bal: f(document.querySelector('[data-pane-legend="balance"] b')),
+      chart: f(document.querySelector('.mkt-chart')), price: f(document.querySelector('[data-personal="price"]')) };`);
+  check('hide values blurs personal figures and leaves the chart visible', /blur/.test(blur.aap) && /blur/.test(blur.bal) && blur.chart === 'none' && blur.price === 'none', JSON.stringify(blur));
+  await enterOnDay(30);
+  const detailBlur = await waitFor(`const a = document.querySelector('[data-detail="amount"]'); return a && getComputedStyle(a).filter;`, 3000)
+    || await evaluate(`return 'no detail; t=' + document.querySelector('[data-readout]').dataset.t + ' active=' + document.activeElement?.className;`);
+  check('…including in the detail panel', /blur/.test(detailBlur), detailBlur);
+  await closeSheet();
+  await evaluate(`document.querySelector('button[aria-label="Show financial values"]').click(); return 1;`);
+
+  console.log('\n[Market personal data stays local]');
+  // The app's own price caches and its existing settings key may appear meanwhile; nothing else may.
+  const newKeys = (await evaluate(`return Object.keys(localStorage).sort().join(',');`)).split(',')
+    .filter(k => !keysBefore.split(',').includes(k) && !['btc-last-spot', 'btc-price-history-v1', 'btc-settings'].includes(k));
+  check('no new localStorage key', newKeys.length === 0, newKeys.join(','));
+  const stored7 = await evaluate(`return JSON.stringify(JSON.parse(localStorage.getItem('btc-settings')).market);`);
+  check('settings.market holds no transaction data', !/pb1|ps1|pr1|0\.03|trim/.test(stored7), stored7);
+  const idb = await evaluate(`return new Promise(res => { const r = indexedDB.open('satledger-market'); r.onsuccess = () => {
+      const db = r.result, out = []; const t = db.transaction([...db.objectStoreNames], 'readonly');
+      for(const n of db.objectStoreNames) t.objectStore(n).getAll().onsuccess = e => out.push(JSON.stringify(e.target.result));
+      t.oncomplete = () => { db.close(); res(out.join('')); }; }; r.onerror = () => res(''); });`);
+  check('IndexedDB holds no transaction data', idb.length > 0 && !/pb1|ps1|Kraken|Ledger|trim/.test(idb));
+  const leaked = requests.filter(u => /pb\d|ps1|pr1|pd1|pt1|Kraken|Ledger|trim/.test(decodeURIComponent(u)));
+  check('no request carries a transaction id, wallet or note', leaked.length === 0, leaked.slice(0, 2).join(' '));
+
+  // Editing and deleting update the markers without a reload.
+  await show('Transactions'); await wait(300);
+  await evaluate(`document.querySelector('.tx-table-wrap button[title="Delete"][aria-label*="Sell"]').click(); return 1;`);
+  await wait(300);
+  await show('Market'); await ready(); await wait(400);
+  check('a deleted sale is no longer marked', (await markerCount()) === 4 && (await evaluate(`return document.querySelector('[data-personal="rSold"]').dataset.value;`)) === '0', await markerCount());
+
+  console.log('\n[Market with no transactions]');
+  await seed({ 'btc-tx-v2': [], 'btc-wallets': WALLETS });
+  await evaluate(`history.replaceState(null, '', '#market'); return 1;`);
+  await reload();
+  check('the chart works with no transactions', !!(await ready()) && (await markerCount()) === 0);
+  check('My Activity shows an empty state', await evaluate(`return document.querySelector('[data-my-activity]')?.dataset.myActivity === 'empty';`));
+
   console.log('\n[Market chart library fails to load]');
   failVendor = true;
   await send('Network.setCacheDisabled', { cacheDisabled: true }); // the file must be requested again

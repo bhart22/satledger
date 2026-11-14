@@ -1096,6 +1096,22 @@
 .mkt-stat dd { margin:.1rem 0 0; font-weight:700; font-variant-numeric:tabular-nums; }
 .mkt-stat-sub { display:block; font-weight:500; font-size:.6875rem; color:var(--text-tertiary); }
 @media(max-width:480px) { .mkt-stats { grid-template-columns:1fr 1fr; } }
+/* Personal figures under hide-values: the sheet is portalled outside .app, so it carries its own class */
+.values-hidden .mkt-private, .mkt-values-hidden .mkt-private { filter:blur(8px); user-select:none; }
+.mkt-readout-sel { flex-basis:100%; display:flex; flex-wrap:wrap; align-items:center; gap:.25rem; color:var(--text-primary); font-weight:600; }
+.mkt-sel-dot { display:inline-block; width:.55rem; height:.55rem; border-radius:50%; margin-right:.15rem; }
+.mkt-activity-sub { margin:.5rem 0 0; font-size:.75rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--text-tertiary); }
+.mkt-summary-title .scope-badge { margin-left:.375rem; vertical-align:middle; }
+.mkt-txlist { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.375rem; }
+.mkt-txlist button { width:100%; display:flex; align-items:center; justify-content:space-between; gap:.75rem; min-height:44px; padding:.5rem .75rem; border:1px solid var(--border-color); border-radius:10px; background:var(--bg-secondary); color:var(--text-primary); font:inherit; font-size:.8125rem; cursor:pointer; text-align:left; font-variant-numeric:tabular-nums; }
+.mkt-txlist button:hover { border-color:var(--bitcoin-orange); }
+.mkt-txlist button:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; }
+.mkt-detail { display:flex; flex-direction:column; gap:1rem; padding-top:.25rem; }
+.mkt-detail .mkt-stats { grid-template-columns:1fr 1fr; }
+.mkt-detail [data-detail="notes"] { font-weight:500; white-space:pre-wrap; overflow-wrap:anywhere; }
+.mkt-checks { display:flex; flex-direction:column; }
+.mkt-check { display:flex; align-items:center; gap:.5rem; min-height:40px; font-size:.875rem; cursor:pointer; }
+.mkt-check input { width:18px; height:18px; accent-color:var(--bitcoin-orange); }
     .mkt-sr { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
     @media (prefers-reduced-motion: reduce) {
       .mkt-spinner, .mkt-progress::before { animation:none; }
@@ -3164,7 +3180,15 @@ const Indicators = (() => {
 // Shape: { range, intervals: { [range]: interval chosen for it }, scale: 'linear'|'log',
 //   volume: bool, indicators: { sma: { periods: [n…], source }, ema: { periods, source },
 //   bollinger: { on, period, multiplier }, rsi: { on, period }, macd: { on, fast, slow, signal },
-//   atr: { on, period }, volatility: { on, period } } }
+//   atr: { on, period }, volatility: { on, period } },
+//   personal: { showTx, purchases, sales, rewards, transfers: bool, wallets: null | [name…],
+//     avgLine: 'off'|'current'|'historical', balancePane: bool } }
+//
+// `personal` holds how the user's own transactions are drawn (Phase 7): the "Show My
+// Transactions" switch, the category filters (Transfers off by default), an optional wallet
+// filter (null = every wallet), the Average Acquisition Price line and the BTC Balance pane. It
+// is a preference about the view, never data: it is not in the URL, and wallet names in it
+// stay on this device like everything else in settings.market.
 //
 // URL rules: each parameter overrides the stored value on its own and an invalid one is ignored.
 // The indicator parameters (sma ema rsi macd bb atr hv) count as one group: when at least one
@@ -3184,10 +3208,24 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
   const pick = (o, keys) => Object.fromEntries(keys.filter(k => own(o, k)).map(k => [k, o[k]]));
   const valid = (id, settings) => { try { Indicators.get(id).validate(settings); return true; } catch { return false; } };
 
+  const PERSONAL_SWITCHES = Object.freeze(['showTx', 'purchases', 'sales', 'rewards', 'transfers', 'balancePane']);
+  const AVG_LINES = Object.freeze(['off', 'current', 'historical']);
+  const MAX_SCOPE = 100, MAX_NAME = 200;
+  const personalDefaults = () => ({ showTx: true, purchases: true, sales: true, rewards: true, transfers: false, wallets: null, avgLine: 'off', balancePane: false });
+  const normPersonal = raw => {
+    const out = personalDefaults();
+    if(!isObj(raw)) return out;
+    for(const k of PERSONAL_SWITCHES) if(own(raw, k) && typeof raw[k] === 'boolean') out[k] = raw[k];
+    if(own(raw, 'avgLine') && AVG_LINES.includes(raw.avgLine)) out.avgLine = raw.avgLine;
+    if(own(raw, 'wallets') && Array.isArray(raw.wallets)) {
+      out.wallets = [...new Set(raw.wallets.filter(w => typeof w === 'string' && w && w.length <= MAX_NAME))].slice(0, MAX_SCOPE);
+    }
+    return out;
+  };
   const defaults = () => {
     const indicators = { sma: { periods: [], source: 'close' }, ema: { periods: [], source: 'close' } };
     for(const [id, keys] of Object.entries(SINGLE)) indicators[id] = { on: false, ...pick(Indicators.get(id).defaults, keys) };
-    return { range: '1Y', intervals: {}, scale: 'linear', volume: true, indicators };
+    return { range: '1Y', intervals: {}, scale: 'linear', volume: true, indicators, personal: personalDefaults() };
   };
   const normLines = (id, raw) => {
     const d = Indicators.get(id).defaults;
@@ -3219,6 +3257,7 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
     out.indicators.sma = normLines('sma', ind.sma);
     out.indicators.ema = normLines('ema', ind.ema);
     for(const id of Object.keys(SINGLE)) out.indicators[id] = normSingle(id, ind[id]);
+    out.personal = normPersonal(raw.personal);
     return out;
   };
   const normalizeMarketPrefs = raw => { try { return normalize(raw); } catch { return defaults(); } };
@@ -3730,6 +3769,8 @@ const Icon = {
   Eye: (s)=><svg {...sz} {...s}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
   // Two candlesticks: wick lines with bodies, in the same stroke style as the rest.
   Candles: (s)=><svg {...sz} {...s}><line x1="8" y1="2" x2="8" y2="6"/><rect x="5" y="6" width="6" height="9" rx="1"/><line x1="8" y1="15" x2="8" y2="20"/><line x1="16" y1="5" x2="16" y2="9"/><rect x="13" y="9" width="6" height="8" rx="1"/><line x1="16" y1="17" x2="16" y2="22"/></svg>,
+  // A price line with one point picked out: "View on Chart".
+  ChartPoint: (s)=><svg {...sz} {...s}><polyline points="3 17 9 11 13 14 21 6"/><circle cx="13" cy="14" r="2.5"/><line x1="3" y1="21" x2="21" y2="21"/></svg>,
   Expand: (s)=><svg {...sz} {...s}><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/></svg>,
   EyeOff: (s)=><svg {...sz} {...s}><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>,
 };
@@ -5515,7 +5556,13 @@ const CHART_FORMATS = {
   usd: { type: 'custom', minMove: 0.01, formatter: chartUsd },
   number: { type: 'custom', minMove: 0.01, formatter: p => Number(p).toFixed(2) },
   percent: { type: 'custom', minMove: 0.0001, formatter: p => (Number(p) * 100).toFixed(1) + '%' },
+  btc: { type: 'custom', minMove: 1e-8, formatter: p => fmtBTC(p) },
+  // Personal figures under the hide-values toggle: the axis keeps its ticks, not its numbers.
+  hidden: { type: 'custom', minMove: 1e-8, formatter: () => '•••' },
 };
+// Tap and click tolerance around a transaction marker: a 44 px target whatever its drawn size
+// (docs/mobile-chart-ux.md §11).
+const MARKER_HIT_PX = 22;
 
 // Live adapter count, mirrored on <html data-market-charts> so a test can see a leak.
 let liveChartAdapters = 0;
@@ -5645,7 +5692,8 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
   const toBarPoint = p => p.v == null || !Number.isFinite(p.v) ? { time: p.t } : { time: p.t, value: p.v, ...(p.color ? { color: p.color } : {}) };
   const lineOptions = (style = {}) => ({
     color: style.color || pal.text, lineWidth: style.width || 2,
-    lineStyle: style.dashed ? LC.LineStyle.Dashed : LC.LineStyle.Solid,
+    lineStyle: style.dashed ? LC.LineStyle.Dashed : style.dotted ? LC.LineStyle.Dotted : LC.LineStyle.Solid,
+    lineType: style.step ? LC.LineType.WithSteps : LC.LineType.Simple,
     priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
     priceFormat: CHART_FORMATS[style.format] || CHART_FORMATS.usd,
   });
@@ -5753,6 +5801,57 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
     emit(layoutSubs, out);
   };
 
+  // ── transaction markers (Phase 7) ──
+  // In: [{ id, t, shape: 'arrowUp'|'arrowDown'|'circle'|'square', position: 'aboveBar'|'belowBar',
+  // price (number → drawn at that exact price, else null), color, text, size }]. A marker whose
+  // time is not a candle on screen is dropped: the library only draws markers on bars. Clicks
+  // and taps come back as { id } or null (empty chart space): the library's own hit test first,
+  // then the nearest marker within MARKER_HIT_PX, since its tolerance is a few pixels.
+  let markerApi = null;
+  let markerList = [];
+  const markerSubs = new Set();
+  const EXACT = { aboveBar: 'atPriceTop', belowBar: 'atPriceBottom' };
+  const setMarkers = list => {
+    if(destroyed) return;
+    markerList = (Array.isArray(list) ? list : []).filter(m => m && byTime.has(m.t)).sort((a, b) => a.t - b.t);
+    const out = markerList.map(m => {
+      const exact = typeof m.price === 'number' && Number.isFinite(m.price) && m.price > 0;
+      return { time: m.t, id: m.id, shape: m.shape, color: m.color, text: m.text || '', size: m.size || 1,
+        position: exact ? EXACT[m.position] : m.position, ...(exact ? { price: m.price } : {}) };
+    });
+    if(markerApi) markerApi.setMarkers(out);
+    else if(out.length) markerApi = LC.createSeriesMarkers(candles, out);
+    container.dataset.markers = String(out.length);
+  };
+  const markerY = m => {
+    if(typeof m.price === 'number' && m.price > 0) return candles.priceToCoordinate(m.price);
+    const b = bars[byTime.get(m.t)];
+    if(!b) return null;
+    const y = candles.priceToCoordinate(m.position === 'aboveBar' ? b.h : b.l);
+    return y == null ? null : y + (m.position === 'aboveBar' ? -14 : 14);
+  };
+  const nearestMarker = (x, y) => {
+    const ts = chart.timeScale();
+    let best = null, bestD = Infinity;
+    for(const m of markerList) {
+      const mx = ts.timeToCoordinate(m.t);
+      if(mx == null || Math.abs(mx - x) > MARKER_HIT_PX) continue;
+      const my = markerY(m);
+      if(my == null || Math.abs(my - y) > MARKER_HIT_PX + 8) continue; // + stacking of two markers
+      const d = Math.hypot(mx - x, my - y);
+      if(d < bestD) { bestD = d; best = m.id; }
+    }
+    return best;
+  };
+  const onClick = p => {
+    if(!markerSubs.size) return;
+    let id = p?.hoveredInfo?.objectKind === 'series-marker' ? p.hoveredInfo.objectId : null;
+    if(id == null && p?.point && (p.paneIndex ?? 0) === 0) id = nearestMarker(p.point.x, p.point.y);
+    if(id != null && !markerList.some(m => m.id === id)) id = null;
+    emit(markerSubs, id == null ? null : { id });
+  };
+  chart.subscribeClick(onClick);
+
   const adapter = {
     setCandles(list, { formingIndex = -1, interval = null, keepView = false } = {}) {
       if(destroyed) return;
@@ -5800,9 +5899,8 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
     onVisibleRange(cb) { subs.range.add(cb); return () => subs.range.delete(cb); },
     setOverlay, removeOverlay, setPane, removePane,
     onLayout(cb) { layoutSubs.add(cb); scheduleLayout(); return () => layoutSubs.delete(cb); },
-    // Markers arrive in Phase 7; until then they do nothing.
-    setMarkers() {},
-    onMarkerClick() { return () => {}; },
+    setMarkers,
+    onMarkerClick(cb) { markerSubs.add(cb); return () => markerSubs.delete(cb); },
     setInteraction(next) {
       if(destroyed || next === interaction) return;
       interaction = next;
@@ -5832,9 +5930,11 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
       chart.unsubscribeCrosshairMove(onMove);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRange);
       chart.unsubscribeDblClick(onDbl);
-      subs.crosshair.clear(); subs.range.clear(); layoutSubs.clear();
+      chart.unsubscribeClick(onClick);
+      markerApi?.detach(); markerApi = null; markerList = [];
+      subs.crosshair.clear(); subs.range.clear(); layoutSubs.clear(); markerSubs.clear();
       overlays.clear(); panes.clear();
-      delete container.dataset.overlays; delete container.dataset.panes;
+      delete container.dataset.overlays; delete container.dataset.panes; delete container.dataset.markers;
       chart.remove();
       liveChartAdapters--; reportChartAdapters();
     },
@@ -5845,8 +5945,11 @@ function createChartAdapter(container, { theme = 'light', mode = 'inline' } = {}
 // ─── Market: View ────────────────────────────────────────────────────────────
 // The Market tab: price header, range and interval, a candlestick chart with volume, and the
 // persistent readout. Candles come only through MarketData's service (IndexedDB first, then
-// Coinbase in page-aligned windows); the chart only through createChartAdapter. Nothing here
-// reads, receives or sends transactions. Layout and states: docs/mobile-chart-ux.md §2–3, §12.
+// Coinbase in page-aligned windows); the chart only through createChartAdapter. The user's
+// transactions arrive as a read-only prop (Phase 7) and go only through PersonalMarket: they
+// never reach the market service, a request, the URL, IndexedDB or a new storage key, and the
+// transaction id handed over by "View on Chart" lives in React state only.
+// Layout and states: docs/mobile-chart-ux.md §2–3, §12.
 let marketServicePromise = null;
 const getMarketService = () => marketServicePromise || (marketServicePromise = MarketCandleStore.open()
   .then(store => MarketData.createMarketDataService({
@@ -6008,12 +6111,12 @@ const mktErrorText = e => { const m = String(e?.message || e).replace(/^Indicato
 // Bottom sheet on a phone, side panel on a wide screen (docs/mobile-chart-ux.md §7), on
 // useModalA11y: focus trap, Escape, focus restored, body scroll locked. Portalled, so it also
 // opens above the expanded chart.
-function MarketSheet({ title, onClose, children }) {
+function MarketSheet({ title, onClose, children, className = '' }) {
   const ref = useModalA11y(onClose);
   const titleId = useMemo(() => 'mkt-sheet-' + Math.random().toString(36).slice(2, 9), []);
   return ReactDOM.createPortal(
     <div className="mkt-sheet-backdrop" onMouseDown={backdropHandler(onClose)}>
-      <div ref={ref} className="mkt-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
+      <div ref={ref} className={`mkt-sheet ${className}`} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}
         onMouseDown={e => e.stopPropagation()} data-market-sheet="1">
         <div className="mkt-sheet-handle" aria-hidden="true" />
         <div className="mkt-sheet-head">
@@ -6128,11 +6231,11 @@ function MarketSingleIndicator({ id, name, fields, prefs, update, onToggle }) {
   );
 }
 
-function MarketIndicatorPanel({ prefs, update, maxPanes, narrow }) {
+function MarketIndicatorPanel({ prefs, update, maxPanes, narrow, otherPanes = 0 }) {
   const [note, setNote] = useState('');
   const paneIds = ['rsi', 'macd', 'atr', 'volatility'];
   const onToggle = (id, on) => {
-    if(on && paneIds.includes(id) && paneIds.filter(k => prefs.indicators[k].on).length >= maxPanes) {
+    if(on && paneIds.includes(id) && paneIds.filter(k => prefs.indicators[k].on).length + otherPanes >= maxPanes) {
       setNote(narrow
         ? `At most ${maxPanes} indicator panes fit on this screen. Turn one off first, or expand the chart for up to four.`
         : `At most ${maxPanes} indicator panes at once. Turn one off first.`);
@@ -6261,7 +6364,219 @@ function MarketSummaryView({ s, rangeName, interval }) {
   );
 }
 
-function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPrefsChange = null }) {
+// ── The user's transactions on the chart (docs/personal-market-analytics.md §8–11) ──
+// Every figure comes from PersonalMarket; nothing here classifies, prices or sums a transaction.
+// Markers differ by shape and text, not colour alone; an estimated position (the day's close, or
+// no price) is drawn translucent — the pinned library has no outline-only marker.
+const MKT_MARKER = {
+  ACQUISITION: { shape: 'arrowUp', position: 'belowBar', one: 'Purchase', many: 'Purchases', filter: 'purchases' },
+  DISPOSAL: { shape: 'arrowDown', position: 'aboveBar', one: 'Sale', many: 'Sales', filter: 'sales' },
+  REWARD: { shape: 'circle', position: 'belowBar', one: 'Reward', many: 'Rewards', filter: 'rewards', letter: 'R' },
+  TRANSFER: { shape: 'square', position: 'aboveBar', one: 'Transfer', many: 'Transfers', filter: 'transfers', letter: 'T' },
+};
+const MKT_MARKER_COLORS = {
+  light: { ACQUISITION: [21,128,61], DISPOSAL: [185,28,28], REWARD: [124,58,237], TRANSFER: [71,85,105], aap: '#ea580c', balance: '#0f766e' },
+  dark: { ACQUISITION: [74,222,128], DISPOSAL: [248,113,113], REWARD: [192,132,252], TRANSFER: [148,163,184], aap: '#fb923c', balance: '#2dd4bf' },
+};
+const mktMarkerColor = (theme, group, estimated) => {
+  const [r, g, b] = (MKT_MARKER_COLORS[theme] || MKT_MARKER_COLORS.light)[group];
+  return `rgba(${r},${g},${b},${estimated ? 0.42 : 1})`;
+};
+const mktMarkerText = m => {
+  const st = MKT_MARKER[m.category];
+  if(st.letter) return m.count > 1 ? `${st.letter}×${m.count}` : st.letter;
+  return m.count > 1 ? String(m.count) : '';
+};
+const MKT_CATEGORY_TEXT = {
+  ACQUISITION: 'Purchase', DISPOSAL: 'Sale', REWARD: 'Reward', TRANSFER_INTERNAL: 'Transfer between your wallets',
+  SENT: 'Transfer out', RECEIVED: 'Transfer in', FEE_ONLY: 'Consolidation (network fee only)',
+};
+const MKT_FILTER_OF = { ACQUISITION: 'purchases', DISPOSAL: 'sales', REWARD: 'rewards' }; // else 'transfers'
+const mktBtc = sats => `${fmtBTC(sats / 1e8)} ${btcUnit()}`;
+// "View on Chart": the smallest of these ranges in which the transaction sits at least 20 % in
+// from both edges, else the smallest in which it is 20 % in from the start (a recent transaction
+// is near the right edge — now — of every range), else ALL.
+const MKT_FOCUS_RANGES = ['1M', '3M', '1Y', '5Y', 'ALL'];
+const mktFocusRange = (tSec, nowSec, earliestSec) => {
+  const pos = r => {
+    const start = Candles.rangeStart(r, nowSec, earliestSec);
+    return start == null || !(nowSec > start) ? null : (tSec - start) / (nowSec - start);
+  };
+  return MKT_FOCUS_RANGES.find(r => { const p = pos(r); return p != null && p >= 0.2 && p <= 0.8; })
+    || MKT_FOCUS_RANGES.find(r => { const p = pos(r); return p != null && p >= 0.2; })
+    || 'ALL';
+};
+const MKT_AAP_HELP = 'An analytical weighted average of what your BTC cost to acquire — purchases at what you paid including fees, rewards at their USD value when received. Sales do not change it. It is not tax cost basis; see Harvest for tax lots and the Dashboard for Average Cost.';
+
+// Members of an aggregated marker: type, date, amount. Picking one opens its detail.
+function MarketMarkerList({ rows, txById, onPick }) {
+  return (
+    <ul className="mkt-txlist" data-marker-members={rows.length}>
+      {rows.map(r => {
+        const tx = txById.get(r.id);
+        return (
+          <li key={r.id}>
+            <button type="button" onClick={() => onPick(r.id)} data-member={r.id}>
+              <span>{MKT_CATEGORY_TEXT[r.category]}<span className="mkt-stat-sub">{tx ? (r.dateOnly ? fmtDate(tx.date) : fmtTxDate(tx)) : ''}</span></span>
+              <b className="mkt-private">{mktBtc(r.sats)}</b>
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+// One transaction: the fields of docs/personal-market-analytics.md §11 (the market context block
+// arrives in Phase 8). Read from the chart row and, for notes, the original record. No editor:
+// "View Transaction" opens the existing one on the Transactions tab.
+function MarketTxDetail({ row, tx, onView }) {
+  const item = (key, label, value, priv = true, sub = null) => (
+    <div className="mkt-stat" key={key}>
+      <dt>{label}</dt>
+      <dd data-detail={key} className={priv ? 'mkt-private' : undefined}>{value}{sub ? <span className="mkt-stat-sub">{sub}</span> : null}</dd>
+    </div>
+  );
+  const transferLike = row.type === 'Transfer' || row.type === 'Consolidation';
+  const fee = row.feeUsd > 0 ? fmtUSD(row.feeUsd) : row.feeSats > 0 ? mktBtc(row.feeSats) : null;
+  const allInLabel = PersonalMarket.allInLabel(row);
+  return (
+    <div className="mkt-detail" data-tx-detail={row.id}>
+      <dl className="mkt-stats">
+        {item('type', 'Type', MKT_CATEGORY_TEXT[row.category], false, row.excludeStats ? 'Excluded from statistics' : null)}
+        {item('date', 'Date', row.dateOnly ? fmtDate(tx.date) : fmtTxDate(tx), false, row.dateOnly ? 'Time not recorded' : null)}
+        {item('amount', 'Amount', mktBtc(row.sats), true, `${row.sats.toLocaleString('en-US')} sats`)}
+        {transferLike ? null : item('usd', row.type === 'Reward' ? 'USD value at receipt' : 'USD value', row.usdValue == null ? '—' : fmtUSD(row.usdValue))}
+        {item('price', 'Price per BTC', row.price == null ? '—' : fmtUSD(row.price), true, PersonalMarket.priceSourceLabel(row))}
+        {allInLabel ? item('allIn', allInLabel, fmtUSD(row.allIn)) : null}
+        {row.type === 'Transfer'
+          ? <>{item('from', 'From wallet', row.wallet || '—', false)}{item('to', 'To wallet', row.wallet2 || '—', false)}</>
+          : item('wallet', 'Wallet', row.wallet || '—', false)}
+        {fee ? item('fee', transferLike ? 'Network fee' : 'Fee', fee) : null}
+        {tx.notes ? item('notes', 'Notes', tx.notes) : null}
+      </dl>
+      <button type="button" className="btn btn-primary" onClick={() => onView(row.id)} data-view-transaction="1">View Transaction</button>
+    </div>
+  );
+}
+
+// The "My Transactions" sheet: master switch, category filters, wallet filter, the Average
+// Acquisition Price line and the BTC Balance pane.
+function MarketTxPanel({ personal, update, walletNames, canAddPane, paneNote }) {
+  const set = patch => update(p => ({ ...p, personal: { ...p.personal, ...patch } }));
+  const [note, setNote] = useState('');
+  const scope = personal.wallets;
+  const toggleWallet = name => {
+    const cur = scope || walletNames;
+    const next = cur.includes(name) ? cur.filter(w => w !== name) : [...cur, name];
+    set({ wallets: walletNames.every(w => next.includes(w)) ? null : next });
+  };
+  const cat = (key, label, sub) => (
+    <div className="mkt-ind" data-tx-filter={key}>
+      <MktSwitch on={personal[key]} label={label} onChange={on => set({ [key]: on })} disabled={!personal.showTx} />
+      {sub ? <span className="mkt-legal">{sub}</span> : null}
+    </div>
+  );
+  return (
+    <div className="mkt-ind-panel">
+      <section aria-labelledby="mkt-tx-show">
+        <h3 id="mkt-tx-show">Markers</h3>
+        <div className="mkt-ind" data-tx-filter="showTx"><MktSwitch on={personal.showTx} label="Show My Transactions" onChange={on => set({ showTx: on })} /></div>
+        {cat('purchases', 'Purchases')}
+        {cat('sales', 'Sales')}
+        {cat('rewards', 'Rewards')}
+        {cat('transfers', 'Transfers', 'Moves between wallets, sends, receipts and consolidation fees. Never counted as purchases or sales.')}
+      </section>
+      <section aria-labelledby="mkt-tx-wallets">
+        <h3 id="mkt-tx-wallets">Wallets</h3>
+        {walletNames.length ? (
+          <div className="mkt-checks" role="group" aria-labelledby="mkt-tx-wallets">
+            <label className="mkt-check"><input type="checkbox" checked={!scope} onChange={() => set({ wallets: scope ? null : [] })} data-wallet-all="1" /> All wallets</label>
+            {walletNames.map(w => (
+              <label key={w} className="mkt-check"><input type="checkbox" checked={!scope || scope.includes(w)} onChange={() => toggleWallet(w)} data-wallet={w} /> {w}</label>
+            ))}
+          </div>
+        ) : <p className="mkt-legal">No wallets yet.</p>}
+        <p className="mkt-legal">A wallet filter also scopes the Average Acquisition Price and the BTC Balance pane.</p>
+      </section>
+      <section aria-labelledby="mkt-tx-aap">
+        <h3 id="mkt-tx-aap">Average Acquisition Price line</h3>
+        <MarketRadioGroup label="Average Acquisition Price line" value={personal.avgLine} onChange={v => set({ avgLine: v })}
+          options={[{ value: 'off', label: 'Off' }, { value: 'current', label: 'Current' }, { value: 'historical', label: 'Historical' }]} />
+        <p className="mkt-legal">Current draws today’s value across the chart; Historical steps at each acquisition.</p>
+      </section>
+      <section aria-labelledby="mkt-tx-balance">
+        <h3 id="mkt-tx-balance">Panes</h3>
+        <div className="mkt-ind" data-tx-filter="balancePane">
+          <MktSwitch on={personal.balancePane} label="BTC Balance" onChange={on => {
+            if(on && !canAddPane) { setNote(paneNote); return; }
+            setNote(''); set({ balancePane: on });
+          }} />
+        </div>
+        {note ? <div className="mkt-banner" role="status" data-pane-limit>{note}</div> : null}
+      </section>
+    </div>
+  );
+}
+
+// "My Activity": Average Acquisition Price against the current price, and the selected-range
+// summary. Wording per docs/market-analytics.md §9: "Difference", never a verdict.
+function MarketActivityView({ hasTx, aap, price, range, rangeName, scoped }) {
+  const item = (key, label, value, text, sub = null, tip = null, priv = true) => (
+    <div className="mkt-stat" key={key}>
+      <dt>{label}{tip ? <InfoTip text={tip} /> : null}</dt>
+      <dd data-personal={key} data-value={value == null ? '' : String(value)} className={priv ? 'mkt-private' : undefined}>
+        {text}{sub ? <span className="mkt-stat-sub">{sub}</span> : null}
+      </dd>
+    </div>
+  );
+  const badge = scoped ? <span className="scope-badge">Selected wallets</span> : null;
+  if(!hasTx) return (
+    <section className="mkt-summary" aria-labelledby="mkt-activity-title" data-my-activity="empty">
+      <h2 id="mkt-activity-title" className="mkt-summary-title">My Activity</h2>
+      <p className="mkt-legal" style={{fontSize:'.8125rem'}}>No transactions yet. Once you add some on the Transactions tab, they appear on this chart with your Average Acquisition Price and a summary of each range.</p>
+    </section>
+  );
+  const diff = aap.price != null && price > 0 ? price - aap.price : null;
+  const pct = diff != null ? price / aap.price - 1 : null;
+  const notes = [
+    aap.estimated ? `${aap.estimated} reward${aap.estimated === 1 ? '' : 's'} valued from that day’s closing price` : null,
+    aap.skipped.unknownValue ? `${aap.skipped.unknownValue} left out: value unknown` : null,
+  ].filter(Boolean).join(' · ');
+  const r = range;
+  return (
+    <section className="mkt-summary" aria-labelledby="mkt-activity-title" data-my-activity="1">
+      <h2 id="mkt-activity-title" className="mkt-summary-title">My Activity {badge}</h2>
+      <dl className="mkt-stats">
+        {item('aap', 'Average Acquisition Price', aap.price, aap.price == null ? '—' : fmtUSD(aap.price),
+          aap.count ? `${aap.count} acquisition${aap.count === 1 ? '' : 's'}${notes ? ' · ' + notes : ''}` : 'No purchases or rewards yet', MKT_AAP_HELP)}
+        {item('price', 'Current price', price > 0 ? price : null, price > 0 ? fmtUSD(price) : '—', null, null, false)}
+        {item('diffUsd', 'Difference', diff, diff == null ? '—' : `${diff > 0 ? '+' : diff < 0 ? '−' : ''}${fmtUSD(Math.abs(diff))}`, 'current price minus Average Acquisition Price')}
+        {item('diffPct', 'Difference (%)', pct, mktPct(pct), 'current price ÷ Average Acquisition Price − 1')}
+      </dl>
+      {r ? (
+        <>
+          <h3 className="mkt-activity-sub">In the range shown · {rangeName}</h3>
+          <dl className="mkt-stats" data-range-summary="1">
+            {item('rTransactions', 'Transactions', r.transactions, String(r.transactions), 'purchases, sales and rewards', null, false)}
+            {item('rAcquired', 'BTC Acquired', r.acquiredSats, mktBtc(r.acquiredSats))}
+            {item('rRewards', 'BTC from Rewards', r.rewardSats, mktBtc(r.rewardSats))}
+            {item('rSold', 'BTC Sold', r.soldSats, mktBtc(r.soldSats))}
+            {item('rNet', 'Net BTC Change', r.netSats, `${r.netSats > 0 ? '+' : r.netSats < 0 ? '−' : ''}${mktBtc(Math.abs(r.netSats))}`,
+              r.netIncludesOther ? 'Includes network fees and transfers to or from untracked wallets' : null)}
+            {item('rInvested', 'USD Invested', r.usdInvested, fmtUSD(r.usdInvested), 'purchases with their fees'
+              + (r.usdInvestedSkipped ? ` · ${r.usdInvestedSkipped} of unknown value left out` : ''))}
+            {item('rAap', 'Average Acquisition Price (range)', r.avgAcquisition.price, r.avgAcquisition.price == null ? '—' : fmtUSD(r.avgAcquisition.price))}
+          </dl>
+        </>
+      ) : null}
+      <p className="mkt-legal">Analytics only. Category and wallet filters apply to the range figures; internal transfers count as neither a purchase nor a sale.</p>
+    </section>
+  );
+}
+
+function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPrefsChange = null,
+  transactions = [], wallets = [], hideValues = false, focusTx = null, onFocusDone = null, onViewTransaction = null, onNotice = null }) {
   // Preferences: stored per device, overridden on load by a #market?… URL (not saved until the
   // user changes something). Every change is saved through onPrefsChange — a device view setting.
   const [prefs, setPrefsState] = useState(() => {
@@ -6302,6 +6617,9 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const [online, setOnline] = useState(() => navigator.onLine !== false);
   const [tick, setTick] = useState(0); // re-render every 15 s so ages and staleness move on
   const [announce, setAnnounce] = useState('');
+  const [txSheet, setTxSheet] = useState(false);
+  const [sel, setSel] = useState(null);     // highlighted marker: { key, txId }
+  const [panel, setPanel] = useState(null); // { kind: 'list', key } | { kind: 'detail', id }
   if(crash) throw crash;
 
   const chartRef = useRef(null), shellRef = useRef(null);
@@ -6499,8 +6817,13 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
     return out;
   }, [display, viewInterval, calcKey]);
   const paneSpecs = specs.filter(s => s.placement === 'pane');
-  const shownPaneKeys = paneSpecs.slice(0, maxPanes).map(s => s.key);
-  const hiddenPanes = paneSpecs.length - shownPaneKeys.length;
+  const personal = prefs.personal;
+  const txList = Array.isArray(transactions) ? transactions : [];
+  const hasTx = txList.length > 0;
+  const balanceOn = hasTx && personal.balancePane;
+  const paneKeys = [...paneSpecs.map(s => s.key), ...(balanceOn ? ['balance'] : [])]; // balance is last
+  const shownPaneKeys = paneKeys.slice(0, maxPanes);
+  const hiddenPanes = paneKeys.length - shownPaneKeys.length;
   const appliedOverlays = useRef(new Set()), appliedPanes = useRef(new Set());
   useEffect(() => {
     if(!adapter) return;
@@ -6547,6 +6870,153 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const summary = useMemo(() => display?.length && view ? marketSummary({
     daily, candles: display, interval: view.interval, price: btcPrice, nowSec: Math.floor(Date.now() / 1000), earliestSec,
   }) : null, [daily, display, view?.interval, btcPrice, earliestSec, today]);
+
+  // ── the user's transactions: rows, markers, Average Acquisition Price, balance ──
+  const txById = useMemo(() => new Map(txList.map(t => [t.id, t])), [transactions]);
+  const chartTxs = useMemo(() => PersonalMarket.toChartTransactions(txList, { candlesDaily: daily, nowSec: Math.floor(Date.now() / 1000) }).items,
+    [transactions, daily, today]);
+  const rowById = useMemo(() => new Map(chartTxs.map(r => [r.id, r])), [chartTxs]);
+  const walletNames = useMemo(() => {
+    const names = new Set((Array.isArray(wallets) ? wallets : []).map(w => w && w.name).filter(n => typeof n === 'string' && n));
+    for(const r of chartTxs) { if(r.wallet) names.add(r.wallet); if(r.wallet2) names.add(r.wallet2); }
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [wallets, chartTxs]);
+  const scope = personal.wallets;
+  const txFilters = useMemo(() => ({ purchases: personal.purchases, sales: personal.sales, rewards: personal.rewards, transfers: personal.transfers, wallets: scope }),
+    [personal.purchases, personal.sales, personal.rewards, personal.transfers, scope]);
+  const firstT = display?.length ? display[0].t : null;
+  const endT = display?.length && viewInterval ? display[display.length - 1].t + Candles.intervalSeconds(viewInterval) : null;
+  // One marker per (candle, group), widened past 300 on screen. A marker on a bucket that has no
+  // candle (a provider gap, or a widened bucket starting before the first candle) moves to the
+  // next candle; the adapter only draws on bars.
+  const markers = useMemo(() => {
+    const byKey = new Map();
+    if(!personal.showTx || firstT == null) return byKey;
+    const times = display.map(c => c.t);
+    for(const m of PersonalMarket.aggregateMarkers(chartTxs, { interval: viewInterval, filters: txFilters, fromSec: firstT, toSec: endT })) {
+      let t = m.t;
+      if(!indexOfT.has(t)) {
+        let lo = 0, hi = times.length;
+        while(lo < hi) { const mid = (lo + hi) >> 1; if(times[mid] < t) lo = mid + 1; else hi = mid; }
+        if(lo >= times.length) continue;
+        t = times[lo];
+      }
+      const key = `${t}|${m.category}`, cur = byKey.get(key);
+      if(cur) byKey.set(key, { ...cur, count: cur.count + m.count, sats: cur.sats + m.sats, ids: [...cur.ids, ...m.ids], estimated: cur.estimated || m.estimated, price: null });
+      else byKey.set(key, { ...m, t, key });
+    }
+    return byKey;
+  }, [chartTxs, txFilters, personal.showTx, viewInterval, firstT, endT, indexOfT]);
+  const markedCount = useMemo(() => [...markers.values()].reduce((n, m) => n + m.count, 0), [markers]);
+  const selMarker = sel ? (sel.txId != null ? [...markers.values()].find(m => m.ids.includes(sel.txId)) : markers.get(sel.key)) || null : null;
+  useEffect(() => {
+    if(!adapter || !view) return;
+    adapter.setMarkers([...markers.values()].map(m => {
+      const st = MKT_MARKER[m.category];
+      return { id: m.key, t: m.t, shape: st.shape, position: st.position, color: mktMarkerColor(theme, m.category, m.estimated),
+        price: m.count === 1 && !m.estimated ? m.price : null, text: mktMarkerText(m), size: selMarker && selMarker.key === m.key ? 2 : 1 };
+    }));
+  }, [adapter, view, markers, theme, selMarker?.key]);
+
+  const aap = useMemo(() => hasTx ? PersonalMarket.avgAcquisition(txList, { candlesDaily: daily, nowSec: Math.floor(Date.now() / 1000), wallets: scope }) : null,
+    [transactions, daily, today, scope]);
+  const aapColor = (MKT_MARKER_COLORS[theme] || MKT_MARKER_COLORS.light).aap;
+  useEffect(() => {
+    if(!adapter || !view) return;
+    if(personal.avgLine === 'off' || !aap || aap.price == null || !display?.length) { adapter.removeOverlay('aap'); return; }
+    let pts;
+    if(personal.avgLine === 'current') pts = display.map(c => ({ t: c.t, v: aap.price }));
+    else {
+      // The running average after every acquisition before the bucket's end: it steps only at
+      // acquisitions, and is absent before the first one.
+      const series = PersonalMarket.avgAcquisitionSeries(txList, { candlesDaily: daily, nowSec: Math.floor(Date.now() / 1000), wallets: scope });
+      const s = Candles.intervalSeconds(view.interval);
+      let j = 0, cur = null;
+      pts = display.map(c => {
+        while(j < series.length && series[j].tSec < c.t + s) cur = series[j++].price;
+        return { t: c.t, v: cur };
+      });
+    }
+    adapter.setOverlay('aap', pts, { color: aapColor, width: 2, step: true, dotted: personal.avgLine === 'current', format: 'usd' });
+  }, [adapter, view, display, aap, personal.avgLine, aapColor]);
+
+  const balanceHist = useMemo(() => hasTx ? PersonalMarket.balanceHistory(txList, { wallets: scope }) : [], [transactions, scope]);
+  const balanceSats = useMemo(() => display?.length && viewInterval
+    ? PersonalMarket.balanceAtBuckets(balanceHist, display.map(c => c.t), viewInterval) : [], [balanceHist, display, viewInterval]);
+  const balanceShown = shownPaneKeys.includes('balance');
+  const balanceColor = (MKT_MARKER_COLORS[theme] || MKT_MARKER_COLORS.light).balance;
+  useEffect(() => {
+    if(!adapter) return;
+    if(!balanceShown) { adapter.removePane('balance'); return; }
+    adapter.setPane('balance', [{ key: 'balance', type: 'line', color: balanceColor, width: 2, points: balanceSats.map(p => ({ t: p.t, v: p.sats / 1e8 })) }],
+      { order: 5, format: hideValues ? 'hidden' : 'btc' });
+  }, [adapter, balanceShown, balanceSats, balanceColor, hideValues]);
+
+  const rangeSum = useMemo(() => hasTx && firstT != null ? PersonalMarket.rangeSummary(txList, {
+    fromSec: firstT, toSec: endT, candlesDaily: daily, nowSec: Math.floor(Date.now() / 1000), filters: txFilters,
+  }) : null, [transactions, firstT, endT, daily, today, txFilters]);
+
+  // ── marker selection: a single marker opens its detail, an aggregated one lists its members ──
+  const openMarker = useCallback(m => {
+    if(!m) { setSel(null); return; }
+    if(m.count === 1) { setSel({ key: m.key, txId: m.ids[0] }); setPanel({ kind: 'detail', id: m.ids[0] }); }
+    else { setSel({ key: m.key, txId: null }); setPanel({ kind: 'list', key: m.key }); }
+  }, []);
+  const markersRef = useRef(markers); markersRef.current = markers;
+  useEffect(() => {
+    if(!adapter) return;
+    return adapter.onMarkerClick(hit => openMarker(hit ? markersRef.current.get(hit.id) || null : null));
+  }, [adapter, openMarker]);
+  const noticeRef = useRef(onNotice); noticeRef.current = onNotice;
+  // A transaction deleted, or replaced by a sync, while its detail is open: close with a notice.
+  useEffect(() => {
+    if(panel?.kind === 'detail' && !rowById.has(panel.id)) {
+      setPanel(null); setSel(null);
+      noticeRef.current?.('That transaction no longer exists.');
+    } else if(panel?.kind === 'list' && !markers.has(panel.key)) setPanel(null);
+  }, [rowById, markers, panel]);
+  const viewTransaction = id => {
+    if(!txById.has(id)) { setPanel(null); setSel(null); noticeRef.current?.('That transaction no longer exists.'); return; }
+    setPanel(null);
+    onViewTransaction?.(id);
+  };
+
+  // ── "View on Chart": a transaction id handed over in React state, never in the URL ──
+  // Pick a range around it, make sure it is drawn, then highlight it and open its detail once
+  // that range's candles are on screen. Requests stay the range's page-aligned windows.
+  const focusRef = useRef(null);
+  const focusDoneRef = useRef(onFocusDone); focusDoneRef.current = onFocusDone;
+  useEffect(() => {
+    if(!focusTx) return;
+    focusDoneRef.current?.();
+    const row = rowById.get(focusTx.id);
+    if(!row) { noticeRef.current?.('That transaction no longer exists.'); return; }
+    const target = mktFocusRange(row.tSec, Math.floor(Date.now() / 1000), earliestRef.current);
+    const filterKey = MKT_FILTER_OF[row.category] || 'transfers';
+    updatePrefs(p => {
+      const intervals = { ...p.intervals };
+      delete intervals[target];
+      const sc = p.personal.wallets;
+      const inScope = !sc || sc.includes(row.wallet) || sc.includes(row.wallet2);
+      return { ...p, range: target, intervals, personal: { ...p.personal, showTx: true, [filterKey]: true, wallets: inScope ? sc : null } };
+    });
+    focusRef.current = { id: row.id, range: target };
+  }, [focusTx]);
+  useEffect(() => {
+    const f = focusRef.current;
+    if(!f || loading || !view || view.range !== f.range || view.interval !== interval || !adapter || appliedViewRef.current !== view) return;
+    const m = [...markers.values()].find(x => x.ids.includes(f.id));
+    if(!m) {
+      if(!personal.showTx) return; // the switch is still turning on
+      focusRef.current = null;
+      noticeRef.current?.('That transaction is outside the market history available.');
+      return;
+    }
+    focusRef.current = null;
+    setSel({ key: m.key, txId: f.id });
+    setPanel({ kind: 'detail', id: f.id });
+    adapter.scrollToTime(m.t);
+  }, [loading, view, adapter, markers, personal.showTx, interval]);
 
   // The forming bucket has closed: fetch it as a completed candle plus the new forming one.
   useEffect(() => {
@@ -6643,6 +7113,13 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
       case 'ArrowRight': next = cur + (e.shiftKey ? 10 : 1); break;
       case 'Home': next = 0; break;
       case 'End': next = n - 1; break;
+      case 'Enter': { // the marker on the inspected candle, if there is one
+        const t = display[cur].t;
+        const m = [...markersRef.current.values()].filter(x => x.t === t)
+          .sort((a, b) => (a.category === 'TRANSFER') - (b.category === 'TRANSFER'))[0];
+        if(m) { e.preventDefault(); openMarker(m); }
+        return;
+      }
       case '+': case '=': e.preventDefault(); adapter.zoom(0.8); return;
       case '-': case '_': e.preventDefault(); adapter.zoom(1.25); return;
       case 'Escape':
@@ -6700,6 +7177,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const ariaLabel = hasCandles
     ? `BTC/USD ${MARKET_INTERVAL_NAMES[view.interval]} candles, ${MARKET_RANGE_NAMES[view.range] || view.range}. Last close ${fmtUSD(lastClose)}`
       + (rangeReturnPct != null ? `, return over the candles shown ${rangeReturnPct >= 0 ? '+' : '−'}${Math.abs(rangeReturnPct).toFixed(1)} %.` : '.')
+      + (markedCount ? ` ${markedCount} of your transactions ${markedCount === 1 ? 'is' : 'are'} marked; press Enter on a candle to open its marker.` : '')
     : 'BTC/USD candlestick chart — no data shown yet.';
 
   const rangeOptions = Candles.RANGES.map(r => ({ value: r, label: r }));
@@ -6721,6 +7199,17 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
       Indicators{indicatorCount ? <span className="mkt-count" aria-hidden="true">{indicatorCount}</span> : null}
     </button>
   );
+  const txButtons = (
+    <div className="mkt-group">
+      <button type="button" className="mkt-btn" aria-pressed={personal.showTx} data-toggle-tx="1"
+        onClick={() => updatePrefs(p => ({ ...p, personal: { ...p.personal, showTx: !p.personal.showTx } }))}>My Transactions</button>
+      <button type="button" className="mkt-btn" aria-haspopup="dialog" aria-label="My Transactions options" title="Filters, Average Acquisition Price line, BTC Balance"
+        onClick={() => setTxSheet(true)} data-open-tx-options="1">{Icon.ChevronDown({width:15,height:15})}</button>
+    </div>
+  );
+  const paneLimitNote = narrow && !expanded
+    ? `At most ${maxPanes} panes fit on this screen. Turn an indicator pane off first, or expand the chart for up to four.`
+    : `At most ${maxPanes} panes at once. Turn an indicator pane off first.`;
   const navButtons = (
     <>
       <button type="button" className="mkt-btn" onClick={() => adapter?.zoom(0.8)} aria-label="Zoom in" title="Zoom in" disabled={!hasCandles}>+</button>
@@ -6761,6 +7250,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
       <div className="mkt-scroll" role="toolbar" aria-label="Chart controls">
         <MarketRadioGroup label="Interval" options={intervalOptions} value={interval} onChange={chooseInterval} />
         <div className="mkt-group">{scaleButton}{indicatorsButton}</div>
+        {txButtons}
         <div className="mkt-group">{navButtons}</div>
         <div className="mkt-group">
           <button type="button" className="mkt-btn" onClick={() => setExpanded(true)} aria-label="Expand chart" title="Expand chart">{Icon.Expand({width:15,height:15})}</button>
@@ -6782,6 +7272,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         <div className="mkt-shell-bar mkt-scroll">
           <span className="mkt-shell-title">BTC / USD · {range} · {interval}{btcPrice ? ` · ${fmtUSD(btcPrice)}` : ''}</span>
           <div className="mkt-group">{scaleButton}{indicatorsButton}</div>
+          {txButtons}
           <div className="mkt-group">{navButtons}</div>
           <div className="mkt-group">
             <button type="button" className="mkt-btn" onClick={() => setExpanded(false)} aria-label="Close expanded chart">{Icon.X({width:15,height:15})}</button>
@@ -6825,6 +7316,14 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
               {shownForming ? <span className="mkt-prov-note" title="The candle is still forming, so these values will change">provisional<span className="mkt-sr"> indicator values: the candle is still forming</span></span> : null}
             </div>
           ) : null}
+          {selMarker ? (
+            <div className="mkt-readout-sel" data-readout-marker={selMarker.key}>
+              <span className="mkt-sel-dot" style={{background: mktMarkerColor(theme, selMarker.category, false)}} aria-hidden="true" />
+              Selected: {selMarker.count} {selMarker.count === 1 ? MKT_MARKER[selMarker.category].one : MKT_MARKER[selMarker.category].many}
+              {' · '}{mktCandleWhen(selMarker.t, view?.interval || interval)}{' · '}<b className="mkt-private">{mktBtc(selMarker.sats)}</b>
+              {selMarker.estimated ? <span className="mkt-stat-sub" style={{display:'inline'}}> · position estimated</span> : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="mkt-chart-wrap" data-panes={shownPaneKeys.length}>
@@ -6833,6 +7332,17 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
             data-interval={view?.interval || interval} data-scale={scale} data-forming={view?.formingIndex ?? -1}
             data-from={view?.fromSec ?? ''} data-volume={prefs.volume ? 1 : 0} />
           {chartState !== 'library-error' && chartState !== 'library-loading' ? paneLayout.map(l => {
+            if(l.id === 'balance') {
+              const b = shownIdx >= 0 ? balanceSats[shownIdx] : null;
+              return (
+                <div key={l.id} className="mkt-pane-legend" style={{top: l.top + 4}} data-pane-legend="balance">
+                  <span className="mkt-pane-title">BTC Balance{scope ? ' · selected wallets' : ''}</span>
+                  <b className="mkt-private" style={{color: balanceColor}} data-balance-sats={b ? b.sats : ''}>{b ? mktBtc(b.sats) : '—'}</b>
+                  <button type="button" className="mkt-pane-close" aria-label="Hide BTC Balance" title="Hide BTC Balance"
+                    onClick={() => updatePrefs(p => ({ ...p, personal: { ...p.personal, balancePane: false } }))}>×</button>
+                </div>
+              );
+            }
             const s = paneSpecs.find(x => x.key === l.id);
             if(!s) return null;
             const vals = indicatorValues[s.key];
@@ -6886,11 +7396,39 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         </div>
       </div>
       {summary ? <MarketSummaryView s={summary} rangeName={MARKET_RANGE_NAMES[view.range] || view.range} interval={view.interval} /> : null}
+      <MarketActivityView hasTx={hasTx} aap={aap} price={btcPrice} range={rangeSum} scoped={!!scope}
+        rangeName={view ? MARKET_RANGE_NAMES[view.range] || view.range : ''} />
       {sheet ? (
         <MarketSheet title="Indicators" onClose={() => setSheet(false)}>
-          <MarketIndicatorPanel prefs={prefs} update={updatePrefs} maxPanes={maxPanes} narrow={narrow} />
+          <MarketIndicatorPanel prefs={prefs} update={updatePrefs} maxPanes={maxPanes} narrow={narrow} otherPanes={balanceOn ? 1 : 0} />
         </MarketSheet>
       ) : null}
+      {txSheet ? (
+        <MarketSheet title="My Transactions" onClose={() => setTxSheet(false)}>
+          <MarketTxPanel personal={personal} update={updatePrefs} walletNames={walletNames}
+            canAddPane={paneSpecs.length < maxPanes} paneNote={paneLimitNote} />
+        </MarketSheet>
+      ) : null}
+      {panel ? (() => {
+        const close = () => setPanel(null);
+        if(panel.kind === 'list') {
+          const m = markers.get(panel.key);
+          if(!m) return null;
+          const rows = m.ids.map(id => rowById.get(id)).filter(Boolean);
+          return (
+            <MarketSheet title={`${m.count} ${MKT_MARKER[m.category].many} · ${mktCandleWhen(m.t, view?.interval || interval)}`} onClose={close} className={hideValues ? 'mkt-values-hidden' : ''}>
+              <MarketMarkerList rows={rows} txById={txById} onPick={id => { setSel({ key: m.key, txId: id }); setPanel({ kind: 'detail', id }); }} />
+            </MarketSheet>
+          );
+        }
+        const row = rowById.get(panel.id), tx = txById.get(panel.id);
+        if(!row || !tx) return null;
+        return (
+          <MarketSheet title={MKT_CATEGORY_TEXT[row.category]} onClose={close} className={hideValues ? 'mkt-values-hidden' : ''}>
+            <MarketTxDetail row={row} tx={tx} onView={viewTransaction} />
+          </MarketSheet>
+        );
+      })() : null}
       <div className="mkt-sr" aria-live="polite">{announce}</div>
     </div>
   );
@@ -7023,6 +7561,9 @@ function App() {
   });
   // Harvest view: wallet and price are the user's choice; until they touch them the wallet is
   // Bitkey (else the first active wallet) and the price is the current one.
+  // "View on Chart": the transaction to focus on the Market tab. React state only — never the
+  // URL or storage. `n` makes a second request for the same transaction a new one.
+  const [marketFocus, setMarketFocus] = useState(null);
   const [harvestWalletPick, setHarvestWalletPick] = useState('');
   const [harvestPricePick, setHarvestPricePick] = useState(null);
   const [isMobileViewport, setIsMobileViewport] = useState(() => window.innerWidth <= 768);
@@ -8409,6 +8950,15 @@ function App() {
     setEditId(tx.id ?? null);
     setShowModal(true);
   };
+  // Between the ledger and the Market chart, in both directions. The Market tab has no editor of
+  // its own: "View Transaction" opens this one.
+  const handleViewOnChart = tx => { setMarketFocus({ id: tx.id, n: Date.now() }); setTab('market'); };
+  const handleViewTransaction = id => {
+    const tx = transactionsRef.current.find(t => t.id === id);
+    if(!tx) { showToast('That transaction no longer exists.'); return; }
+    setTab('transactions');
+    handleEdit(tx);
+  };
   // A new transaction pre-filled from an existing one: the next DCA buy is usually the same
   // wallet and amount. Dated today; the txhash is cleared because it identifies one on-chain
   // transaction and can't repeat.
@@ -8943,11 +9493,14 @@ function App() {
         </aside>
 
         <main className="main" style={effectiveSettings.bgDots===false?{backgroundImage:'none'}:{}}>
-        {/* ── MARKET ── market data only; no transaction reaches it */}
+        {/* ── MARKET ── transactions are passed read-only; the view never writes them */}
         {tab==='market' && (
           <MarketErrorBoundary>
             <MarketView theme={theme} btcPrice={btcPrice} priceUpdatedAt={priceUpdatedAt}
-              storedPrefs={settings.market} onPrefsChange={marketPrefsChange} />
+              storedPrefs={settings.market} onPrefsChange={marketPrefsChange}
+              transactions={transactions} wallets={wallets} hideValues={!!effectiveSettings.hideValues}
+              focusTx={marketFocus} onFocusDone={() => setMarketFocus(null)}
+              onViewTransaction={handleViewTransaction} onNotice={showToast} />
           </MarketErrorBoundary>
         )}
 
@@ -9163,6 +9716,7 @@ function App() {
                           </div>
                           <div style={{display:'flex',gap:'.25rem'}}>
                             <button className="btn-icon" style={{width:32,height:32}} onClick={()=>handleEdit(tx)} title="Edit" aria-label={`Edit ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Edit({width:13,height:13})}</button>
+                            <button className="btn-icon" style={{width:32,height:32}} onClick={()=>handleViewOnChart(tx)} title="View on Chart" data-view-on-chart={tx.id} aria-label={`View ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)} on the Market chart`}>{Icon.ChartPoint({width:13,height:13})}</button>
                             <button className="btn-icon" style={{width:32,height:32}} onClick={()=>handleDuplicate(tx)} title="Duplicate" aria-label={`Duplicate ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Copy({width:13,height:13})}</button>
                             <button className="btn-icon btn-icon-danger" style={{width:32,height:32}} onClick={()=>handleDelete(tx)} title="Delete" aria-label={`Delete ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Trash({width:13,height:13})}</button>
                           </div>
@@ -9256,6 +9810,7 @@ function App() {
                             <td>
                               <div style={{display:'flex',gap:'.25rem'}}>
                                 <button className="btn-icon" onClick={()=>handleEdit(tx)} title="Edit" aria-label={`Edit ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Edit()}</button>
+                                <button className="btn-icon" onClick={()=>handleViewOnChart(tx)} title="View on Chart" data-view-on-chart={tx.id} aria-label={`View ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)} on the Market chart`}>{Icon.ChartPoint()}</button>
                                 <button className="btn-icon" onClick={()=>handleDuplicate(tx)} title="Duplicate" aria-label={`Duplicate ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Copy()}</button>
                                 <button className="btn-icon btn-icon-danger" onClick={()=>handleDelete(tx)} title="Delete" aria-label={`Delete ${tx.type} of ${fmtBTC(tx.amount)} ${btcUnit()} on ${fmtDate(tx.date)}`}>{Icon.Trash()}</button>
                               </div>
