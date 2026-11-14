@@ -670,7 +670,7 @@ mobile polish, VWAP, presets, exports or any item from the deferred list.
 
 ---
 
-## Phase 9 — Mobile/accessibility/offline/hardening
+## ✅ Phase 9 — Mobile/accessibility/offline/hardening
 
 **Objective.** Bring the feature to release quality on phones, for keyboard and screen-reader
 users, and offline; then document and version it.
