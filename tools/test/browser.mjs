@@ -771,9 +771,10 @@ console.log('\n[Market candle store]');
     return rows.reverse();
   };
   const requests = [];
-  let failCandles = false, failVendor = false;
+  let failCandles = false, failVendor = false, netDown = false; // netDown: API requests fail like a lost connection
   on('Fetch.requestPaused', p => {
     const url = p.request.url;
+    if (netDown && !url.includes('/vendor/')) { send('Fetch.failRequest', { requestId: p.requestId, errorReason: 'InternetDisconnected' }); return; }
     if (url.includes('/vendor/lightweight-charts')) {
       send(failVendor ? 'Fetch.failRequest' : 'Fetch.continueRequest',
         failVendor ? { requestId: p.requestId, errorReason: 'Failed' } : { requestId: p.requestId });
@@ -1426,6 +1427,311 @@ console.log('\n[Market candle store]');
   await show('Market'); await wait(300);
   await evaluate(`[...document.querySelectorAll('.mkt-overlay button')].find(b => b.textContent === 'Retry')?.click(); return 1;`);
   check('Retry loads the library and draws the chart', !!(await ready()));
+
+  // ── Phase 9: phones, keyboard, screen readers, offline, load ──
+  const PHONE = { width: 390, height: 844, deviceScaleFactor: 1, mobile: true };
+  const LANDSCAPE = { width: 844, height: 390, deviceScaleFactor: 1, mobile: true, screenOrientation: { type: 'landscapePrimary', angle: 90 } };
+  const phone = async (m = PHONE) => {
+    await send('Emulation.setDeviceMetricsOverride', { ...m, screenOrientation: m.screenOrientation || { type: 'portraitPrimary', angle: 0 } });
+    await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });
+    await wait(700);
+  };
+  const desktop = async () => {
+    await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+    await send('Emulation.clearDeviceMetricsOverride');
+    await wait(500);
+  };
+  const chartBox = () => evaluate(`const r = document.querySelector('.mkt-chart').getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height };`);
+  const swipe = async (x, y, dx, dy, steps = 10) => {
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: Math.round(x), y: Math.round(y) }] });
+    for (let i = 1; i <= steps; i++) {
+      await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: Math.round(x + dx * i / steps), y: Math.round(y + dy * i / steps) }] });
+      await wait(16);
+    }
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  const visible = () => evaluate(`const v = (document.querySelector('.mkt-chart').dataset.visible || '').split(',').map(Number); return v.length === 2 ? { from: v[0], to: v[1] } : null;`);
+
+  console.log('\n[Market on a phone, portrait]');
+  await seed({ 'btc-tx-v2': PTX, 'btc-wallets': WALLETS });
+  await evaluate(`history.replaceState(null, '', '#market?range=1y&interval=1d&rsi=14&macd=12,26,9&atr=14'); return 1;`);
+  await phone();
+  await reload();
+  await ready(`c.dataset.range === '1Y'`);
+  await wait(500);
+  const nav = await evaluate(`const row = document.querySelector('.mobile-bottom-nav-row'), a = row.querySelector('.mobile-bottom-nav-item.active');
+    const r = row.getBoundingClientRect(), b = a.getBoundingClientRect();
+    return { label: a.getAttribute('aria-label'), inView: b.left >= r.left - 1 && b.right <= r.right + 1, scrolls: row.scrollWidth > row.clientWidth };`);
+  check('bottom nav scrolls and the active Market item is in view', nav?.label === 'Market' && nav.inView && nav.scrolls, JSON.stringify(nav));
+  const tbar = await evaluate(`const t = document.querySelector('.mkt-scroll[role=toolbar]'), r = t.getBoundingClientRect();
+    const btns = [...t.querySelectorAll('button')].filter(b => b.offsetParent);
+    const small = btns.map(b => b.getBoundingClientRect()).filter(x => x.width < 44 || x.height < 44).length;
+    let tight = 0; // neighbours closer than 8 px
+    const rects = btns.map(b => b.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+    for(let i = 1; i < rects.length; i++) if(rects[i].left - rects[i - 1].right < 7.5) tight++;
+    return { scrolls: t.scrollWidth > t.clientWidth, oneRow: r.height < 60, small, tight, pageScrollsSideways: document.documentElement.scrollWidth > innerWidth };`);
+  check('the toolbar is one sideways-scrolling row', tbar?.scrolls && tbar.oneRow, JSON.stringify(tbar));
+  check('every toolbar control is at least 44 × 44 px with 8 px between them', tbar?.small === 0 && tbar.tight === 0, JSON.stringify(tbar));
+  check('the page itself does not scroll sideways', tbar?.pageScrollsSideways === false);
+  check('portrait shows at most two panes', await evaluate(`return document.querySelector('.mkt-chart-wrap').dataset.panes === '2';`));
+
+  // Indicator sheet: focus trapped, closed by drag, backdrop and button.
+  const sheetOpen = () => evaluate(`return !!document.querySelector('[data-market-sheet]');`);
+  await evaluate(`const b = document.querySelector('[data-open-indicators]'); b.focus(); b.click(); return 1;`); await wait(300);
+  let escaped = false;
+  for (let i = 0; i < 40; i++) {
+    await press('Tab', 'Tab');
+    if (!(await evaluate(`return !!document.activeElement.closest('[data-market-sheet]');`))) { escaped = true; break; }
+  }
+  const sheetGeo = await evaluate(`const s = document.querySelector('[data-market-sheet]').getBoundingClientRect(); return { b: s.bottom, w: s.width, h: s.height, iw: innerWidth, ih: innerHeight };`);
+  check('the indicator sheet is a bottom sheet that traps focus', !escaped && Math.abs(sheetGeo.b - sheetGeo.ih) < 2 && Math.abs(sheetGeo.w - sheetGeo.iw) < 2 && sheetGeo.h <= sheetGeo.ih * 0.86, JSON.stringify({ escaped, ...sheetGeo }));
+  const grip = await evaluate(`const g = document.querySelector('[data-sheet-handle]').getBoundingClientRect(); return { x: g.left + g.width / 2, y: g.top + g.height / 2, h: g.height };`);
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: grip.x, y: grip.y }] });
+  await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: grip.x, y: grip.y + 30 }] }); await wait(30);
+  await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: grip.x, y: grip.y + 40 }] }); await wait(250);
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await wait(300);
+  check('a short drag on the handle springs back', await sheetOpen() && await evaluate(`return document.querySelector('[data-market-sheet]').style.transform === '';`));
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: grip.x, y: grip.y }] });
+  for (let dy = 30; dy <= 150; dy += 30) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: grip.x, y: grip.y + dy }] }); await wait(30); }
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await wait(300);
+  check('dragging the handle down closes the sheet and returns focus', !(await sheetOpen())
+    && await evaluate(`return document.activeElement?.dataset.openIndicators === '1';`), await evaluate(`return document.activeElement?.outerHTML.slice(0, 80);`));
+  await evaluate(`document.querySelector('[data-open-indicators]').click(); return 1;`); await wait(300);
+  await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: 195, y: 20, button: 'left', clickCount: 1 });
+  await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 195, y: 20, button: 'left', clickCount: 1 }); await wait(300);
+  check('the backdrop closes the sheet', !(await sheetOpen()));
+  await evaluate(`document.querySelector('[data-open-indicators]').click(); return 1;`); await wait(300);
+  await evaluate(`document.querySelector('[data-market-sheet] .mkt-sheet-head button[aria-label="Close"]').click(); return 1;`); await wait(300);
+  check('the close button closes the sheet', !(await sheetOpen()));
+
+  // Readout at 360 px: three lines at most, and the same height idle and while inspecting.
+  await phone({ ...PHONE, width: 360 });
+  const readoutAt = () => evaluate(`const r = document.querySelector('[data-readout]');
+    const tops = new Set([...r.children].filter(e => !e.matches('.mkt-readout-ind, .mkt-readout-sel')).map(e => Math.round(e.getBoundingClientRect().top)));
+    return { lines: tops.size, h: Math.round(r.getBoundingClientRect().height), sideways: document.documentElement.scrollWidth > innerWidth };`);
+  const idle = await readoutAt();
+  await evaluate(`document.querySelector('.mkt-chart').focus(); return 1;`);
+  await key('ArrowLeft', 'ArrowLeft', 37); await wait(200);
+  const inspecting = await readoutAt();
+  check('at 360 px the readout fits three lines and does not jump', idle.lines <= 3 && inspecting.lines <= 3 && idle.h === inspecting.h && !idle.sideways,
+    JSON.stringify([idle, inspecting]));
+  await key('Escape', 'Escape', 27); await wait(150);
+  check('"Average Acquisition Price" is written out in full at 360 px', await evaluate(`return [...document.querySelectorAll('[data-my-activity] dt')].some(d => d.textContent === 'Average Acquisition Price');`));
+  await phone();
+
+  // Touch: a vertical swipe on the chart scrolls the page; a horizontal one pans; a pinch zooms;
+  // a long press inspects without scrolling the page.
+  await evaluate(`window.scrollTo(0, 0); document.querySelector('.mkt-chart').scrollIntoView({ block: 'center' }); return 1;`); await wait(300);
+  let box2 = await chartBox();
+  const t0 = await evaluate(`return document.querySelector('[data-readout]').dataset.t;`);
+  const sy = await evaluate(`return Math.round(scrollY);`);
+  const lx = Math.round(box2.x + box2.w * 0.5), ly = Math.round(box2.y + box2.h * 0.3);
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lx, y: ly, id: 1 }] });
+  await wait(700);
+  for (let i = 1; i <= 6; i++) { await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: lx - i * 12, y: ly + i * 10, id: 1 }] }); await wait(40); }
+  const tl = await evaluate(`return document.querySelector('[data-readout]').dataset.t;`);
+  const sy2 = await evaluate(`return Math.round(scrollY);`);
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await wait(200);
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: lx, y: ly, id: 2 }] }); // the next tap ends inspection
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); await wait(300);
+  check('a long press inspects a candle and does not scroll the page', tl && tl !== t0 && sy2 === sy, JSON.stringify({ t0, tl, sy, sy2 }));
+  await evaluate(`window.scrollTo(0, 0); document.querySelector('.mkt-chart').scrollIntoView({ block: 'center' }); return 1;`); await wait(300);
+  box2 = await chartBox();
+  const y0 = await evaluate(`return Math.round(scrollY);`);
+  await swipe(box2.x + box2.w / 2, box2.y + box2.h * 0.6, 0, -220);
+  await wait(500);
+  const y1 = await evaluate(`return Math.round(scrollY);`);
+  check('a vertical swipe that starts on the chart scrolls the page', y1 > y0 + 50, `${y0} → ${y1}`);
+  await evaluate(`document.querySelector('.mkt-chart').scrollIntoView({ block: 'center' }); return 1;`); await wait(300);
+  box2 = await chartBox();
+  const v0 = await visible();
+  await swipe(box2.x + box2.w * 0.3, box2.y + box2.h * 0.3, 200, 0);
+  await wait(900);
+  const v1 = await visible();
+  check('a horizontal swipe pans the chart', v0 && v1 && v1.from < v0.from - 5, JSON.stringify([v0, v1]));
+  await send('Input.synthesizePinchGesture', { x: Math.round(box2.x + box2.w / 2), y: Math.round(box2.y + box2.h * 0.3), scaleFactor: 2.5, gestureSourceType: 'touch', relativeSpeed: 400 });
+  await wait(700);
+  const v2 = await visible();
+  check('a pinch zooms the time axis', v1 && v2 && (v2.to - v2.from) < (v1.to - v1.from) * 0.8, JSON.stringify([v1, v2]));
+  check('no floating tooltip covers the chart', await evaluate(`return ![...document.querySelectorAll('.mkt-chart-wrap [role=tooltip], .mkt-chart-wrap .tooltip')].length;`));
+
+  console.log('\n[Market on a phone, landscape]');
+  await phone(LANDSCAPE);
+  const land = await waitFor(`const s = document.querySelector('.mkt-shell'); return s.classList.contains('expanded') && {
+      nav: getComputedStyle(document.querySelector('.mobile-bottom-nav')).display,
+      readoutInChart: !!document.querySelector('.mkt-chart-wrap [data-readout]'),
+      chartH: Math.round(document.querySelector('.mkt-chart').getBoundingClientRect().height),
+      bars: [...s.querySelectorAll('.mkt-shell-bar')].map(b => Math.round(b.getBoundingClientRect().height)),
+      panes: document.querySelector('.mkt-chart-wrap').dataset.panes };`, 5000);
+  check('turning a phone sideways opens the full-viewport chart by itself', !!land, JSON.stringify(land));
+  check('…with the bottom navigation hidden and one compact toolbar row', land?.nav === 'none' && land.bars.length === 1 && land.bars[0] <= 52, JSON.stringify(land));
+  check('…the chart filling the height and the readout over the price pane', land?.chartH >= 390 - land.bars[0] - 40 && land.readoutInChart, JSON.stringify(land));
+  check('…and up to four panes', land?.panes === '3', JSON.stringify(land));
+  const ro = await evaluate(`const r = document.querySelector('[data-readout]').getBoundingClientRect(), c = document.querySelector('.mkt-chart').getBoundingClientRect();
+    return { left: r.left - c.left, right: c.right - r.right, h: r.height, pe: getComputedStyle(document.querySelector('[data-readout]')).pointerEvents };`);
+  check('the landscape readout is one line at the left, clear of the newest candles, and takes no touches', ro.h < 30 && ro.left < 10 && ro.right > 100 && ro.pe === 'none', JSON.stringify(ro));
+  await evaluate(`const s = document.querySelector('[data-expanded-range]'); s.value = '3M'; s.dispatchEvent(new Event('change', { bubbles: true })); return 1;`);
+  check('the compact range picker changes the range', !!(await ready(`c.dataset.range === '3M'`)));
+  await phone();
+  check('turning back to portrait closes an overlay that opened by itself', await waitFor(`return !document.querySelector('.mkt-shell.expanded');`, 3000)
+    && (await chart())?.range === '3M');
+  await evaluate(`document.querySelector('button[aria-label="Expand chart"]').click(); return 1;`); await wait(300);
+  await phone(LANDSCAPE);
+  await phone();
+  check('an overlay the user opened stays open through rotation', await evaluate(`return !!document.querySelector('.mkt-shell.expanded');`));
+  await press('Escape', 'Escape'); await wait(300);
+  check('closing it keeps the range and interval', !(await evaluate(`return !!document.querySelector('.mkt-shell.expanded');`)) && (await chart())?.range === '3M');
+  await radio('Range', '1Y'); await ready(`c.dataset.range === '1Y'`);
+  await desktop();
+
+  console.log('\n[Market keyboard and screen readers]');
+  await evaluate(`document.querySelector('.mkt-chart').focus(); return 1;`);
+  await key('ArrowLeft', 'ArrowLeft', 37);
+  const live = await waitFor(`const t = document.querySelector('.mkt-sr[aria-live=polite]')?.textContent; return /open \\$/.test(t || '') && t;`, 3000);
+  check('arrow keys on the chart are announced in a polite live region', !!live, live);
+  check('the chart is an image with a description of what it shows', await evaluate(`const c = document.querySelector('.mkt-chart');
+    return c.getAttribute('role') === 'img' && /BTC\\/USD daily candles, 1 year\\. Last close \\$/.test(c.getAttribute('aria-label')) && /of your transactions are marked/.test(c.getAttribute('aria-label'));`),
+    await evaluate(`return document.querySelector('.mkt-chart').getAttribute('aria-label');`));
+  await key('Escape', 'Escape', 27);
+  // Tab through the Market controls: each takes focus and shows a focus ring.
+  await evaluate(`document.querySelector('.mkt-header').setAttribute('tabindex', '-1'); document.querySelector('.mkt-header').focus(); return 1;`);
+  const rings = [];
+  for (let i = 0; i < 18; i++) {
+    await press('Tab', 'Tab');
+    rings.push(await evaluate(`const a = document.activeElement; if(!a.closest('.mkt')) return null; const s = getComputedStyle(a);
+      return { el: (a.getAttribute('aria-label') || a.textContent).slice(0, 20), fv: a.matches(':focus-visible'), o: s.outlineStyle + ' ' + s.outlineWidth, ring: (s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) >= 1.5) || /rgb/.test(s.boxShadow) };`));
+  }
+  const reached = rings.filter(Boolean);
+  check('Market controls are reachable by Tab and show a visible focus ring', reached.length >= 10 && reached.every(r => r.ring), JSON.stringify(reached.filter(r => !r.ring).slice(0, 4)));
+  await evaluate(`document.querySelector('.mkt-header').removeAttribute('tabindex'); return 1;`);
+
+  console.log('\n[Market "View as table"]');
+  await evaluate(`document.querySelector('[data-open-tx-table]').click(); return 1;`); await wait(300);
+  const tbl = await evaluate(`const t = document.querySelector('[data-tx-table]'); if(!t) return null;
+    return { n: t.dataset.txTable, ids: [...t.querySelectorAll('tr[data-table-tx]')].map(r => r.dataset.tableTx), caption: !!t.querySelector('caption'),
+      headers: t.querySelectorAll('th[scope=col]').length, focus: t.closest('[data-market-sheet]').contains(document.activeElement) };`);
+  check('"View as table" lists every transaction marked in the visible range', tbl && JSON.stringify(tbl.ids) === JSON.stringify(['pb1', 'pd1', 'pb2', 'pb3', 'pr1', 'ps1']), JSON.stringify(tbl));
+  check('…as a table with a caption and column headers, in a dialog', tbl?.caption && tbl.headers === 5 && tbl.focus, JSON.stringify(tbl));
+  await key('End', 'End', 35); // nothing: focus is in the sheet, not on the chart
+  await press('Escape', 'Escape'); await wait(250);
+  await evaluate(`document.querySelector('.mkt-chart').focus(); return 1;`);
+  for (let i = 0; i < 5; i++) { await key('+', 'Equal', 187); await wait(60); }
+  await evaluate(`document.querySelector('[data-open-tx-table]').click(); return 1;`); await wait(300);
+  const zoomed = await evaluate(`return [...document.querySelectorAll('tr[data-table-tx]')].map(r => r.dataset.tableTx);`);
+  check('zoomed in, the table follows the visible range', zoomed.length < 6 && zoomed.every(id => ['pb1', 'pd1', 'pb2', 'pb3', 'pr1', 'ps1'].includes(id)), JSON.stringify(zoomed));
+  await press('Escape', 'Escape'); await wait(200);
+  await evaluate(`document.querySelector('[data-market-view] button[title="Back to the selected range"]').click(); return 1;`); await wait(400);
+  await evaluate(`document.querySelector('[data-open-tx-table]').click(); return 1;`); await wait(300);
+  await evaluate(`document.querySelector('[data-table-view="ps1"]').click(); return 1;`); await wait(500);
+  const fromTable = await evaluate(`const m = document.querySelector('.modal[role=dialog]'); return { title: document.querySelector('.page-title').textContent, modal: m?.querySelector('.modal-title')?.textContent };`);
+  check('"View Transaction" in the table opens the existing editor', fromTable.title === 'Transactions' && fromTable.modal === 'Edit Transaction', JSON.stringify(fromTable));
+  await press('Escape', 'Escape'); await wait(300);
+
+  console.log('\n[Market contrast in both themes]');
+  await show('Market'); await ready();
+  const contrast = async theme => { await evaluate(`document.documentElement.setAttribute('data-theme', '${theme}'); return 1;`); await wait(800); return evaluate(`
+    const lum = c => { const m = c.match(/[\\d.]+/g).map(Number); const v = m.slice(0, 3).map(x => x / 255).map(x => x <= .03928 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4);
+      return .2126 * v[0] + .7152 * v[1] + .0722 * v[2]; };
+    const hex = h => 'rgb(' + [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16)).join(',') + ')';
+    const ratio = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + .05) / (Math.min(x, y) + .05); };
+    const bgOf = el => { for(let e = el; e; e = e.parentElement) { const b = getComputedStyle(e).backgroundColor; if(/^rgb\\(/.test(b)) return b; } return getComputedStyle(document.body).backgroundColor; }; // the first opaque background
+    const bad = [];
+    const sel = '.mkt-legal, .mkt-stat dt, .mkt-stat dd, .mkt-stat-sub, .mkt-btn:not(:disabled), .mkt-fresh, .mkt-readout, .mkt-readout b, .mkt-ind-short, .mkt-up, .mkt-down, .mkt-pane-title, .mkt-badge, .mkt-count, .mkt-pair, .mkt-change, .mkt-acq-table th, .mkt-acq-table td';
+    for(const el of document.querySelectorAll('[data-market-view] :is(' + sel + ')')) {
+      if(!el.offsetParent || !el.textContent.trim()) continue;
+      const r = ratio(getComputedStyle(el).color, bgOf(el));
+      if(r < 4.5) bad.push(el.className + ' "' + el.textContent.trim().slice(0, 16) + '" ' + r.toFixed(2));
+    }
+    // Essential chart lines and text against the chart surface.
+    const surface = bgOf(document.querySelector('.mkt-chart'));
+    const col = MKT_COLORS['${theme}'], pal = CHART_PALETTES['${theme}'], mk = MKT_MARKER_COLORS['${theme}'];
+    const lines = { text: pal.text, up: pal.up, down: pal.down, ...Object.fromEntries(Object.entries(col.sma).map(([k, v]) => ['sma' + k, v])),
+      ...Object.fromEntries(Object.entries(col.ema).map(([k, v]) => ['ema' + k, v])), bb: col.bb, bbMid: col.bbMid, rsi: col.rsi, macd: col.macd,
+      signal: col.signal, atr: col.atr, hv: col.hv, aap: mk.aap, balance: mk.balance };
+    for(const [k, v] of Object.entries(lines)) { const r = ratio(hex(v), surface); if(r < 4.5) bad.push(k + ' ' + v + ' ' + r.toFixed(2)); }
+    return bad;`); };
+  const themeBefore = await evaluate(`return document.documentElement.getAttribute('data-theme');`);
+  const badLight = await contrast('light'), badDark = await contrast('dark');
+  check('Market text and essential lines reach 4.5:1 in the light theme', badLight.length === 0, badLight.join(' | '));
+  check('…and in the dark theme', badDark.length === 0, badDark.join(' | '));
+  await evaluate(`document.documentElement.setAttribute('data-theme', ${JSON.stringify(themeBefore)}); return 1;`);
+
+  console.log('\n[Market offline]');
+  await radio('Range', '1Y'); await ready(`c.dataset.range === '1Y'`); await wait(500);
+  // Interception sits in front of the emulated network, so it fails the requests itself.
+  netDown = true;
+  await send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  await show('Dashboard'); await wait(300); await show('Market');
+  const off = await waitFor(`const c = document.querySelector('.mkt-chart'); return c && c.dataset.state === 'offline-cached' && +c.dataset.candles > 300 && {
+      banner: document.querySelector('.mkt-banner')?.textContent || '', forming: c.dataset.forming, readout: document.querySelector('[data-readout]').textContent };`, 20000);
+  check('offline with saved candles: the chart draws them under an offline banner', /^Offline — showing saved data from /.test(off?.banner || ''), JSON.stringify(off));
+  check('…and nothing saved is presented as live (no forming candle)', off?.forming === '-1' && !/forming/.test(off.readout), JSON.stringify(off));
+  await evaluate(`return MarketCandleStore.open().then(s => s.clear()).then(() => 1);`);
+  await show('Dashboard'); await wait(300); await show('Market');
+  const offEmpty = await waitFor(`const c = document.querySelector('.mkt-chart'); return c && c.dataset.state === 'offline' && document.querySelector('.mkt-overlay')?.textContent;`, 20000);
+  check('offline with nothing saved: a message instead of a chart', /offline and no market data is saved/.test(offEmpty || ''), offEmpty);
+  await show('Transactions'); await wait(300);
+  check('…and the other tabs work', await evaluate(`return document.querySelector('.page-title').textContent === 'Transactions' && document.querySelectorAll('.tx-table-wrap tr').length > 1;`));
+  netDown = false;
+  await send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+
+  console.log('\n[Clear cached market data]');
+  await show('Market'); await ready(); await wait(1500);
+  const storeCount = () => evaluate(`return new Promise(res => { const r = indexedDB.open('satledger-market'); r.onsuccess = () => {
+      const db = r.result, n = {}; const t = db.transaction([...db.objectStoreNames], 'readonly');
+      for(const s of db.objectStoreNames) t.objectStore(s).count().onsuccess = e => { n[s] = e.target.result; };
+      t.oncomplete = () => { db.close(); res(n); }; }; r.onerror = () => res(null); });`);
+  const beforeClear = await storeCount();
+  const lsBefore = await evaluate(`return JSON.stringify(Object.keys(localStorage).sort().map(k => [k, localStorage.getItem(k)]).filter(([k]) => !['btc-last-spot', 'btc-price-history-v1'].includes(k)));`);
+  await show('Settings'); await wait(300);
+  await evaluate(`document.querySelector('[data-clear-market-cache]').click(); return 1;`);
+  await waitFor(`return /Cached market data cleared/.test(document.body.innerText);`, 5000);
+  const afterClear = await storeCount();
+  const lsAfter = await evaluate(`return JSON.stringify(Object.keys(localStorage).sort().map(k => [k, localStorage.getItem(k)]).filter(([k]) => !['btc-last-spot', 'btc-price-history-v1'].includes(k)));`);
+  check('"Clear cached market data" empties satledger-market', beforeClear?.candles > 0 && afterClear && Object.values(afterClear).every(n => n === 0), JSON.stringify([beforeClear, afterClear]));
+  check('…and nothing else', lsBefore === lsAfter && JSON.parse(lsAfter).find(([k]) => k === 'btc-tx-v2')?.[1].includes('pb1'));
+  await show('Market');
+  check('the Market tab downloads the history again', !!(await ready()));
+
+  console.log('\n[Market with IndexedDB unavailable]');
+  {
+    const { identifier } = await send('Page.addScriptToEvaluateOnNewDocument', {
+      source: `IDBFactory.prototype.open = function(){ throw new DOMException('blocked by test', 'SecurityError'); };`,
+    });
+    await reload();
+    await show('Market');
+    check('the Market tab works for the session from memory', !!(await ready()) && (await evaluate(`return MarketCandleStore.open().then(s => s.kind);`)) === 'memory');
+    await radio('Range', '3M');
+    check('…including a range change', !!(await ready(`c.dataset.range === '3M'`)));
+    await radio('Range', '1Y'); await ready(`c.dataset.range === '1Y'`);
+    await send('Page.removeScriptToEvaluateOnNewDocument', { identifier });
+  }
+
+  console.log('\n[Market under load: 2,000 transactions]');
+  {
+    const many = [];
+    for (let i = 0; i < 2000; i++) {
+      const d = 1 + (i % 380), kind = i % 10;
+      many.push(tx({ id: 'load' + i, type: kind === 9 ? 'Sell' : kind === 8 ? 'Reward' : 'Buy', date: dayOf(d), datetimeUtc: at(d, (i * 7) % 24, (i * 13) % 60), sequence: 0,
+        amount: (0.0001 + (i % 50) / 10000).toFixed(8), price: kind === 8 ? '' : String(40000 + (i % 300) * 50), totalUsd: '', fee: '',
+        ...(kind === 8 ? { usdValueAtReceipt: '5.000000', usdValueSource: 'manual', rewardCategory: 'cash_back' } : {}) }));
+    }
+    await seed({ 'btc-tx-v2': many, 'btc-wallets': WALLETS });
+    await evaluate(`history.replaceState(null, '', '#market?range=1y&interval=1d'); return 1;`);
+    await reload();
+    await ready(`c.dataset.range === '1Y'`);
+    const m1 = await waitFor(`const n = +(document.querySelector('.mkt-chart').dataset.markers || 0); return n > 0 && n;`, 15000);
+    check('2,000 transactions draw within the marker cap', m1 > 0 && m1 <= 300, m1);
+    await radio('Range', '3M'); await ready(`c.dataset.range === '3M'`); // load 3M once, so the timed change is not network-bound
+    await radio('Range', '1Y'); await ready(`c.dataset.range === '1Y'`); await wait(300);
+    const t0 = Date.now();
+    await radio('Range', '3M');
+    await ready(`c.dataset.range === '3M' && +(c.dataset.markers || 0) > 0`);
+    const ms = Date.now() - t0;
+    check(`a range change with 2,000 transactions stays responsive (${ms} ms)`, ms < 4000, ms);
+    const lag = await evaluate(`return new Promise(res => { const t = performance.now(); setTimeout(() => res(Math.round(performance.now() - t)), 0); });`);
+    check('…and the main thread is free afterwards', lag < 200, lag);
+  }
 
   await send('Fetch.disable');
   await send('Network.setCacheDisabled', { cacheDisabled: false });

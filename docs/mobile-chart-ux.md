@@ -262,3 +262,29 @@ Portrait and landscape, on one Android-sized and one iPhone-sized viewport:
 Touch behaviour in §4 was verified against Lightweight Charts 5.3.0 at the start of Phase 4
 (2026-11-14, `docs/market-analytics.md` §7) and corrected there. It was verified from the
 library's typings and source; the on-device checks above are still required in Phase 9.
+
+### Phase 9 results (2026-11-14)
+
+Built as described, with these specifics:
+
+- Landscape (§8): a phone turned sideways (`(orientation: landscape) and (max-height: 500px) and
+  (max-width: 960px)`) opens the expanded overlay by itself; turning back closes it only if it
+  opened that way. Its single toolbar row carries the price, 24 h change, and compact native
+  `select`s for range and interval, then the same controls as the inline toolbar.
+- Sheets (§7): the grab bar is a 28 px drag zone on phones; a drag of 80 px or a quick flick closes
+  the sheet, less springs back.
+- "View as table" (§10) lists every transaction marked in the visible range (at most 500 rows,
+  with a note when there are more) with "Details" and "View Transaction".
+- Contrast (§10): the Market uses its own muted grey and light-theme green
+  (`--mkt-muted`, `--mkt-up`) and darker line colours where the app-wide ones fell below 4.5:1;
+  pressed toolbar buttons use dark text on orange. The browser test measures every Market text
+  element and every essential line colour in both themes.
+
+Checked automatically in headless Chrome with touch emulation at 390 × 844, 360 × 844 and
+844 × 390 (`tools/test/browser.mjs`, "Market on a phone"): bottom bar scroll and active item,
+toolbar row and 44 px targets, sheet focus trap and drag/backdrop/button dismissal, two panes in
+portrait and four in landscape, readout lines and height at 360 px, vertical swipe scrolls the
+page, horizontal swipe pans, pinch zooms, long press inspects, the automatic landscape overlay and
+rotation, keyboard inspection with the live region, offline with and without saved data. Not
+checkable in emulation and left for a check on real Android and iPhone hardware: double tap to
+fit, gesture feel, Safari's address-bar resizing, and legibility in sunlight.
