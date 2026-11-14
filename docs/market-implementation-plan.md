@@ -153,7 +153,7 @@ provider, a store, or any component.
 
 ---
 
-## Phase 2 — MarketData provider + IndexedDB store
+## ✅ Phase 2 — MarketData provider + IndexedDB store
 
 **Objective.** Fetch, page, cache and serve validated candles, with no UI.
 
