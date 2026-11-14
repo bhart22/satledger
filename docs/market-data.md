@@ -126,9 +126,18 @@ For each raw row:
 3. Build `{ t, o, h, l, c, v }` with `t` in seconds.
 4. Require `t % intervalSeconds === 0`. A misaligned bucket is rejected.
 
+`Candles.normalizeRow(row, interval, order)` returns `{ candle }` or `{ reason }`. `order` maps
+fields to column positions and defaults to `Candles.ROW_ORDER` (the Coinbase order above,
+pending verification). Blank strings, `null` and booleans are not coerced to numbers.
+`Candles.parseRows(rows, interval, order)` normalizes every row and then validates (§6),
+returning the same shape as `validate` with the reject limit measured over the raw row count.
+
 ## 6. Validation
 
-`Candles.validate(candles, interval)` returns `{ valid: Candle[], rejected: [{ row, reason }] }`.
+`Candles.validate(candles, interval)` returns
+`{ valid: Candle[], rejected: [{ row, reason }], overRejectLimit }`. `overRejectLimit` is true
+when more than `Candles.REJECT_LIMIT` (5 %) of the input was rejected. Valid candles are new
+`{ t, o, h, l, c, v }` objects (`v` defaults to `null`); the input is never mutated.
 
 Per candle, reject unless all hold:
 
@@ -158,6 +167,10 @@ page      = [pageIndex * pageSpan, (pageIndex + 1) * pageSpan)
 ```
 
 - A view needing `[from, to)` requests every page that intersects it, newest first.
+  `Candles.pagesFor(fromSec, toSec, interval, perPage)` returns them as
+  `{ index, startSec, endSec }`; `pageSpan`, `pageIndex` and `pageBounds` give the same
+  arithmetic. `perPage` is the provider's `maxCandlesPerRequest`. Only native intervals have
+  pages.
 - The service never issues a request whose bounds are not page boundaries.
 - Concurrency: at most 4 requests in flight. Pages are queued newest first so the visible
   right edge fills in first.
@@ -204,7 +217,13 @@ Default interval per range:
 An interval is offered for a range only if it passes both caps (§10) and
 `intervalSeconds < rangeSeconds`. `Candles.allowedIntervals(range, now, earliestSec)` returns the
 list; the UI disables the rest with a short reason. If a stored or URL-supplied interval is not
-allowed for the range, the range default is used.
+allowed for the range, the range default is used. `Candles.resolveInterval(range, requested, now,
+earliestSec)` applies this; if the default itself is not allowed (only possible for `YTD` in the
+first hours of 1 January) it returns the largest allowed interval below the default.
+
+All `Candles` functions take `now` as UTC seconds from the caller; nothing reads a clock. Before
+the earliest candle is discovered, `rangeStart('ALL', …)` returns `null` and
+`allowedIntervals('ALL', …)` returns `['1d', '1w']`.
 
 When the user changes range, the interval switches to the new range's default unless the
 current interval is allowed and was chosen explicitly for that range in this session.
@@ -218,8 +237,10 @@ Candles.MAX_NATIVE_CANDLES = 9000;   // native candles that must be fetched to b
 
 - `displayed = ceil(rangeSeconds / intervalSeconds)` must be `<= MAX_VIEW_CANDLES`.
 - `native = ceil(rangeSeconds / nativeSourceSeconds)` must be `<= MAX_NATIVE_CANDLES`.
-- **Exception:** `1d` is always allowed, for any range including `ALL`. Full daily history is
-  required anyway for weekly candles, long moving averages, previous ATH and transaction context.
+- **Exception:** `1d` is exempt from both caps, for any range including `ALL`. Full daily
+  history is required anyway for weekly candles, long moving averages, previous ATH and
+  transaction context. The exemption is from the caps only: like every interval, `1d` must
+  still be shorter than the range, so `1D` does not offer it.
 - Panning beyond the selected range loads at most one further page per pan gesture.
 
 Worked examples: `1D@1m` 1,440 displayed — allowed. `1W@1m` 10,080 — not allowed. `1Y@4h` 2,190
@@ -245,12 +266,19 @@ displayed — not allowed.
 - An aggregated candle carries `partial: true` when it has fewer source candles than expected
   for a completed bucket (a gap inside it). Partial completed candles are shown but excluded
   from indicator input (§13).
-- The newest aggregated bucket is forming if its end is in the future.
+- The newest aggregated bucket is forming if its end is in the future. The signature is
+  `aggregate(candles, target, source, { nowSec })`: a forming bucket is flagged `partial` only
+  when source buckets that have already started are missing. Without `nowSec` every bucket is
+  judged as completed. A `partial` source candle makes its target candle `partial`.
 
 ## 12. Gap detection
 
-`Candles.findGaps(candles, interval, { fromSec, toSec })` returns `[{ fromSec, toSec, missing }]`
-for each run of expected bucket starts with no candle.
+`Candles.findGaps(candles, interval, { fromSec, toSec, isFetched })` returns
+`[{ fromSec, toSec, missing, kind }]` for each run of expected bucket starts with no candle,
+over the buckets that intersect `[fromSec, toSec)` (default: first to last candle).
+`isFetched(bucketT)` reports whether that bucket's page is in `coverage`; `kind` is `'provider'`
+when it is (or when no `isFetched` is given) and `'not_fetched'` otherwise. A run never mixes
+the two kinds.
 
 Two different conditions must not be confused:
 

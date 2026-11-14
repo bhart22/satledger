@@ -1903,6 +1903,297 @@ const rangeCutoff = (range, custom) => {
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 };
 
+// ─── Market: Candles ─────────────────────────────────────────────────────────
+// The candle model { t, o, h, l, c, v } — t is the bucket start in UTC seconds, a candle covers
+// [t, t + intervalSeconds), v may be null — plus the interval table, row normalization,
+// validation, UTC bucketing, aggregation, gap detection, range/interval rules and request
+// paging. Pure: no I/O, no clock (callers pass nowSec), and nothing here knows about
+// transactions. Spec: docs/market-data.md §1–2, §5–12. Everything is reached through this one
+// name so the flat helper scope gains nothing else.
+const Candles = (() => {
+  // `native` is the Coinbase mapping; a derived interval is only ever built from a smaller one.
+  const INTERVALS = Object.freeze({
+    '1m':  Object.freeze({ seconds: 60,     native: true  }),
+    '5m':  Object.freeze({ seconds: 300,    native: true  }),
+    '15m': Object.freeze({ seconds: 900,    native: true  }),
+    '30m': Object.freeze({ seconds: 1800,   native: false, from: '15m' }),
+    '1h':  Object.freeze({ seconds: 3600,   native: true  }),
+    '4h':  Object.freeze({ seconds: 14400,  native: false, from: '1h'  }),
+    '1d':  Object.freeze({ seconds: 86400,  native: true  }),
+    '1w':  Object.freeze({ seconds: 604800, native: false, from: '1d'  }),
+  });
+  const INTERVAL_KEYS = Object.freeze(Object.keys(INTERVALS)); // ascending by seconds
+  const RANGES = Object.freeze(['1D','1W','1M','3M','6M','YTD','1Y','3Y','5Y','ALL']);
+  const DEFAULT_INTERVAL = Object.freeze({
+    '1D':'5m', '1W':'1h', '1M':'4h', '3M':'4h', '6M':'1d',
+    'YTD':'1d', '1Y':'1d', '3Y':'1d', '5Y':'1d', 'ALL':'1w',
+  });
+  const MAX_VIEW_CANDLES = 3000;    // candles displayed for the selected range
+  const MAX_NATIVE_CANDLES = 9000;  // native candles fetched to build them
+  const REJECT_LIMIT = 0.05;        // more than this share rejected → the page counts as failed
+  // Column positions of a raw provider row. This is the Coinbase order [time, low, high, open,
+  // close, volume], still to be confirmed by the Phase 2 verification gate; a provider whose
+  // rows differ passes its own map.
+  const ROW_ORDER = Object.freeze({ t:0, l:1, h:2, o:3, c:4, v:5 });
+  // Weeks start Monday 00:00 UTC. The epoch was a Thursday; 345600 s is Monday 1970-01-05.
+  const WEEK_ANCHOR_SEC = 345600;
+  const DAY_SEC = 86400;
+  // Loop guard for gap scans and page lists: far beyond anything the caps allow.
+  const MAX_STEPS = 2000000;
+
+  const spec = interval => {
+    if(typeof interval !== 'string' || !Object.prototype.hasOwnProperty.call(INTERVALS, interval)) {
+      throw new Error(`Candles: unknown interval ${JSON.stringify(interval)}`);
+    }
+    return INTERVALS[interval];
+  };
+  const intervalSeconds = interval => spec(interval).seconds;
+  const mod = (a, m) => ((a % m) + m) % m; // non-negative, so times before 1970 bucket correctly
+  const isPrice = x => typeof x === 'number' && Number.isFinite(x) && x > 0;
+  const isVolume = x => typeof x === 'number' && Number.isFinite(x) && x >= 0;
+  // Number() coercion as specified, except that blanks, null and booleans don't sneak in as 0/1.
+  const num = x => (typeof x === 'number' || (typeof x === 'string' && x.trim() !== '')) ? Number(x) : NaN;
+  const checkNow = nowSec => {
+    if(typeof nowSec !== 'number' || !Number.isFinite(nowSec)) throw new Error('Candles: nowSec must be a finite number of seconds');
+    return Math.floor(nowSec);
+  };
+
+  // ── UTC buckets ──
+  const bucketStart = (tSec, interval) => {
+    const s = spec(interval).seconds;
+    return interval === '1w' ? tSec - mod(tSec - WEEK_ANCHOR_SEC, s) : tSec - mod(tSec, s);
+  };
+  // Complete when the bucket has ended; otherwise it is the forming candle.
+  const isComplete = (tSec, interval, nowSec) => tSec + spec(interval).seconds <= nowSec;
+
+  // ── Normalization (§5): one raw provider row → { candle } or { reason } ──
+  const normalizeRow = (row, interval, order = ROW_ORDER) => {
+    spec(interval);
+    if(!Array.isArray(row)) return { reason: 'not_array' };
+    if(row.length < Math.max(order.t, order.o, order.h, order.l, order.c) + 1) return { reason: 'short_row' };
+    const t = num(row[order.t]);
+    const o = num(row[order.o]), h = num(row[order.h]), l = num(row[order.l]), c = num(row[order.c]);
+    if(!Number.isInteger(t)) return { reason: 'time' };
+    if(!isPrice(o) || !isPrice(h) || !isPrice(l) || !isPrice(c)) return { reason: 'price' };
+    let v = null;
+    if(order.v != null && row.length > order.v && row[order.v] != null) {
+      v = num(row[order.v]);
+      if(!isVolume(v)) return { reason: 'volume' };
+    }
+    if(bucketStart(t, interval) !== t) return { reason: 'misaligned' };
+    return { candle: { t, o, h, l, c, v } };
+  };
+
+  // ── Validation (§6) ──
+  const candleReason = (x, interval) => {
+    if(!x || typeof x !== 'object') return 'not_object';
+    const { t, o, h, l, c, v } = x;
+    if(!Number.isInteger(t)) return 'time';
+    if(!isPrice(o) || !isPrice(h) || !isPrice(l) || !isPrice(c)) return 'price';
+    if(v != null && !isVolume(v)) return 'volume';
+    if(bucketStart(t, interval) !== t) return 'misaligned';
+    if(h < l) return 'high_below_low';
+    if(h < o) return 'high_below_open';
+    if(h < c) return 'high_below_close';
+    if(l > o) return 'low_above_open';
+    if(l > c) return 'low_above_close';
+    return null;
+  };
+  const overLimit = (rejected, total) => total > 0 && rejected > REJECT_LIMIT * total;
+
+  // → { valid: Candle[] strictly ascending, rejected: [{ row, reason }], overRejectLimit }.
+  // Nothing is repaired: a bad candle is dropped and reported. For a repeated t the last
+  // occurrence in input order wins and the earlier ones are rejected as 'duplicate'. Valid
+  // candles are fresh { t, o, h, l, c, v } objects; the input is never mutated.
+  const validate = (candles, interval) => {
+    spec(interval);
+    const list = Array.isArray(candles) ? candles : [];
+    const rejected = [];
+    const byT = new Map();
+    for(const row of list) {
+      const reason = candleReason(row, interval);
+      if(reason) { rejected.push({ row, reason }); continue; }
+      const prev = byT.get(row.t);
+      if(prev) rejected.push({ row: prev.row, reason: 'duplicate' });
+      byT.set(row.t, { row, candle: { t: row.t, o: row.o, h: row.h, l: row.l, c: row.c, v: row.v ?? null } });
+    }
+    const valid = [...byT.values()].map(e => e.candle).sort((a, b) => a.t - b.t);
+    return { valid, rejected, overRejectLimit: overLimit(rejected.length, list.length) };
+  };
+
+  // Raw provider rows → normalize each, then validate; same result shape, and the reject limit
+  // is measured against the raw row count.
+  const parseRows = (rows, interval, order = ROW_ORDER) => {
+    const list = Array.isArray(rows) ? rows : [];
+    const rejected = [], candles = [];
+    for(const row of list) {
+      const r = normalizeRow(row, interval, order);
+      if(r.candle) candles.push(r.candle); else rejected.push({ row, reason: r.reason });
+    }
+    const v = validate(candles, interval);
+    rejected.push(...v.rejected);
+    return { valid: v.valid, rejected, overRejectLimit: overLimit(rejected.length, list.length) };
+  };
+
+  // ── Aggregation (§11) ──
+  // Validated source candles → target-interval candles, ascending. A completed bucket holding
+  // fewer source candles than it should carries partial: true; so does a forming bucket (end
+  // after nowSec) that is missing source candles which should already exist. Without nowSec
+  // every bucket is judged as completed. Refuses to build a smaller interval from a larger one.
+  const aggregate = (candles, targetInterval, sourceInterval, { nowSec = null } = {}) => {
+    const ts = spec(targetInterval).seconds, ss = spec(sourceInterval).seconds;
+    if(ts <= ss) throw new Error(`Candles.aggregate: cannot build ${targetInterval} from ${sourceInterval}; the target must be larger`);
+    if(ts % ss !== 0) throw new Error(`Candles.aggregate: ${targetInterval} is not a whole multiple of ${sourceInterval}`);
+    const expected = b => {
+      const until = nowSec == null ? b + ts : Math.min(b + ts, nowSec);
+      return until <= b ? 0 : Math.ceil((until - b) / ss);
+    };
+    const out = [];
+    let cur = null, count = 0, srcPartial = false;
+    const flush = () => {
+      if(!cur) return;
+      if(srcPartial || count < expected(cur.t)) cur.partial = true;
+      out.push(cur);
+    };
+    for(const x of [...(Array.isArray(candles) ? candles : [])].sort((a, b) => a.t - b.t)) {
+      const b = bucketStart(x.t, targetInterval);
+      if(!cur || cur.t !== b) {
+        flush();
+        cur = { t: b, o: x.o, h: x.h, l: x.l, c: x.c, v: x.v ?? null };
+        count = 1; srcPartial = !!x.partial;
+      } else {
+        if(x.h > cur.h) cur.h = x.h;
+        if(x.l < cur.l) cur.l = x.l;
+        cur.c = x.c;
+        if(x.v != null) cur.v = (cur.v ?? 0) + x.v;
+        count++; srcPartial = srcPartial || !!x.partial;
+      }
+    }
+    flush();
+    return out;
+  };
+
+  // ── Gaps (§12) ──
+  // Runs of expected bucket starts with no candle, over the buckets that intersect
+  // [fromSec, toSec) (default: first to last candle). isFetched(bucketT), when given, says
+  // whether the page holding that bucket was fetched successfully: a missing bucket in a
+  // fetched page is a 'provider' gap, otherwise 'not_fetched'. A price jump between adjacent
+  // candles is not a gap. Nothing is filled in.
+  const findGaps = (candles, interval, { fromSec = null, toSec = null, isFetched = null } = {}) => {
+    const s = spec(interval).seconds;
+    const list = Array.isArray(candles) ? candles : [];
+    const present = new Set(list.map(x => x.t));
+    let lo = Infinity, hi = -Infinity;
+    for(const t of present) { if(t < lo) lo = t; if(t > hi) hi = t; }
+    if(fromSec == null) fromSec = list.length ? lo : null;
+    if(toSec == null) toSec = list.length ? hi + s : null;
+    if(fromSec == null || toSec == null || !(toSec > fromSec)) return [];
+    const first = bucketStart(fromSec, interval);
+    if((toSec - first) / s > MAX_STEPS) throw new RangeError('Candles.findGaps: window too large for this interval');
+    const gaps = [];
+    let run = null;
+    for(let t = first; t < toSec; t += s) {
+      if(present.has(t)) { run = null; continue; }
+      const kind = isFetched && !isFetched(t) ? 'not_fetched' : 'provider';
+      if(run && run.kind === kind) { run.toSec = t + s; run.missing++; }
+      else { run = { fromSec: t, toSec: t + s, missing: 1, kind }; gaps.push(run); }
+    }
+    return gaps;
+  };
+
+  // ── Range and interval rules (§9–10) ──
+  const RANGE_SPAN = { '1D': { sec: DAY_SEC }, '1W': { sec: 7 * DAY_SEC },
+    '1M': { months: 1 }, '3M': { months: 3 }, '6M': { months: 6 },
+    '1Y': { months: 12 }, '3Y': { months: 36 }, '5Y': { months: 60 } };
+  // Same day-of-month and time of day N calendar months back (UTC), clamped to the month's length.
+  const monthsBack = (sec, months) => {
+    const d = new Date(sec * 1000);
+    const y = d.getUTCFullYear(), m = d.getUTCMonth() - months;
+    const monthLength = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
+    return Date.UTC(y, m, Math.min(d.getUTCDate(), monthLength), d.getUTCHours(), d.getUTCMinutes(), d.getUTCSeconds()) / 1000;
+  };
+  // Range start in UTC seconds. ALL is the provider-discovered earliest candle (§8): null until
+  // it is known. No product date constant is consulted.
+  const rangeStart = (range, nowSec, earliestSec = null) => {
+    const now = checkNow(nowSec);
+    if(range === 'ALL') return typeof earliestSec === 'number' && Number.isFinite(earliestSec) ? earliestSec : null;
+    if(range === 'YTD') return Date.UTC(new Date(now * 1000).getUTCFullYear(), 0, 1) / 1000;
+    const r = typeof range === 'string' && Object.prototype.hasOwnProperty.call(RANGE_SPAN, range) ? RANGE_SPAN[range] : null;
+    if(!r) throw new Error(`Candles: unknown range ${JSON.stringify(range)}`);
+    return r.sec ? now - r.sec : monthsBack(now, r.months);
+  };
+  const defaultInterval = range => {
+    if(typeof range !== 'string' || !Object.prototype.hasOwnProperty.call(DEFAULT_INTERVAL, range)) {
+      throw new Error(`Candles: unknown range ${JSON.stringify(range)}`);
+    }
+    return DEFAULT_INTERVAL[range];
+  };
+  // Intervals offered for a range, ascending. Each must be shorter than the range and pass both
+  // caps; '1d' is exempt from the caps (not from the shorter-than-the-range rule) because full
+  // daily history is needed anyway. ALL before its earliest candle is known offers only '1d'
+  // and '1w', the two intervals that full daily history serves.
+  const allowedIntervals = (range, nowSec, earliestSec = null) => {
+    const start = rangeStart(range, nowSec, earliestSec);
+    if(start === null) return ['1d', '1w'];
+    const rangeSec = checkNow(nowSec) - start;
+    return INTERVAL_KEYS.filter(iv => {
+      const sp = INTERVALS[iv];
+      if(!(sp.seconds < rangeSec)) return false;
+      if(iv === '1d') return true;
+      const nativeSec = sp.native ? sp.seconds : INTERVALS[sp.from].seconds;
+      return Math.ceil(rangeSec / sp.seconds) <= MAX_VIEW_CANDLES
+          && Math.ceil(rangeSec / nativeSec) <= MAX_NATIVE_CANDLES;
+    });
+  };
+  // A stored or URL-supplied interval, if allowed; otherwise the range default. If even the
+  // default is impossible (YTD in the first hours of 1 January), the largest allowed interval
+  // below it.
+  const resolveInterval = (range, requested, nowSec, earliestSec = null) => {
+    const allowed = allowedIntervals(range, nowSec, earliestSec);
+    if(allowed.includes(requested)) return requested;
+    const def = defaultInterval(range);
+    if(allowed.includes(def)) return def;
+    const below = allowed.filter(iv => INTERVALS[iv].seconds < INTERVALS[def].seconds);
+    return below.length ? below[below.length - 1] : def;
+  };
+
+  // ── Paging (§7) ──
+  // Fixed, epoch-aligned pages of perPage (the provider's maxCandlesPerRequest) native candles,
+  // so a request window reveals nothing about any transaction time. endSec is exclusive.
+  const pageSpan = (interval, perPage) => {
+    const sp = spec(interval);
+    if(!sp.native) throw new Error(`Candles: ${interval} is derived and is never requested`);
+    if(!Number.isInteger(perPage) || perPage <= 0) throw new Error('Candles: perPage must be a positive integer');
+    return perPage * sp.seconds;
+  };
+  const pageIndex = (tSec, interval, perPage) => Math.floor(tSec / pageSpan(interval, perPage));
+  const pageBounds = (index, interval, perPage) => {
+    if(!Number.isInteger(index)) throw new Error('Candles: page index must be an integer');
+    const span = pageSpan(interval, perPage);
+    return { index, startSec: index * span, endSec: (index + 1) * span };
+  };
+  // Every page intersecting [fromSec, toSec), newest first so the right edge fills in first.
+  const pagesFor = (fromSec, toSec, interval, perPage) => {
+    const span = pageSpan(interval, perPage);
+    if(!(toSec > fromSec)) return [];
+    const first = Math.floor(fromSec / span), last = Math.ceil(toSec / span) - 1;
+    if(last - first + 1 > MAX_STEPS) throw new RangeError('Candles.pagesFor: window too large');
+    const pages = [];
+    for(let i = last; i >= first; i--) pages.push(pageBounds(i, interval, perPage));
+    return pages;
+  };
+
+  return Object.freeze({
+    INTERVALS, INTERVAL_KEYS, RANGES, DEFAULT_INTERVAL, MAX_VIEW_CANDLES, MAX_NATIVE_CANDLES,
+    REJECT_LIMIT, ROW_ORDER,
+    intervalSeconds, bucketStart, isComplete,
+    normalizeRow, validate, parseRows,
+    aggregate, findGaps,
+    rangeStart, defaultInterval, allowedIntervals, resolveInterval,
+    pageSpan, pageIndex, pageBounds, pagesFor,
+  });
+})();
+
 // ─── SVG Icons ───────────────────────────────────────────────────────────────
 const sz = {width:14,height:14,viewBox:'0 0 24 24',fill:'none',stroke:'currentColor',strokeWidth:2,strokeLinecap:'round',strokeLinejoin:'round'};
 const Icon = {
