@@ -192,6 +192,49 @@ Rules:
   (keep the library's attribution logo enabled, or add the required notice and link to the
   page). Do not reference an unpinned major version anywhere.
 
+### Verified 2026-11-14 — Lightweight Charts 5.3.0 (pinned)
+
+Checked at the start of Phase 4 against the npm registry, the published package
+(`lightweight-charts@5.3.0`: `dist/typings.d.ts`, `dist/lightweight-charts.standalone.production.js`,
+`README.md`, `LICENSE`), the GitHub repository at tag `v5.3.0` (`NOTICE`) and the GitHub release
+notes. Sources:
+<https://www.npmjs.com/package/lightweight-charts>,
+<https://github.com/tradingview/lightweight-charts/releases/tag/v5.3.0>,
+<https://github.com/tradingview/lightweight-charts/blob/v5.3.0/NOTICE>,
+<https://tradingview.github.io/lightweight-charts/docs/api/interfaces/LayoutOptions#attributionlogo>.
+
+| Item | Finding |
+|---|---|
+| Current stable | `5.3.0`, released 2026-11-10, npm `latest` tag, GitHub release not marked pre-release. Pinned. Its release notes fix two things this feature exercises: the time scale jumping when bars are added while the user drags (older-history loading on pan), and `setVisibleRange()` collapsing a range when zoomed in. Previous stable is `5.2.1` (2026-08-12); the two publish identical export lists |
+| Standalone build | `dist/lightweight-charts.standalone.production.js` (198,600 bytes), an IIFE that assigns `window.LightweightCharts`. Contains no `eval` and no `Function(` constructor, so it runs under the app's CSP; it creates one `<style>` element for the attribution logo, which `style-src 'unsafe-inline'` already allows. Same-origin, so `script-src 'self'` covers it and `tools/build.mjs` needs no change |
+| Series | v5 API: `chart.addSeries(LightweightCharts.CandlestickSeries \| HistogramSeries \| LineSeries, options, paneIndex?)`. The v4 `addCandlestickSeries` family no longer exists |
+| Panes | Native. `addSeries(…, paneIndex)` creates the pane on demand; `chart.panes()`, `chart.addPane()`, `chart.removePane(index)`, `pane.setHeight(px)`, `pane.setStretchFactor(n)`; `MouseEventParams.paneIndex`. All panes share the time scale and crosshair. The planned `setPane` / `removePane` surface maps onto this directly |
+| Volume band | A histogram on its own overlay price scale (`priceScaleId: ''`) in pane 0 with `scaleMargins`, so volume sits in the lower band of the price pane rather than a separate pane, as designed |
+| Markers | Not a series method in v5: `LightweightCharts.createSeriesMarkers(series, markers, options)` returns a plugin with `setMarkers()`/`markers()`/`detach()`. Shapes `circle`, `square`, `arrowUp`, `arrowDown`; positions `aboveBar`, `belowBar`, `inBar` |
+| Exact-price marker | Supported: positions `atPriceTop`, `atPriceMiddle`, `atPriceBottom` with a required `price` field |
+| Marker click | No marker-specific event. `chart.subscribeClick(param)` reports `param.hoveredInfo` with `objectKind: 'series-marker'` and `objectId` = the marker's `id`. Hit tolerance is the library's own (a few pixels), so the 44 px touch target of `docs/mobile-chart-ux.md` §11 has to be computed by the adapter from `param.point` (Phase 7) |
+| Log scale | `chart.priceScale('right').applyOptions({ mode: LightweightCharts.PriceScaleMode.Logarithmic })` (`Normal` = 0, `Logarithmic` = 1) |
+| Sizing | `autoSize: true` makes the library observe its container with its own `ResizeObserver`; the adapter still owns one observer so a zero-size container (hidden tab) never creates the chart |
+| Events | `subscribeCrosshairMove`, `subscribeClick`, `subscribeDblClick`, `timeScale().subscribeVisibleLogicalRangeChange` / `subscribeVisibleTimeRangeChange`, each with an `unsubscribe…` twin |
+| Touch | The library does **not** set CSS `touch-action`. It decides per gesture in JavaScript and calls `preventDefault()` on `touchmove` only for gestures it handles: `handleScroll.horzTouchDrag` / `vertTouchDrag` (both default true) and `handleScale.pinch` (default true). With `vertTouchDrag: false` a vertical drag is left to the browser and scrolls the page |
+| Long press | A long tap of **240 ms** (fixed in the library, not configurable) enters "tracking mode": the crosshair follows the finger and the library suppresses scrolling. `trackingMode.exitMode` is `OnNextTap` (default) or `OnTouchEnd` |
+| Double tap | Fires the same handlers as a double click (`subscribeDblClick`); `handleScale.axisDoubleClickReset` resets a scale |
+| Kinetic scroll | `kineticScroll: { touch: true, mouse: false }` by default |
+| Licence | Apache License 2.0 (`LICENSE`, identical in 5.2.1 and 5.3.0). The package bundles parts of tslib under 0BSD |
+| NOTICE | Not shipped in the npm package; present in the repository: "TradingView Lightweight Charts™ / Copyright (с) 2025 TradingView, Inc. https://www.tradingview.com/" |
+| Attribution | README: "This license requires specifying TradingView as the product creator. You shall add the 'attribution notice' from the NOTICE file and a link to https://www.tradingview.com/ to the page of your website or mobile application that is available to your users." The `layout.attributionLogo` option (default `true`) satisfies the link requirement on the chart itself. SatLedger keeps the logo enabled **and** shows the NOTICE text with the link beneath the Market chart |
+
+Consequences for this design:
+
+- The `ChartAdapter` surface above stands unchanged. `setMarkers` is implemented over the
+  markers plugin; `onMarkerClick` over `subscribeClick` plus the adapter's own nearest-marker
+  hit test.
+- `docs/mobile-chart-ux.md` §4 is corrected: no CSS `touch-action: pan-y` on the chart (it
+  would hand vertical moves to the browser before the library's 240 ms long press could claim
+  them), and the long press is the library's 240 ms rather than ≈ 350 ms.
+- Files: `vendor/lightweight-charts-5.3.0.standalone.production.js`,
+  `vendor/LICENSE-lightweight-charts`, `vendor/NOTICE-lightweight-charts`.
+
 ## 8. IndexedDB architecture
 
 Database `satledger-market`, version 1, opened lazily on first Market use. Full structure is in
@@ -339,5 +382,5 @@ named, and the design documents are corrected **before** code is written.
 | When | What | Document to correct |
 |---|---|---|
 | Start of Phase 2 | Coinbase: supported candle granularities; maximum candles per request; returned row ordering; product stats endpoint behaviour; historical availability; rate limits; CORS behaviour | `docs/market-data.md` |
-| Start of Phase 4 | Lightweight Charts: current stable version; standalone browser build; pane APIs; series marker APIs; exact-price marker capability; logarithmic scale API; touch behaviour relevant to `docs/mobile-chart-ux.md`; licence; NOTICE requirements; attribution requirements | This document §7 (and the `ChartAdapter` surface if the API requires it), `docs/mobile-chart-ux.md` |
+| Start of Phase 4 — **done 2026-11-14, see §7** | Lightweight Charts: current stable version; standalone browser build; pane APIs; series marker APIs; exact-price marker capability; logarithmic scale API; touch behaviour relevant to `docs/mobile-chart-ux.md`; licence; NOTICE requirements; attribution requirements | This document §7 (and the `ChartAdapter` surface if the API requires it), `docs/mobile-chart-ux.md` |
 | Phase 8 | Pre-provider all-time-high seed: value, date, authoritative source, test | `docs/technical-indicators.md` §12 |

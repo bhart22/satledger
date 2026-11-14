@@ -87,17 +87,23 @@ When a transaction marker is selected, the readout shows a one-line summary of t
 | One-finger vertical drag on the chart | **Scrolls the page** |
 | Two-finger pinch | Zoom the time axis around the pinch midpoint |
 | Tap | Select the candle (updates the readout); tap a marker to select it |
-| Long press (≈ 350 ms) then drag | Crosshair inspection mode: horizontal and vertical movement both move the crosshair, page scroll is suppressed until release |
+| Long press (240 ms, the library's fixed threshold) then drag | Crosshair inspection mode (the library's "tracking mode"): horizontal and vertical movement both move the crosshair, page scroll is suppressed until release |
 | Double tap | Fit content / reset view |
 | Drag on the price scale | Scale the price axis (kept enabled; double tap on it resets auto-scale) |
 
 Implementation notes:
 
-- The chart container uses `touch-action: pan-y` so the browser handles vertical page scrolling
-  and the library receives horizontal drags and pinches. In crosshair inspection mode and in
-  the expanded overlay it switches to `touch-action: none`.
-- The library's own vertical-touch-drag handling is disabled in the normal (inline) mode so it
-  does not fight page scroll; it is enabled in the expanded overlay.
+- No CSS `touch-action` is set on the chart in the inline mode. Lightweight Charts 5.3.0
+  (verified, `docs/market-analytics.md` §7) decides per gesture in JavaScript and calls
+  `preventDefault()` only on the moves it handles; `touch-action: pan-y` would hand vertical
+  moves to the browser before the library's long press could claim them, breaking inspection.
+  The expanded overlay uses `touch-action: none`, since nothing there should scroll the page.
+- The library's own vertical-touch-drag handling (`handleScroll.vertTouchDrag`) is disabled in
+  the normal (inline) mode, so a vertical drag is not prevented and scrolls the page; it is
+  enabled in the expanded overlay. Horizontal drag and pinch stay with the library.
+- The long-press threshold (240 ms) and tracking mode belong to the library and are not
+  re-implemented. Exit is `OnNextTap` (the library default), so the inspected candle stays in
+  the readout after the finger lifts.
 - Mouse-wheel zoom on desktop requires the pointer to be over the chart. Wheel events scroll
   the page unless the chart has been clicked or focused, so a page scroll that passes over the
   chart is not hijacked.
@@ -253,7 +259,6 @@ Portrait and landscape, on one Android-sized and one iPhone-sized viewport:
   "Cost Basis" or "ATH" without a verified seed — see `docs/market-analytics.md` §9 and
   `docs/technical-indicators.md` §12).
 
-Touch behaviour in §4 (`touch-action`, disabling the library's vertical drag, long-press
-inspection) assumes capabilities of the chart library that are verified at the start of
-Phase 4. If the pinned version behaves differently, this document is corrected before the
-mobile work is implemented.
+Touch behaviour in §4 was verified against Lightweight Charts 5.3.0 at the start of Phase 4
+(2026-11-14, `docs/market-analytics.md` §7) and corrected there. It was verified from the
+library's typings and source; the on-device checks above are still required in Phase 9.
