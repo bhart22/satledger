@@ -77,7 +77,13 @@ const published = JSON.parse(readFileSync(join(REPO_ROOT, 'tools', 'test', 'fixt
   eq(code.match(/\btransactions?\b|\btxs?\b|btc-tx|localStorage|sessionStorage|wallets?\b|fetch\(|indexedDB|\bthis\b/gi), null,
     'Indicators code references no transactions, storage, network or `this`');
   ok(Object.isFrozen(I) && Object.isFrozen(I.definitions) && I.definitions.every(Object.isFrozen) && Object.isFrozen(I.returns), 'Indicators and its definitions are frozen');
-  eq(I.ATH_SEED, null, 'ATH_SEED is null in this phase');
+  // The seed recorded in Phase 8 (docs/technical-indicators.md §12): Bitstamp's highest daily
+  // high before Coinbase's first BTC-USD daily candle (2015-07-20), read from Bitstamp's public
+  // daily OHLC on 2026-11-14 — 1163.00 on 2013-11-30.
+  eq({ price: I.ATH_SEED.price, date: I.ATH_SEED.date }, { price: 1163, date: '2013-11-30' }, 'ATH_SEED value and date');
+  ok(/bitstamp/i.test(I.ATH_SEED.source) && Object.isFrozen(I.ATH_SEED), 'ATH_SEED cites its source and is frozen');
+  eq(I.ATH_SEED_VERIFIED, true, 'a seed in the code is a verified seed');
+  ok(/bitstamp\.net\/api\/v2\/ohlc\/btcusd/.test(section), 'the code comment cites the source');
 }
 
 // ── Registry ────────────────────────────────────────────────────────────────
@@ -466,7 +472,7 @@ const CASES = [
   const t0 = utc(2015, 1, 1);
   const highs = [10, 30, 20, 50, 40];
   const daily = highs.map((h, i) => ({ t: t0 + i * D, o: h - 1, h, l: h - 2, c: h - 1 }));
-  const at = (T, opts) => I.previousAth(daily, T, opts);
+  const at = (T, opts = {}) => I.previousAth(daily, T, { seed: null, ...opts });
   eq(at(t0 + 3 * D + 12 * 3600), { price: 30, t: t0 + D, fromSeed: false }, 'transaction day\'s own candle is excluded (noon on day 3 → 30)');
   eq(at(t0 + 4 * D).price, 50, 'a candle that closed exactly at T counts');
   eq(at(t0 + 12 * 3600), null, 'nothing closed before T → null');
@@ -481,8 +487,19 @@ const CASES = [
   eq(at(t0 + D + 3600, { seed }).price, 40, 'earliestSec unknown → the first candle given stands in');
   throws(() => at(t0 + D, { seed: { price: -1, date: '2014-01-01' } }), 'invalid seed rejected');
   throws(() => at(t0 + D, { seed: { price: 1, date: '01/01/2014' } }), 'seed date must be YYYY-MM-DD');
-  eq(at(t0 + 4 * D + 3600), at(t0 + 4 * D + 3600, { seed: null }), 'default seed is ATH_SEED (null)');
-  eq(I.previousAth(fixture, fixture[fixture.length - 1].t + D).price, Math.max(...fixture.map(x => x.h)), 'fixture: max high over all closed candles');
+  eq(I.previousAth(fixture, fixture[fixture.length - 1].t + D, { seed: null }).price, Math.max(...fixture.map(x => x.h)), 'fixture: max high over all closed candles');
+
+  // The recorded seed (Bitstamp 1163.00 on 2013-11-30) as the default, against Coinbase-like
+  // history from 2015-07-20.
+  const e = utc(2015, 7, 20);
+  const cb = [280, 300, 1200, 900].map((h, i) => ({ t: e + i * D, o: h - 1, h, l: h - 2, c: h - 1 }));
+  eq(I.previousAth(cb, e + 12 * 3600, { earliestSec: e }), { price: 1163, t: utc(2013, 11, 30), fromSeed: true },
+    'default seed: before any provider candle closed, the high known is the 2013 seed');
+  eq(I.previousAth(cb, e + 2 * D + 3600, { earliestSec: e }).price, 1163, 'seed stands while provider highs are below it');
+  eq(I.previousAth(cb, e + 3 * D + 3600, { earliestSec: e }), { price: 1200, t: e + 2 * D, fromSeed: false }, 'seed ignored once a provider high exceeds 1163');
+  eq(I.previousAth(cb, utc(2013, 11, 30, 18), { earliestSec: e }), null, 'seed not used on its own day (look-ahead)');
+  eq(I.previousAth(cb, utc(2013, 12, 1), { earliestSec: e }).price, 1163, 'seed used from the end of its day');
+  eq(I.previousAth(cb, e + 2 * D + 3600, { earliestSec: utc(2013, 1, 1) }).price, 300, 'seed ignored if the provider history covered 2013-11-30');
 }
 
 // ── athLabels (§12, decision D18) ───────────────────────────────────────────

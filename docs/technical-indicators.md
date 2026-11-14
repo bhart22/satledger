@@ -297,6 +297,33 @@ first available candle, and a maximum over available candles alone would be wron
 Indicators.ATH_SEED = { price: <USD>, date: 'YYYY-MM-DD', source: '<citation>' } | null
 ```
 
+**Recorded seed (verified 2026-11-14, Phase 8):**
+
+```js
+Indicators.ATH_SEED = { price: 1163, date: '2013-11-30', source: 'Bitstamp BTC/USD daily OHLC …' }
+Indicators.ATH_SEED_VERIFIED === true      // ATH_SEED !== null; only a verified seed may be in the code
+```
+
+- **Source.** Bitstamp's own trade record, read from the exchange's public daily OHLC endpoint
+  `https://www.bitstamp.net/api/v2/ohlc/btcusd/?step=86400` (two requests of 1,000 days,
+  starting 2011-08-01 and 2014-04-27). It returned every UTC day from 2011-08-18 (Bitstamp's
+  first) to 2015-07-19 — 1,432 consecutive days with no gap. The highest `high` is **1163.00 on
+  2013-11-30** (candle `1385769600`: open 1131.99, high 1163.00, low 1080.00, close 1119.52);
+  next highest 1153.27 on 2013-12-04. Coinbase's first BTC-USD daily candle is 2015-07-20
+  (`docs/market-data.md` §4), so the window is exactly "before the provider's history".
+- **Corroboration.** Newsweek, "Bitcoin Price Passes $1,000 For First Time Since 2013"
+  (newsweek.com/bitcoin-price-passes-1000-first-time-2013-537788): "the all-time high of $1,163
+  that it reached on the Bitstamp exchange in late 2013".
+- **Caveat recorded for the owner.** There is no single BTC-USD price. Other venues printed other
+  highs that month — Mt. Gox about $1,242, at a premium that reflected its withdrawal problems;
+  daily-close series peak lower (about $1,151 on 2013-12-04). The seed is the intraday high on
+  one major USD exchange, which is the same kind of number as the provider's own highs (§12
+  uses `h`, not closes). Before Bitstamp opened (August 2011) prices were far below it.
+- **Tests.** `tools/test/market-indicators.mjs` asserts the value, date, frozen record and cited
+  source, and the seeded calculation (applies from the end of 2013-11-30, stands while provider
+  highs are below 1163, ignored once one exceeds it); `tools/test/market-personal.mjs` asserts
+  the seed as the high for a 2014 transaction and not on its own day.
+
 - At implementation time, the value, date and a citable source for the highest BTC-USD price
   reached before the provider's earliest daily candle are verified and recorded here and in
   the code comment. It must not be filled in from memory.
@@ -312,7 +339,9 @@ or `null` when no candle had closed by `T` and the seed does not apply. `T` is i
 `earliestSec` is the provider's verified earliest daily candle; when it is not passed, the first
 candle given stands in for it. An invalid seed (non-positive price, date not `YYYY-MM-DD`) throws.
 
-**Labels (approved decision).** `ATH_SEED` is `null` until Phase 8. A seed counts as verified
+**Labels (approved decision).** `ATH_SEED` was `null` until Phase 8, which recorded the
+verified seed above; the UI therefore uses the "Verified seed recorded" row of the table
+below. A seed counts as verified
 only when all three hold: its value and date come from an authoritative source cited in the
 code comment and in this section; a test covers the seeded calculation; and the owner has been
 told which source was used.
@@ -335,6 +364,10 @@ told which source was used.
   `earliestSec`, `loading` is `true` and every label is `null`. Only `seedVerified === true`
   counts as verified.
 - A value is never presented as an all-time high without a verified seed.
+- **Even with the seed, the high needs the whole daily history.** While the earliest candle is
+  not verified and held, a maximum over a partial history plus the 2013 seed would be wrong
+  (it would miss every later high not yet loaded), so the summary and the context show a
+  loading state, not a number, until then.
 - Phase 8 attempts the verification. If no authoritative source can be found, the seed stays
   `null`, the "High since" labels remain, and that outcome is reported to the owner. Phase 8
   can complete in either state; it cannot complete with an unverified seed in the code.
@@ -365,27 +398,41 @@ Consequences:
   applies and yields the previous day's candle, which is correct for any time on that day.
 - Context is always daily, whatever interval is on screen.
 - The forming candle is never used.
-- If index `k` is inside the indicator's warm-up, or the previous day is a provider gap, the
-  value is `null` and shown as "—".
+- If index `k` is inside the indicator's warm-up, or the previous day (`dayStart(T) − 1 day`)
+  is a provider gap, the value is `null` and shown as "—". On a gap every value is `null`,
+  the high included (the missing day's high is unknown).
+- A transaction before the provider's first candle has no indicator values; its high is the
+  seed when the seed applies (§12), else `null`.
+- **Loading, not a number:** until the earliest daily candle is verified and held, or when the
+  previous day is later than the newest daily candle held, `contextAt` reports `status:
+  'loading'` and no values. An EMA, Wilder average or high computed from a partial history is
+  a different, wrong number.
 
-Context values:
+Context values (`PersonalMarket.contextAt`, `docs/personal-market-analytics.md` §12):
 
-| Value | Definition |
-|---|---|
-| SMA 20 / 50 / 200 | §4 at index `k` |
-| EMA (configured periods) | §5 at index `k` |
-| RSI 14 | §6 at index `k` |
-| MACD, signal, histogram | §7 at index `k` |
-| ATR 14 | §9 at index `k` |
-| Bollinger upper / mid / lower | §8 at index `k` |
-| 30-day volatility | §10 with N = 30 at index `k` |
-| Previous ATH | §12 `ATH(T)` |
-| Drawdown from previous ATH | `price_tx / ATH(T) - 1`; if `price_tx > ATH(T)` the value is positive and shown as "above previous ATH" |
-| Distance from SMA 50 / 200 | `price_tx / SMA[k] - 1` |
-| SMA 50 above SMA 200 | `SMA50[k] > SMA200[k]` |
+| Value | Key | Definition |
+|---|---|---|
+| SMA 20 / 50 / 200 | `sma20`, `sma50`, `sma200` | §4 at index `k` |
+| RSI 14 | `rsi14` | §6 at index `k` |
+| MACD 12, 26, 9: line, signal, histogram | `macd`, `macdSignal`, `macdHist` | §7 at index `k` |
+| ATR 14 | `atr14` | §9 at index `k` |
+| Bollinger 20, 2: upper / mid / lower | `bbUpper`, `bbMiddle`, `bbLower` | §8 at index `k` |
+| Bollinger position | `bbPosition` | `(price_tx − lower[k]) / (upper[k] − lower[k])`; `null` when the bands coincide |
+| 30-day volatility | `hv30` | §10 with N = 30 at index `k` |
+| Previous ATH (or "High since <date>") | `high`, `highT`, `highFromSeed` | §12 `ATH(T)` |
+| Drawdown from previous ATH | `drawdownFromHigh` | `price_tx / ATH(T) - 1`; if `price_tx > ATH(T)` the value is positive and shown as "above previous ATH" |
+| Distance from SMA 50 / 200 | `distSma50`, `distSma200` | `price_tx / SMA[k] - 1` |
+| SMA 50 above SMA 200 | `sma50AboveSma200` | `SMA50[k] > SMA200[k]` |
 
-`price_tx` is the transaction's resolved price (`docs/personal-market-analytics.md` §3). When
-the price source is `UNKNOWN`, distance and drawdown are `null`.
+EMA at the configured periods is not part of the first version's context (the Phase 8 scope
+lists the values above); adding it is the same read at index `k`.
+
+`price_tx` is the transaction's resolved price (`docs/personal-market-analytics.md` §3) when it
+is a fact of the transaction: `RECORDED_UNIT_PRICE`, `DERIVED_TRANSACTION_VALUE` or
+`REWARD_RECEIPT_VALUE`. When the source is `HISTORICAL_MARKET_LOOKUP` (that day's close — later
+than the transaction, so not known at the time, as `docs/personal-market-analytics.md` §3
+already says) or `UNKNOWN`, `price_tx` is `null` and every distance, the drawdown and the
+Bollinger position are `null`. The market values themselves are still shown.
 
 Anything computed with later data must be labelled "retrospective" in the UI. The first
 version contains no retrospective metrics.
@@ -438,7 +485,7 @@ Specific checks:
 - Annualization factor for `1d`, `1h`, `1w`.
 - Drawdown: known peak and trough; monotonic rise gives 0.
 - Previous ATH: excludes the transaction day's candle; seed applied before it is exceeded and
-  ignored after.
+  ignored after; the recorded seed's value, date and source (Phase 8).
 - `athLabels`: "High since <date>" wording when the seed is not verified; all-time-high
   wording only when it is; loading state when the earliest date is not yet known.
 - Returns: each period against hand-computed values; `null` when the reference candle is missing.

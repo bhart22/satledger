@@ -7,8 +7,8 @@ import { join } from 'node:path';
 import { loadAppHelpers } from '../lib/app-helpers.mjs';
 import { REPO_ROOT } from './lib/harness.mjs';
 
-const { PersonalMarket: PM, Candles: C, txWalletDeltas, applyTxToCostPool, toSatsInt, numOr } =
-  loadAppHelpers(['PersonalMarket', 'Candles', 'txWalletDeltas', 'applyTxToCostPool', 'toSatsInt', 'numOr']);
+const { PersonalMarket: PM, Candles: C, Indicators, txWalletDeltas, applyTxToCostPool, toSatsInt, numOr } =
+  loadAppHelpers(['PersonalMarket', 'Candles', 'Indicators', 'txWalletDeltas', 'applyTxToCostPool', 'toSatsInt', 'numOr']);
 const SRC = readFileSync(join(REPO_ROOT, 'app.dev.html'), 'utf8');
 const S = PM.PRICE_SOURCE;
 
@@ -438,6 +438,240 @@ const HISTORY = deepFreeze([
   ok(weekly.length <= 5 && weekly.every(m => C.bucketStart(m.t, '1w') === m.t), 'weekly coarsening stays on Monday candle times');
   const tiny = PM.aggregateMarkers(rowsOf(HISTORY), { interval: '1h', filters: { transfers: true }, maxMarkers: 1 });
   ok(tiny.length >= 1 && tiny.length <= 4, `an unreachable cap still terminates (${tiny.length} markers)`);
+}
+
+// ── Context / no look-ahead (§12; docs/technical-indicators.md §13) ──────────
+// A deterministic random walk of daily candles starting on Coinbase's first day, 2015-07-20.
+const EARLIEST = utc(2015, 7, 20);
+const walk = (n, seed = 7) => {
+  let s = seed, p = 300;
+  const rnd = () => { s = (s * 1103515245 + 12345) % 2147483648; return s / 2147483648; };
+  return Array.from({ length: n }, (_, i) => {
+    const o = p, c = Math.max(50, o * (1 + (rnd() - 0.48) * 0.08));
+    const h = Math.max(o, c) * (1 + rnd() * 0.02), l = Math.min(o, c) * (1 - rnd() * 0.02);
+    p = c;
+    return { t: EARLIEST + i * D, o, h, l, c, v: 1 + rnd() };
+  });
+};
+const WALK = deepFreeze(walk(700));
+const WALK_END = WALK[WALK.length - 1].t + D;
+const cacheOf = (daily, opts = {}) => PM.contextCache(daily, { nowSec: WALK_END + 3600, earliestSec: EARLIEST, ...opts });
+const CTX_SERIES = [
+  ['sma20', 'sma', { period: 20 }, 'sma'], ['sma50', 'sma', { period: 50 }, 'sma'], ['sma200', 'sma', { period: 200 }, 'sma'],
+  ['rsi14', 'rsi', { period: 14 }, 'rsi'], ['macd', 'macd', {}, 'macd'], ['macdSignal', 'macd', {}, 'signal'], ['macdHist', 'macd', {}, 'histogram'],
+  ['atr14', 'atr', { period: 14 }, 'atr'], ['bbUpper', 'bollinger', {}, 'upper'], ['bbMiddle', 'bollinger', {}, 'middle'],
+  ['bbLower', 'bollinger', {}, 'lower'], ['hv30', 'volatility', { period: 30 }, 'volatility'],
+];
+{
+  const cache = cacheOf(WALK);
+  ok(cache.complete && cache.candles.length === 700, 'cache over the whole history is complete');
+  ok(Object.isFrozen(WALK), 'input candles stay frozen');
+
+  // Times across the history: midday, just after midnight, exactly midnight, date-only noon rows.
+  const times = [];
+  for (let d = 1; d < 700; d += 23) times.push(EARLIEST + d * D + 9 * 3600 + (d % 7) * 60, EARLIEST + d * D + 1, EARLIEST + d * D);
+  const recorded = t => tx('Buy', t, { amount: '0.1', price: '420.5' });
+  const lookup = t => tx('Reward', t, { amount: '0.1' });           // valued from that day's close
+  const MUTANT = (t0) => WALK.map(k => k.t >= t0 ? { ...k, o: 99999, h: 1e6, l: 1, c: 12345 + (k.t % 977), v: 5 } : k);
+  let allSame = true, checked = 0;
+  for (const T of times) {
+    for (const make of [recorded, lookup]) {
+      const t = make(T);
+      const before = PM.contextAt(PM.toChartTransactions([t], { candlesDaily: WALK }).items[0], cache);
+      const mut = MUTANT(Math.floor(T / D) * D);                    // every candle on or after the transaction's UTC day replaced
+      const after = PM.contextAt(PM.toChartTransactions([t], { candlesDaily: mut }).items[0], cacheOf(mut));
+      if (JSON.stringify(before) !== JSON.stringify(after)) { allSame = false; console.error('look-ahead at', iso(T), before, after); }
+      checked++;
+    }
+  }
+  ok(allSame && checked > 50, `no look-ahead: replacing every candle from the transaction's day on changes no context value (${checked} cases, all values)`);
+
+  // The definition itself: each value equals the indicator computed on the restricted series
+  // (candles with t + 1 day <= T), read at its last index; the high equals previousAth.
+  let defOk = true;
+  for (const T of times) {
+    const row = rowsOf([recorded(T)])[0];
+    const c = PM.contextAt(row, cache);
+    const restricted = WALK.filter(k => k.t + D <= T);
+    for (const [key, id, settings, out] of CTX_SERIES) {
+      const r = restricted.length ? Indicators.calculateSegmented(id, restricted, settings, '1d')[out] : [];
+      const want = r.length ? r[r.length - 1] : null;
+      if (!(want === null ? c[key] === null : c[key] !== null && Math.abs(c[key] - want) <= 1e-9 * Math.abs(want))) { defOk = false; console.error(key, iso(T), c[key], want); }
+    }
+    const ath = Indicators.previousAth(restricted, T, { earliestSec: EARLIEST });
+    if ((ath ? ath.price : null) !== c.high) { defOk = false; console.error('high', iso(T), c.high, ath); }
+    if (restricted.length && c.refT !== restricted[restricted.length - 1].t) defOk = false;
+  }
+  ok(defOk, 'each context value equals the indicator on candles closed by T, at the last index');
+
+  // Own-day candle and forming candle
+  const T = EARLIEST + 300 * D + 15 * 3600;
+  const row = rowsOf([recorded(T)])[0];
+  const c = PM.contextAt(row, cache);
+  eq(c.refT, EARLIEST + 299 * D, 'the reference candle is the previous UTC day, never the transaction\'s own');
+  eq(PM.contextAt(row, PM.contextCache(WALK, { nowSec: T, earliestSec: EARLIEST })), c,
+    'the forming candle (nowSec inside the transaction\'s day) is never read');
+  const partialOwn = WALK.map(k => k.t === EARLIEST + 300 * D ? { ...k, partial: true, c: 1 } : k);
+  eq(PM.contextAt(row, cacheOf(partialOwn)), c, 'a partial candle is not read');
+  const midnight = rowsOf([recorded(EARLIEST + 300 * D)])[0];
+  eq(PM.contextAt(midnight, cache).refT, EARLIEST + 299 * D, 'at exactly 00:00 UTC the day just closed is the reference');
+
+  // Legacy date-only rows (12:00 UTC placeholder) use the previous completed day.
+  const legRow = rowsOf([tx('Buy', EARLIEST + 300 * D + 12 * 3600, { amount: '0.1', price: '400' })])[0];
+  ok(legRow.dateOnly, 'legacy row is date-only');
+  eq(PM.contextAt(legRow, cache).refT, EARLIEST + 299 * D, 'date-only row: context from the previous completed day');
+
+  // Distances and positions against the transaction's price
+  near(c.distSma50, 420.5 / c.sma50 - 1, 'distance from SMA 50 = price / SMA50 − 1');
+  near(c.distSma200, 420.5 / c.sma200 - 1, 'distance from SMA 200');
+  near(c.drawdownFromHigh, 420.5 / c.high - 1, 'drawdown from the high = price / high − 1');
+  near(c.bbPosition, (420.5 - c.bbLower) / (c.bbUpper - c.bbLower), 'Bollinger position of the transaction price');
+  eq(c.sma50AboveSma200, c.sma50 > c.sma200, 'SMA 50 above SMA 200 flag');
+
+  // Unknown / estimated price → price-relative values null, market values still shown
+  const est = PM.contextAt(rowsOf([lookup(T)], { candlesDaily: WALK })[0], cache);
+  eq([est.price, est.distSma50, est.distSma200, est.drawdownFromHigh, est.bbPosition], [null, null, null, null, null],
+    'a price from that day\'s close is not a known-at-the-time price: distances are null');
+  eq(est.sma50, c.sma50, '...while the market values are unchanged');
+  const unk = PM.contextAt(PM.toChartTransactions([tx('Buy', T, { amount: '0.1' })]).items[0], cache);
+  eq([unk.price, unk.distSma50, unk.drawdownFromHigh], [null, null, null], 'unknown price → distances null, never 0');
+
+  // Warm-up: never 0, never a neighbour
+  const early = PM.contextAt(rowsOf([recorded(EARLIEST + 10 * D + 3600)])[0], cache);
+  eq([early.sma20, early.sma50, early.sma200, early.rsi14, early.macd, early.atr14, early.hv30, early.bbMiddle], [null, null, null, null, null, null, null, null],
+    'inside every warm-up: all null');
+  ok(early.high !== null, '...the high is still known');
+  const d21 = PM.contextAt(rowsOf([recorded(EARLIEST + 20 * D + 3600)])[0], cache);
+  near(d21.sma20, WALK.slice(0, 20).reduce((s, k) => s + k.c, 0) / 20, 'first SMA 20 = mean of the first 20 closes');
+  eq(d21.sma50, null, 'SMA 50 still warming up');
+
+  // Gaps: previous day missing → every value null; warm-up restarts after the gap
+  const gapped = WALK.filter(k => k.t !== EARLIEST + 299 * D);
+  const g = PM.contextAt(row, cacheOf(gapped));
+  eq(CTX_SERIES.map(([k]) => g[k]).concat([g.high, g.drawdownFromHigh, g.distSma50]), new Array(CTX_SERIES.length + 3).fill(null),
+    'previous day is a provider gap → every value null');
+  eq(g.status, 'ready', '...and that is a final answer, not loading');
+  const afterGap = PM.contextAt(rowsOf([recorded(EARLIEST + 305 * D + 3600)])[0], cacheOf(gapped));
+  eq([afterGap.sma20, afterGap.rsi14], [null, null], 'indicators restart their warm-up after a gap');
+  ok(afterGap.high !== null, 'the high carries across a gap');
+
+  // Before the provider's history: no indicators; the verified seed is the high once its day ended
+  const pre = PM.contextAt(rowsOf([recorded(utc(2014, 6, 1, 10))])[0], cache);
+  eq([pre.status, pre.refT, pre.sma50, pre.high, pre.highT, pre.highFromSeed], ['ready', null, null, 1163, utc(2013, 11, 30), true],
+    '2014 transaction: high is the Bitstamp seed, indicators null');
+  near(pre.drawdownFromHigh, 420.5 / 1163 - 1, '...drawdown measured from the seed');
+  eq(PM.contextAt(rowsOf([recorded(utc(2013, 11, 30, 20))])[0], cache).high, null, 'seed not used on its own day');
+  eq(PM.contextAt(rowsOf([recorded(utc(2013, 6, 1))])[0], cache).high, null, 'before the seed: no high');
+  ok(PM.contextAt(rowsOf([recorded(EARLIEST + 1 * D + 3600)])[0], cache).high === 1163 || WALK[0].h > 1163, 'seed still applies just after the provider\'s first day');
+
+  // Loading: history not complete, or the previous day not held yet
+  eq(PM.contextAt(row, PM.contextCache(WALK, { nowSec: WALK_END })).status, 'loading',
+    'earliest candle not verified → loading');
+  eq(PM.contextAt(row, cacheOf(WALK.slice(100))).status, 'loading', 'earliest known but older history not held → loading');
+  const beyond = PM.contextAt(rowsOf([recorded(WALK_END + 5 * D)])[0], cacheOf(WALK, { nowSec: WALK_END + 10 * D }));
+  eq(beyond.status, 'loading', 'previous day after the newest candle held → loading, not a gap');
+  ok(PM.CONTEXT_KEYS.every(k => beyond[k] === null), '...with no value at all');
+
+  // Read-only
+  const frozenRows = deepFreeze(rowsOf([recorded(T), lookup(T)], { candlesDaily: WALK }));
+  const snap = JSON.stringify(frozenRows);
+  frozenRows.forEach(r => PM.contextAt(r, cache));
+  PM.bucketAcquisitions(frozenRows, cache);
+  eq(JSON.stringify(frozenRows), snap, 'contextAt and bucketAcquisitions do not mutate rows');
+}
+
+// ── Buckets (§13) ────────────────────────────────────────────────────────────
+{
+  // A hand-made cache: 300 days, every series constant, highs 100000 → ATH 100000.
+  const t0 = EARLIEST;
+  const n = 300;
+  const candles = Array.from({ length: n }, (_, i) => ({ t: t0 + i * D, o: 90000, h: 100000, l: 80000, c: 90000 }));
+  const fake = vals => {
+    const series = {};
+    for (const [k] of CTX_SERIES) series[k] = new Array(n).fill(vals[k] ?? 1);
+    return { candles, series, seed: null, earliestSec: t0, complete: true, lastT: candles[n - 1].t };
+  };
+  const at = t0 + 250 * D + 3600;
+  const buy = (price, f = {}) => tx('Buy', at, { amount: f.amount || '0.01', price: String(price), totalUsd: String(price * Number(f.amount || '0.01')), ...f });
+  const tableOf = (res, id) => res.tables.find(x => x.id === id);
+  const satsBy = t => Object.fromEntries(t.buckets.map(b => [b.label, b.sats]));
+
+  // Price range: boundaries lower-inclusive
+  const prices = [24999.99, 25000, 49999, 50000, 75000, 99999.99, 100000, 250000];
+  const pr = PM.bucketAcquisitions(PM.toChartTransactions(prices.map(p => buy(p))).items, fake({}));
+  eq(tableOf(pr, 'price').buckets.map(b => [b.label, b.count]), [
+    ['Under $25k', 1], ['$25k–$50k', 2], ['$50k–$75k', 1], ['$75k–$100k', 2], ['$100k and above', 2], ['Unknown', 0],
+  ], 'price buckets: lower bound inclusive');
+
+  // SMA 50 / SMA 200: price equal to the average is "at or above"
+  const sm = PM.bucketAcquisitions(PM.toChartTransactions([buy(59999), buy(60000), buy(60001)]).items, fake({ sma50: 60000, sma200: 60001 }));
+  eq(tableOf(sm, 'sma50').buckets.map(b => b.count), [1, 2, 0], 'versus SMA 50: equal counts as at or above');
+  eq(tableOf(sm, 'sma200').buckets.map(b => b.count), [2, 1, 0], 'versus SMA 200');
+  eq(tableOf(sm, 'trend').buckets.map(b => b.count), [0, 3, 0], 'trend: SMA 50 below SMA 200');
+  const eqTrend = PM.bucketAcquisitions(PM.toChartTransactions([buy(1)]).items, fake({ sma50: 5, sma200: 5 }));
+  eq(tableOf(eqTrend, 'trend').buckets.map(b => b.count), [0, 1, 0], 'trend: equal averages are "at or below"');
+
+  // RSI: < 30, 30–50, 50–70, ≥ 70 with exact boundaries
+  const rsiCount = v => tableOf(PM.bucketAcquisitions(PM.toChartTransactions([buy(1000)]).items, fake({ rsi14: v })), 'rsi').buckets.findIndex(b => b.count);
+  eq([29.999, 30, 49.99, 50, 69.99, 70, 100].map(rsiCount), [0, 1, 1, 2, 2, 3, 3], 'RSI buckets: lower bound inclusive');
+  eq(tableOf(PM.bucketAcquisitions(PM.toChartTransactions([buy(1000)]).items, fake({})), 'rsi').buckets.map(b => b.label),
+    ['Under 30', '30–50', '50–70', '70 and above', 'Unknown'], 'RSI labels');
+
+  // Drawdown from the high (100000): exact 10 % belongs to 10–20 %; above the high has its own bucket
+  const dd = PM.bucketAcquisitions(PM.toChartTransactions([100000, 90000.01, 90000, 80000, 70000, 60000, 50000.01, 50000, 1, 100000.01].map(p => buy(p))).items,
+    fake({}), { contextLabels: Indicators.athLabels({ seedVerified: false, earliestSec: t0 }) });
+  eq(tableOf(dd, 'drawdown').buckets.map(b => [b.label, b.count]), [
+    ['0–10% below', 2], ['10–20% below', 1], ['20–30% below', 1], ['30–40% below', 1], ['40–50% below', 2],
+    ['50% or more below', 2], ['Above that high', 1], ['Unknown', 0],
+  ], 'drawdown buckets by magnitude, lower bound inclusive, above-the-high separate');
+  eq(tableOf(dd, 'drawdown').title, 'Drawdown from High since 07/20/2015', 'without a verified seed the table says "High since <date>"');
+  const ddAth = PM.bucketAcquisitions(PM.toChartTransactions([buy(100000.01)]).items, fake({}),
+    { contextLabels: Indicators.athLabels({ seedVerified: true, earliestSec: t0 }) });
+  eq([tableOf(ddAth, 'drawdown').title, tableOf(ddAth, 'drawdown').buckets[6].label], ['Drawdown from Previous ATH', 'Above previous ATH'],
+    'with the verified seed: "Previous ATH" wording');
+
+  // Real history: exclusions, Unknown, exact satoshi sums, USD
+  const cache = cacheOf(WALK);
+  const T = d => EARLIEST + d * D + 3600;
+  const txs = deepFreeze([
+    tx('Buy', T(5), { id: 'q1', amount: '0.12345678', price: '300', totalUsd: '37.04', fee: '1' }),       // inside warm-up → Unknown for SMA/RSI
+    tx('Buy', T(260), { id: 'q2', amount: '0.00000001', price: '410' }),
+    tx('Reward', T(270), { id: 'q3', amount: '0.00012345' }),                                              // valued from the close: price-range bucket, context Unknown
+    tx('Reward', T(280), { id: 'q4', amount: '0.5', usdValueAtReceipt: '210.000000' }),
+    tx('Buy', T(290), { id: 'q5', amount: '1.1', price: '', totalUsd: '' }),                               // no price: placed by that day's close
+    tx('Buy', utc(2014, 3, 2, 10), { id: 'q12', amount: '0.05' }),                                        // no price and no candle: Unknown everywhere
+    tx('Buy', T(300), { id: 'q6', amount: '2', price: '400', totalUsd: '800', excludeStats: true }),       // excluded
+    tx('Sell', T(310), { id: 'q7', amount: '0.3', price: '500', totalUsd: '150' }),                        // never an acquisition
+    tx('Transfer', T(320), { id: 'q8', wallet: 'A', wallet2: 'B', amount: '0.5', fee: '0.0001' }),
+    tx('Transfer', T(321), { id: 'q9', wallet: '', wallet2: 'A', amount: '0.7' }),
+    tx('Buy', T(330), { id: 'q10', amount: '0', price: '400' }),                                           // not positive
+    tx('Buy', utc(2014, 3, 1, 10), { id: 'q11', amount: '0.25', price: '600', totalUsd: '150' }),        // before the provider's history
+  ]);
+  const rows = PM.toChartTransactions(txs, { candlesDaily: WALK }).items;
+  const res = PM.bucketAcquisitions(rows, cache, { contextLabels: Indicators.athLabels({ seedVerified: true, earliestSec: EARLIEST }) });
+  const want = [12345678, 1, 12345, 50000000, 110000000, 25000000, 5000000].reduce((a, b) => a + b, 0);
+  eq([res.totalSats, res.count, res.loading], [want, 7, 0], 'total = Buy + Reward satoshis, excluding excludeStats, sells, transfers and non-positive rows');
+  for (const t of res.tables) {
+    eq(t.buckets.reduce((s, b) => s + b.sats, 0), want, `${t.id}: buckets plus Unknown sum exactly to the total in satoshis`);
+    eq(t.buckets.reduce((s, b) => s + b.count, 0), 7, `${t.id}: counts sum to the number of acquisitions`);
+    near(t.buckets.reduce((s, b) => s + b.share, 0), 1, `${t.id}: shares sum to 1`);
+    ok(Number.isInteger(t.buckets.reduce((s, b) => s + b.sats, 0)), `${t.id}: integer satoshis`);
+  }
+  eq(tableOf(res, 'price').buckets.find(b => b.key === 'unknown').sats, 5000000, 'price table: the row with no price and no candle is Unknown');
+  eq(tableOf(res, 'sma200').buckets.find(b => b.key === 'unknown').sats, 12345678 + 12345 + 110000000 + 25000000 + 5000000,
+    'SMA 200 table: warm-up, close-valued, unpriced and pre-history rows are Unknown');
+  eq(tableOf(res, 'drawdown').buckets.find(b => b.key === 'unknown').sats, 12345 + 110000000 + 5000000,
+    'drawdown table: only rows without a known-at-the-time price are Unknown (the seed covers 2014)');
+  const priceUsd = tableOf(res, 'price').buckets.reduce((s, b) => s + b.usd, 0);
+  near(priceUsd, 38.04 + 0.0000041 + rows.find(r => r.id === 'q3').usdValue + 210 + 150, 'USD per table = §7 usdIn (fees included) where known');
+  eq(tableOf(res, 'price').buckets.find(b => b.key === 'unknown').usdUnknown, 1, 'a row of unknown value counts in BTC, not USD');
+  const scoped = PM.bucketAcquisitions(rows, cache, { wallets: ['Z'] });
+  eq([scoped.totalSats, scoped.count], [0, 0], 'wallet scope applies');
+
+  // Loading: context tables wait; the price table does not
+  const inc = PM.bucketAcquisitions(rows, PM.contextCache(WALK, { nowSec: WALK_END }));
+  eq([inc.loading, tableOf(inc, 'rsi').loading, tableOf(inc, 'price').loading], [7, 7, 0], 'incomplete history: context tables report loading');
+  eq(tableOf(inc, 'price').buckets, tableOf(res, 'price').buckets, '...and the price table is already final');
 }
 
 console.log(`${pass} passed, ${fail} failed`);

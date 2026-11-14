@@ -1,6 +1,7 @@
 # Personal Market Analytics
 
-Part of the Market Analytics design; see `docs/market-analytics.md`.
+Part of the Market Analytics design; see `docs/market-analytics.md`. §1–11 were built in
+Phases 6–7, §12–13 in Phase 8.
 Code lives in the helper region of `app.dev.html` as `const PersonalMarket = { … }` and is
 tested by `tools/test/market-personal.mjs`.
 
@@ -410,16 +411,33 @@ market context block (§12). Personal figures honour the hide-values toggle.
 
 ## 12. Historical context at a transaction
 
-`PersonalMarket.contextAt(chartTx, dailyCandles, indicatorCache)` returns the values listed in
-`docs/technical-indicators.md` §13, using exactly the rule defined there:
+```js
+const cache = PersonalMarket.contextCache(dailyCandles, { nowSec, earliestSec, seed = Indicators.ATH_SEED });
+PersonalMarket.contextAt(chartTx, cache)
+// → { status: 'ready' | 'loading', refT, price, sma20, sma50, sma200, rsi14, macd, macdSignal,
+//     macdHist, atr14, bbUpper, bbMiddle, bbLower, bbPosition, hv30, high, highT, highFromSeed,
+//     drawdownFromHigh, distSma50, distSma200, sma50AboveSma200 }
+```
 
-- Only daily candles with `t + 86400 <= tSec` are visible to the calculation.
-- The transaction's own day and every later candle are never used.
+returns the values listed in `docs/technical-indicators.md` §13, using exactly the rule
+defined there:
+
+- Only daily candles with `t + 86400 <= tSec` are visible to the calculation. `refT` is the
+  reference candle — always the previous UTC day, or `null`.
+- The transaction's own day and every later candle are never used. The forming day and
+  `partial` candles are dropped when the cache is built.
 - `dateOnly` rows follow the same rule.
-- Each value may be `null` (warm-up, gap, unknown price) and is then shown as "—".
+- Each value may be `null` (warm-up, gap, before the provider's history, a price that is not
+  known-at-the-time) and is then shown as "—".
+- `status: 'loading'` (every value `null`) while the earliest daily candle is not verified and
+  held, or the previous day is newer than the newest daily candle held. The UI shows a loading
+  state, never a number.
+- `price` is the transaction's own price; one taken from that day's close
+  (`HISTORICAL_MARKET_LOOKUP`) is `null` here (§3).
 
-`indicatorCache` holds each daily indicator series computed once over all completed daily
-candles; `contextAt` reads index `k`. Valid because every indicator used is causal.
+`contextCache` computes each daily series once over all completed daily candles (segmented at
+gaps); `contextAt` reads index `k`. Valid because every indicator used is causal. The Market
+view builds the cache once per daily history, not per transaction or UI event.
 
 The panel presents facts only. It does not grade the transaction: no "good", "bad", "smart",
 "early", "late", and no colour implying a verdict.
@@ -440,11 +458,32 @@ classifying value is `null`; the buckets plus Unknown always sum exactly to the 
 | RSI at acquisition | `RSI14[k]` | `< 30`, `30–50`, `50–70`, `≥ 70` |
 | Drawdown at acquisition | `price / ATH(T) − 1` | `0–10 %`, `10–20 %`, `20–30 %`, `30–40 %`, `40–50 %`, `≥ 50 %` below previous ATH; "above previous ATH" as its own bucket |
 
-- Drawdown buckets use the magnitude of the negative value; lower bound inclusive.
+- Drawdown buckets use the magnitude of the negative value; lower bound inclusive. The bound
+  is tested without forming `price / high − 1` (which puts an exact 10 % at 9.999… %):
+  magnitude `>= b` ⇔ `10·price <= high·(10 − 10b)`.
 - Labels follow `docs/technical-indicators.md` §12: until an ATH seed is verified, the
   classifier is "Drawdown from High since <date>" and the top bucket is "above that high".
-  "Previous ATH" wording is used only with a verified seed.
+  "Previous ATH" wording is used only with a verified seed (recorded in Phase 8, so the UI
+  says "Drawdown from Previous ATH" / "Above previous ATH").
 - These tables live in a "My Activity" section below the chart, not on the price chart.
+
+`PersonalMarket.bucketAcquisitions(chartTxs, contextCache, { include, wallets, contextLabels })`
+→ `{ totalSats, count, loading, tables: [{ id, title, usesContext, loading, buckets }] }`, table
+ids `price`, `sma50`, `sma200`, `trend`, `rsi`, `drawdown`, each bucket
+`{ key, label, sats, count, share, usd, usdUnknown }` with the Unknown bucket last
+(`key: 'unknown'`). Exact rules:
+
+- The acquisition set is §7's with the default `include`; `excludeStats` rows and rows whose
+  amount is not positive are left out (they are not acquisitions); a row of unknown USD value
+  stays in (counted in BTC, `usdUnknown` in USD). Sells and every transfer are never in it.
+- `usd` per bucket is §7's `usdIn` (purchases with fees, rewards at receipt).
+- By price uses the resolved price whatever its source except `UNKNOWN` — it describes the
+  valuation, not the market at the time. Every other table uses §12 context only, so a row
+  priced from that day's close is Unknown in the price-relative tables.
+- Price equal to the SMA is "at or above"; equal SMAs are "SMA 50 at or below SMA 200".
+- A context table with any row whose context is `loading` has `loading > 0` and the UI shows
+  it as loading — such rows are not shown as Unknown. The price table never waits.
+- `wallets` scopes the set like §10's wallet filter (the UI labels it "selected wallets").
 
 ## 14. Privacy rules
 
@@ -481,7 +520,10 @@ classifying value is `null`; the buckets plus Unknown always sum exactly to the 
 - **Aggregation:** same bucket and category merge; different categories do not; smaller
   interval separates; `maxMarkers` coarsening; filters; `estimated` flag.
 - **Context / no look-ahead:** changing every candle on or after the transaction's day leaves
-  the context identical; own-day candle unused; `dateOnly` rows; warm-up and gap → `null`.
+  the context identical (every value, recorded and close-valued rows, midday and midnight);
+  each value equals the indicator on the restricted series; own-day, forming and partial
+  candles unused; `dateOnly` rows; warm-up and gap → `null`; loading states; the seed as the
+  high before the provider's history.
 - **Buckets:** boundaries inclusive on the lower side; Unknown bucket; buckets sum to the total
   in satoshis exactly.
 - **Privacy:** the service's generated request windows for a "View on Chart" focus are all

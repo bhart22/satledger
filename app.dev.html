@@ -1108,6 +1108,18 @@
 .mkt-txlist button:focus-visible { outline:2px solid var(--bitcoin-orange); outline-offset:2px; }
 .mkt-detail { display:flex; flex-direction:column; gap:1rem; padding-top:.25rem; }
 .mkt-detail .mkt-stats { grid-template-columns:1fr 1fr; }
+.mkt-context { display:flex; flex-direction:column; gap:.5rem; border-top:1px solid var(--border-color); padding-top:.75rem; }
+.mkt-context .mkt-activity-sub { margin:0; }
+.mkt-acq { display:flex; flex-direction:column; gap:.5rem; }
+.mkt-acq-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:.75rem; }
+@media(max-width:480px) { .mkt-acq-grid { grid-template-columns:1fr; } }
+.mkt-acq-table { overflow-x:auto; border:1px solid var(--border-color); border-radius:10px; padding:.5rem .625rem; background:var(--bg-primary); }
+.mkt-acq-table table { width:100%; border-collapse:collapse; font-size:.75rem; font-variant-numeric:tabular-nums; }
+.mkt-acq-caption { text-align:left; font-weight:700; font-size:.8125rem; padding-bottom:.375rem; color:var(--text-primary); }
+.mkt-acq-table th, .mkt-acq-table td { padding:.25rem .375rem; text-align:right; white-space:nowrap; border-bottom:1px solid var(--border-color); }
+.mkt-acq-table th[scope="row"], .mkt-acq-table thead th:first-child { text-align:left; font-weight:500; white-space:normal; }
+.mkt-acq-table thead th { font-weight:600; color:var(--text-secondary); }
+.mkt-acq-table tfoot th, .mkt-acq-table tfoot td { font-weight:700; border-bottom:0; }
 .mkt-detail [data-detail="notes"] { font-weight:500; white-space:pre-wrap; overflow-wrap:anywhere; }
 .mkt-checks { display:flex; flex-direction:column; }
 .mkt-check { display:flex; align-items:center; gap:.5rem; min-height:40px; font-size:.875rem; cursor:pointer; }
@@ -2760,9 +2772,22 @@ const Indicators = (() => {
   const PERIOD_MIN = 2, PERIOD_MAX = 1000;
   const SOURCES = Object.freeze(['close', 'open', 'high', 'low', 'hl2', 'ohlc4']);
   const CATEGORIES = Object.freeze(['TREND', 'MOMENTUM', 'VOLATILITY', 'VOLUME', 'STATISTICAL']);
-  // Highest BTC-USD price before the provider's earliest daily candle (§12). Deliberately null
-  // until Phase 8 verifies a value, date and authoritative source; never filled in from memory.
-  const ATH_SEED = null;
+  // Highest BTC-USD price before the provider's earliest daily candle (§12; Coinbase BTC-USD
+  // starts 2015-07-20). Verified 2026-11-14 from Bitstamp's own trade record, the exchange's
+  // public daily OHLC endpoint https://www.bitstamp.net/api/v2/ohlc/btcusd/?step=86400 : every
+  // daily candle from 2011-08-18 (Bitstamp's first) to 2015-07-19, 1,432 days with no gap, has
+  // its highest high $1,163.00 on the UTC day 2013-11-30. Independently reported as Bitstamp's
+  // late-2013 record by Newsweek ("Bitcoin Price Passes $1,000 For First Time Since 2013",
+  // newsweek.com/bitcoin-price-passes-1000-first-time-2013-537788). Other venues printed other figures that month (Mt. Gox about $1,242, at a
+  // premium), so this is the high on one major USD exchange — the same kind of figure as the
+  // provider's own highs. Only a seed verified like this may be written here: a non-null seed
+  // is what switches the wording to "All-Time High" (athLabels).
+  const ATH_SEED = Object.freeze({
+    price: 1163,
+    date: '2013-11-30',
+    source: 'Bitstamp BTC/USD daily OHLC (bitstamp.net/api/v2/ohlc/btcusd, step 86400), max high 2011-08-18…2015-07-19',
+  });
+  const ATH_SEED_VERIFIED = ATH_SEED !== null;
 
   const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
   const nulls = n => new Array(n).fill(null);
@@ -3163,7 +3188,7 @@ const Indicators = (() => {
   };
 
   return Object.freeze({
-    SOURCES, CATEGORIES, ATH_SEED, PERIOD_MIN, PERIOD_MAX,
+    SOURCES, CATEGORIES, ATH_SEED, ATH_SEED_VERIFIED, PERIOD_MIN, PERIOD_MAX,
     definitions: DEFINITIONS, ids: IDS, get, resolveSettings, calculateSegmented, annualizationFactor,
     returns, extremes, drawdown, previousAth, athLabels,
   });
@@ -3720,12 +3745,184 @@ const PersonalMarket = (() => {
       .sort((a, b) => a.t - b.t || MARKER_GROUP_ORDER.indexOf(a.category) - MARKER_GROUP_ORDER.indexOf(b.category));
   };
 
+  // ── Historical context at a transaction (§12; docs/technical-indicators.md §13) ──
+  // contextCache computes every context series ONCE over the completed daily candles (the forming
+  // day and partial candles dropped); contextAt reads index k, the last candle with
+  // t + 1 day <= T. Valid only because every series here is causal. Nothing on or after the
+  // transaction's own UTC day is read: not for the indicators, not for the high, not for the
+  // price (a price that came from that day's close is not used — see contextPrice).
+  const CONTEXT_SERIES = Object.freeze([
+    ['sma20', 'sma', { period: 20 }, 'sma'], ['sma50', 'sma', { period: 50 }, 'sma'], ['sma200', 'sma', { period: 200 }, 'sma'],
+    ['rsi14', 'rsi', { period: 14 }, 'rsi'],
+    ['macd', 'macd', { fast: 12, slow: 26, signal: 9 }, 'macd'], ['macdSignal', 'macd', { fast: 12, slow: 26, signal: 9 }, 'signal'],
+    ['macdHist', 'macd', { fast: 12, slow: 26, signal: 9 }, 'histogram'],
+    ['atr14', 'atr', { period: 14 }, 'atr'],
+    ['bbUpper', 'bollinger', { period: 20, multiplier: 2 }, 'upper'], ['bbMiddle', 'bollinger', { period: 20, multiplier: 2 }, 'middle'],
+    ['bbLower', 'bollinger', { period: 20, multiplier: 2 }, 'lower'],
+    ['hv30', 'volatility', { period: 30 }, 'volatility'],
+  ]);
+  const CONTEXT_KEYS = Object.freeze([...CONTEXT_SERIES.map(s => s[0]),
+    'bbPosition', 'high', 'highT', 'highFromSeed', 'drawdownFromHigh', 'distSma50', 'distSma200', 'sma50AboveSma200']);
+  // contextCache(candlesDaily, { nowSec, earliestSec, seed }) → { candles, series, complete, lastT,
+  // earliestSec, seed }. `complete`: the earliest daily candle is verified and held, so the
+  // history the series start from is the provider's whole history. Until then contextAt reports
+  // 'loading' — an EMA, a Wilder average or the high computed from a partial history would be a
+  // different, wrong number, not an approximation.
+  const contextCache = (candlesDaily, { nowSec = null, earliestSec = null, seed = Indicators.ATH_SEED } = {}) => {
+    const candles = (Array.isArray(candlesDaily) ? candlesDaily : [])
+      .filter(k => k && isFiniteNum(k.t) && k.t % DAY === 0 && !k.partial && (!isFiniteNum(nowSec) || k.t + DAY <= nowSec))
+      .slice().sort((a, b) => a.t - b.t)
+      .filter((k, i, a) => i === 0 || a[i - 1].t !== k.t);
+    const series = {};
+    const runs = new Map();
+    for(const [key, id, settings, out] of CONTEXT_SERIES) {
+      const runKey = id + JSON.stringify(settings);
+      if(!runs.has(runKey)) runs.set(runKey, candles.length ? Indicators.calculateSegmented(id, candles, settings, '1d') : null);
+      const r = runs.get(runKey);
+      series[key] = r ? r[out] : [];
+    }
+    const known = isFiniteNum(earliestSec);
+    return {
+      candles, series, seed,
+      earliestSec: known ? earliestSec : null,
+      complete: known && candles.length > 0 && candles[0].t <= earliestSec,
+      lastT: candles.length ? candles[candles.length - 1].t : null,
+    };
+  };
+  // A price that is a fact of the transaction itself. One taken from that day's close
+  // (HISTORICAL_MARKET_LOOKUP) is later than the transaction, so it is not "known at the time".
+  const contextPrice = row => row && (row.priceSource === PRICE_SOURCE.RECORDED_UNIT_PRICE
+    || row.priceSource === PRICE_SOURCE.DERIVED_TRANSACTION_VALUE || row.priceSource === PRICE_SOURCE.REWARD_RECEIPT_VALUE)
+    ? positive(row.price) : null;
+  const emptyContext = (status, extra = {}) => {
+    const out = { status, refT: null, price: null };
+    for(const k of CONTEXT_KEYS) out[k] = null;
+    return { ...out, ...extra };
+  };
+  // contextAt(row, cache) → { status, refT, price, sma20 … hv30, bbPosition, high, highT,
+  // highFromSeed, drawdownFromHigh, distSma50, distSma200, sma50AboveSma200 }.
+  // status 'loading': the history this needs is not held yet (every value null — the UI shows a
+  // loading state, never a number). 'ready': each value is a number or null (warm-up, a provider
+  // gap on the previous day, a transaction before the provider's history, an unknown price).
+  const contextAt = (row, cache) => {
+    if(!row || !isFiniteNum(row.tSec) || !cache) return emptyContext('ready');
+    const T = row.tSec, prevDay = dayStart(T) - DAY;
+    if(!cache.complete) return emptyContext('loading');
+    if(cache.lastT === null || prevDay > cache.lastT) {
+      // The previous day is after everything held: not fetched yet, not a gap.
+      return emptyContext(cache.lastT === null || prevDay >= cache.earliestSec ? 'loading' : 'ready');
+    }
+    const xs = cache.candles;
+    let lo = 0, hi = xs.length;
+    while(lo < hi) { const mid = (lo + hi) >> 1; if(xs[mid].t + DAY <= T) lo = mid + 1; else hi = mid; }
+    const k = lo - 1;
+    const price = contextPrice(row);
+    const rel = base => price != null && base != null && base > 0 ? price / base - 1 : null;
+    const withHigh = (out, held) => {
+      const ath = Indicators.previousAth(held, T, { seed: cache.seed, earliestSec: cache.earliestSec });
+      if(ath) { out.high = ath.price; out.highT = ath.t; out.highFromSeed = ath.fromSeed; }
+      out.drawdownFromHigh = rel(out.high);
+      return out;
+    };
+    // Before the provider's first candle closed: no indicator exists, but a verified seed is
+    // still the high known at that time once its own day had ended.
+    if(k < 0) return withHigh(emptyContext('ready', { price }), []);
+    // Previous day missing (a provider gap): every value "—"; that day's high is unknown too.
+    if(xs[k].t !== prevDay) return emptyContext('ready', { price });
+    const out = withHigh(emptyContext('ready', { refT: xs[k].t, price }), xs.slice(0, k + 1));
+    for(const [key] of CONTEXT_SERIES) { const v = cache.series[key][k]; out[key] = isFiniteNum(v) ? v : null; }
+    out.distSma50 = rel(out.sma50);
+    out.distSma200 = rel(out.sma200);
+    out.sma50AboveSma200 = out.sma50 != null && out.sma200 != null ? out.sma50 > out.sma200 : null;
+    out.bbPosition = price != null && out.bbUpper != null && out.bbLower != null && out.bbUpper > out.bbLower
+      ? (price - out.bbLower) / (out.bbUpper - out.bbLower) : null;
+    return out;
+  };
+
+  // ── Acquisition analytics (§13) ──
+  // Descriptive tables over the acquisition set of §7 (include, default Buy + Reward; excludeStats,
+  // non-positive amounts, sells and every transfer left out). Each table: one row per bucket
+  // plus "Unknown", lower bounds inclusive, and the rows sum exactly — in satoshis — to the
+  // total acquired. USD per bucket is the §7 usdIn (purchases with fees) where known.
+  const PRICE_BUCKETS = Object.freeze([25000, 50000, 75000, 100000]);
+  const RSI_BUCKETS = Object.freeze([30, 50, 70]);
+  const DRAWDOWN_BUCKETS = Object.freeze([0.1, 0.2, 0.3, 0.4, 0.5]);
+  const thousands = n => `$${n / 1000}k`;
+  // Index of the first bound the value is below; bounds are lower-inclusive for the next bucket.
+  const bucketIndex = (v, bounds) => { let i = 0; while(i < bounds.length && v >= bounds[i]) i++; return i; };
+  const rangeLabels = (bounds, fmt, unit = '') => [
+    `Under ${fmt(bounds[0])}${unit}`,
+    ...bounds.slice(1).map((b, i) => `${fmt(bounds[i])}–${fmt(b)}${unit}`),
+    `${fmt(bounds[bounds.length - 1])}${unit} and above`,
+  ];
+  // Drawdown: magnitude below the high, compared without forming price / high − 1 (which puts an
+  // exact 10 % at 9.999…%): magnitude >= b ⇔ price <= high × (1 − b), checked as 10·price <= high·(10 − 10b).
+  const drawdownBucket = (price, high) => {
+    if(price > high) return 'above';
+    let i = 0;
+    while(i < DRAWDOWN_BUCKETS.length && 10 * price <= high * (10 - Math.round(DRAWDOWN_BUCKETS[i] * 10))) i++;
+    return i;
+  };
+  // bucketAcquisitions(rows, cache, { include, wallets, contextLabels }) → { totalSats, count,
+  // loading, tables: [{ id, title, usesContext, loading, buckets: [{ key, label, sats, count, share,
+  // usd, usdUnknown }] }] }. `loading` counts acquisitions whose context is still loading; a
+  // context table with any is not complete and the UI shows it as loading, not as Unknown.
+  const bucketAcquisitions = (rows, cache, { include = AVG_PRESETS.ACQUISITION_PRICE.include, wallets = null, contextLabels = null } = {}) => {
+    const o = avgOptions({ include, feeMode: 'include', wallets });
+    const acq = [];
+    for(const a of acquisitionRows(Array.isArray(rows) ? rows : [], o)) {
+      if(a.skip === 'excluded' || a.skip === 'nonPositive') continue;
+      acq.push({ row: a.row, usdIn: a.skip ? null : a.usdIn, ctx: contextAt(a.row, cache) });
+    }
+    const totalSats = acq.reduce((s, a) => s + a.row.sats, 0);
+    const aboveLabel = contextLabels?.contextHigh && /ATH/.test(contextLabels.contextHigh) ? 'Above previous ATH' : 'Above that high';
+    const defs = [
+      { id: 'price', title: 'By price', usesContext: false,
+        labels: rangeLabels(PRICE_BUCKETS, thousands),
+        classify: a => a.row.price != null && a.row.priceSource !== PRICE_SOURCE.UNKNOWN ? bucketIndex(a.row.price, PRICE_BUCKETS) : null },
+      { id: 'sma50', title: 'Price versus SMA 50', usesContext: true, labels: ['Below SMA 50', 'At or above SMA 50'],
+        classify: a => a.ctx.distSma50 == null ? null : a.ctx.price < a.ctx.sma50 ? 0 : 1 },
+      { id: 'sma200', title: 'Price versus SMA 200', usesContext: true, labels: ['Below SMA 200', 'At or above SMA 200'],
+        classify: a => a.ctx.distSma200 == null ? null : a.ctx.price < a.ctx.sma200 ? 0 : 1 },
+      { id: 'trend', title: 'Trend state', usesContext: true, labels: ['SMA 50 above SMA 200', 'SMA 50 at or below SMA 200'],
+        classify: a => a.ctx.sma50AboveSma200 == null ? null : a.ctx.sma50AboveSma200 ? 0 : 1 },
+      { id: 'rsi', title: 'RSI 14', usesContext: true, labels: rangeLabels(RSI_BUCKETS, String),
+        classify: a => a.ctx.rsi14 == null ? null : bucketIndex(a.ctx.rsi14, RSI_BUCKETS) },
+      { id: 'drawdown', title: contextLabels?.contextDrawdown || 'Drawdown from the previous high', usesContext: true,
+        labels: [...[0, ...DRAWDOWN_BUCKETS].map((b, i, a) => i < a.length - 1
+          ? `${Math.round(b * 100)}–${Math.round(a[i + 1] * 100)}% below` : `${Math.round(b * 100)}% or more below`), aboveLabel],
+        classify: a => {
+          if(a.ctx.price == null || a.ctx.high == null) return null;
+          const b = drawdownBucket(a.ctx.price, a.ctx.high);
+          return b === 'above' ? DRAWDOWN_BUCKETS.length + 1 : b;
+        } },
+    ];
+    const tables = defs.map(d => {
+      const buckets = d.labels.map((label, i) => ({ key: String(i), label, sats: 0, count: 0, share: null, usd: 0, usdUnknown: 0 }));
+      const unknown = { key: 'unknown', label: 'Unknown', sats: 0, count: 0, share: null, usd: 0, usdUnknown: 0 };
+      let loading = 0;
+      for(const a of acq) {
+        if(d.usesContext && a.ctx.status === 'loading') loading++;
+        const i = d.usesContext && a.ctx.status === 'loading' ? null : d.classify(a);
+        const b = i == null ? unknown : buckets[i];
+        b.sats += a.row.sats; b.count++;
+        if(a.usdIn == null) b.usdUnknown++; else b.usd += a.usdIn;
+      }
+      const all = [...buckets, unknown];
+      for(const b of all) b.share = totalSats > 0 ? b.sats / totalSats : null;
+      return { id: d.id, title: d.title, usesContext: d.usesContext, loading, buckets: all };
+    });
+    return { totalSats, count: acq.length, loading: acq.filter(a => a.ctx.status === 'loading').length, tables };
+  };
+
   return Object.freeze({
     PRICE_SOURCE, CATEGORY, MARKER_GROUP, AVG_PRESETS, DEFAULT_FILTERS, DEFAULT_MAX_MARKERS,
+    PRICE_BUCKETS, RSI_BUCKETS, DRAWDOWN_BUCKETS, CONTEXT_KEYS,
     toChartTransactions, priceSourceLabel, allInLabel,
     normalizeFilters, applyFilters,
     balanceHistory, balanceBefore, balanceAtBuckets,
     avgAcquisition, avgAcquisitionSeries, rangeSummary, aggregateMarkers,
+    contextCache, contextAt, bucketAcquisitions,
   });
 })();
 
@@ -6296,10 +6493,15 @@ function marketSummary({ daily, candles, interval, price, nowSec, earliestSec })
   const p = price > 0 ? price : null;
   if(p != null) { fh = fh == null ? p : Math.max(fh, p); fl = fl == null ? p : Math.min(fl, p); }
 
-  const labels = Indicators.athLabels({ seedVerified: false, earliestSec });
+  // The high needs the whole daily history: with the seed, a partial history would put the
+  // 2013 seed above highs that are simply not loaded yet.
+  const complete = earliestSec != null && done.length > 0 && done[0].t <= earliestSec;
+  const labels = complete ? Indicators.athLabels({ seedVerified: Indicators.ATH_SEED_VERIFIED, earliestSec })
+    : Indicators.athLabels({ seedVerified: false, earliestSec: null });
   const ath = Indicators.previousAth(done, nowSec, { earliestSec });
   const high = labels.loading ? null : ath == null && fh == null ? null : Math.max(ath ? ath.price : -Infinity, fh ?? -Infinity);
   const highT = high == null ? null : ath && ath.price >= high ? ath.t : today;
+  const highFromSeed = high != null && !!ath && ath.fromSeed && ath.price >= high;
   const yearAgo = today - 364 * DAY;
   const yr = Indicators.extremes(done.filter(c => c.t >= yearAgo));
   const covers = done.length > 0 && done[0].t <= yearAgo;
@@ -6315,7 +6517,7 @@ function marketSummary({ daily, candles, interval, price, nowSec, earliestSec })
     rangeHigh: ext ? ext.high : null, rangeHighT: ext ? ext.highT : null,
     rangeLow: ext ? ext.low : null, rangeLowT: ext ? ext.lowT : null,
     high52: wk52 ? wk52.high : null, low52: wk52 ? wk52.low : null,
-    high, highT,
+    high, highT, highFromSeed,
     drawdownFromHigh: high != null && p != null ? Indicators.returns.simple(high, p) : null,
     sma50, sma200,
     sma50Dist: sma50 != null && p != null ? Indicators.returns.simple(sma50, p) : null,
@@ -6327,6 +6529,10 @@ function marketSummary({ daily, candles, interval, price, nowSec, earliestSec })
   };
 }
 const mktPct = v => v == null || !Number.isFinite(v) ? '—' : `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v * 100).toFixed(2)}%`;
+// docs/technical-indicators.md §12: the provider's daily highs since its first candle, and before
+// that the verified seed.
+const MKT_ATH_HELP = Indicators.ATH_SEED ? 'The highest daily high in the market data provider’s history, or the record from before that history begins — '
+  + `${fmtUSD(Indicators.ATH_SEED.price)} on Bitstamp on ${mktDay(Date.parse(Indicators.ATH_SEED.date + 'T00:00:00Z') / 1000)} — whichever is higher.` : '';
 
 function MarketSummaryView({ s, rangeName, interval }) {
   const item = (key, label, value, text, sub = null, tip = null) => (
@@ -6347,9 +6553,13 @@ function MarketSummaryView({ s, rangeName, interval }) {
         {item('rangeLow', `Range low`, s.rangeLow, usd(s.rangeLow), on(s.rangeLowT))}
         {item('high52', '52-week high', s.high52, usd(s.high52), null, 'Highest daily high over the last 365 days, including today.')}
         {item('low52', '52-week low', s.low52, usd(s.low52))}
-        {item('high', loadingHigh ? 'High since …' : s.labels.summaryHigh, s.high, loadingHigh ? 'Loading full history…' : usd(s.high), loadingHigh ? null : on(s.highT),
-          'The highest price in the provider’s daily history on this device, which starts on the date shown. Bitcoin traded before that date, so this is not called an all-time high.')}
-        {item('drawdownFromHigh', loadingHigh ? 'Drawdown from High since …' : s.labels.summaryDrawdown, s.drawdownFromHigh, loadingHigh ? '…' : mktPct(s.drawdownFromHigh))}
+        {item('high', loadingHigh ? (Indicators.ATH_SEED_VERIFIED ? 'All-Time High' : 'High since …') : s.labels.summaryHigh, s.high,
+          loadingHigh ? 'Loading full history…' : usd(s.high),
+          loadingHigh ? null : `${s.highFromSeed ? `${mktDay(s.highT)} on Bitstamp` : on(s.highT)}`,
+          Indicators.ATH_SEED_VERIFIED ? MKT_ATH_HELP : 'The highest price in the provider’s daily history on this device, which starts on the date shown. Bitcoin traded before that date, so this is not called an all-time high.')}
+        {item('drawdownFromHigh', loadingHigh ? (Indicators.ATH_SEED_VERIFIED ? 'Current Drawdown' : 'Drawdown from High since …') : s.labels.summaryDrawdown,
+          s.drawdownFromHigh, loadingHigh ? '…' : mktPct(s.drawdownFromHigh), null,
+          Indicators.ATH_SEED_VERIFIED ? 'Current price against the All-Time High; the same number is the distance from it.' : null)}
         {item('maxDrawdown', `Max drawdown · ${rangeName}`, s.maxDrawdown, mktPct(s.maxDrawdown),
           s.maxDrawdownPeakT != null && s.maxDrawdown < 0 ? `${mktDay(s.maxDrawdownPeakT)} → ${mktDay(s.maxDrawdownTroughT)}` : null,
           'Largest fall from a closing peak to a later close within the candles shown.')}
@@ -6427,10 +6637,64 @@ function MarketMarkerList({ rows, txById, onPick }) {
   );
 }
 
-// One transaction: the fields of docs/personal-market-analytics.md §11 (the market context block
-// arrives in Phase 8). Read from the chart row and, for notes, the original record. No editor:
+// The market as it stood when a transaction happened (docs/personal-market-analytics.md §12):
+// values from PersonalMarket.contextAt, which reads only daily candles that had closed before
+// it. Facts only — no grade, no verdict colour. Distances use the transaction's own price, so
+// they are personal figures and blur with hide-values.
+function MarketTxContext({ ctx, labels }) {
+  const item = (key, label, value, text, sub = null, priv = false) => (
+    <div className="mkt-stat" key={key}>
+      <dt>{label}</dt>
+      <dd data-context={key} data-value={value == null ? '' : String(value)} className={priv ? 'mkt-private' : undefined}>
+        {text}{sub ? <span className="mkt-stat-sub">{sub}</span> : null}
+      </dd>
+    </div>
+  );
+  const usd = v => v == null ? '—' : fmtUSD(v);
+  const num = (v, d = 2) => v == null ? '—' : v.toFixed(d);
+  if(ctx.status === 'loading') return (
+    <section className="mkt-context" aria-labelledby="mkt-ctx-title" data-tx-context="loading">
+      <h3 id="mkt-ctx-title" className="mkt-activity-sub">Market before this transaction</h3>
+      <p className="mkt-legal" role="status"><span className="mkt-spinner" aria-hidden="true" /> Waiting for the full daily history to load on this device…</p>
+    </section>
+  );
+  const highLabel = labels.contextHigh || 'Previous high', ddLabel = labels.contextDrawdown || 'Drawdown from previous high';
+  const above = ctx.drawdownFromHigh != null && ctx.drawdownFromHigh > 0;
+  const aboveText = /ATH/.test(highLabel) ? 'above previous ATH' : 'above that high';
+  const dist = v => v == null ? null : `price ${mktPct(v)} from it`;
+  return (
+    <section className="mkt-context" aria-labelledby="mkt-ctx-title" data-tx-context="ready" data-ref-t={ctx.refT ?? ''}>
+      <h3 id="mkt-ctx-title" className="mkt-activity-sub">Market before this transaction</h3>
+      <p className="mkt-legal">
+        {ctx.refT != null ? `Daily values at the close of ${mktDay(ctx.refT)} (UTC), the last full day before it. Nothing later is used.`
+          : 'No completed daily candle from the day before — values are not available.'}
+        {ctx.price == null && ctx.refT != null ? ' Distances need a recorded price, so they are not shown.' : ''}
+      </p>
+      <dl className="mkt-stats">
+        {item('sma20', 'SMA 20', ctx.sma20, usd(ctx.sma20))}
+        {item('sma50', 'SMA 50', ctx.sma50, usd(ctx.sma50), dist(ctx.distSma50), ctx.distSma50 != null)}
+        {item('sma200', 'SMA 200', ctx.sma200, usd(ctx.sma200), dist(ctx.distSma200), ctx.distSma200 != null)}
+        {item('trend', 'SMA 50 vs SMA 200', ctx.sma50AboveSma200, ctx.sma50AboveSma200 == null ? '—' : ctx.sma50AboveSma200 ? 'SMA 50 above' : 'SMA 50 at or below')}
+        {item('rsi14', 'RSI 14', ctx.rsi14, num(ctx.rsi14, 1))}
+        {item('macd', 'MACD 12, 26, 9', ctx.macd, num(ctx.macd), ctx.macd == null ? null : `signal ${num(ctx.macdSignal)} · histogram ${num(ctx.macdHist)}`)}
+        {item('atr14', 'ATR 14', ctx.atr14, usd(ctx.atr14))}
+        {item('bollinger', 'Bollinger 20, 2', ctx.bbMiddle, usd(ctx.bbMiddle),
+          ctx.bbMiddle == null ? null : `upper ${usd(ctx.bbUpper)} · lower ${usd(ctx.bbLower)}`)}
+        {item('bbPosition', 'Position in the bands', ctx.bbPosition, ctx.bbPosition == null ? '—' : `${(ctx.bbPosition * 100).toFixed(0)}%`,
+          ctx.bbPosition == null ? null : '0% = lower band, 100% = upper band', ctx.bbPosition != null)}
+        {item('hv30', '30-day volatility', ctx.hv30, ctx.hv30 == null ? '—' : `${(ctx.hv30 * 100).toFixed(1)}%`, ctx.hv30 == null ? null : 'annualized')}
+        {item('high', highLabel, ctx.high, usd(ctx.high), ctx.highT == null ? null : `${mktDay(ctx.highT)}${ctx.highFromSeed ? ' on Bitstamp' : ''}`)}
+        {item('drawdown', ddLabel, ctx.drawdownFromHigh, ctx.drawdownFromHigh == null ? '—' : mktPct(ctx.drawdownFromHigh),
+          above ? aboveText : null, ctx.drawdownFromHigh != null)}
+      </dl>
+    </section>
+  );
+}
+
+// One transaction: the fields of docs/personal-market-analytics.md §11, then the market context
+// block (§12). Read from the chart row and, for notes, the original record. No editor:
 // "View Transaction" opens the existing one on the Transactions tab.
-function MarketTxDetail({ row, tx, onView }) {
+function MarketTxDetail({ row, tx, onView, ctx = null, labels = null }) {
   const item = (key, label, value, priv = true, sub = null) => (
     <div className="mkt-stat" key={key}>
       <dt>{label}</dt>
@@ -6455,6 +6719,7 @@ function MarketTxDetail({ row, tx, onView }) {
         {fee ? item('fee', transferLike ? 'Network fee' : 'Fee', fee) : null}
         {tx.notes ? item('notes', 'Notes', tx.notes) : null}
       </dl>
+      {ctx ? <MarketTxContext ctx={ctx} labels={labels || {}} /> : null}
       <button type="button" className="btn btn-primary" onClick={() => onView(row.id)} data-view-transaction="1">View Transaction</button>
     </div>
   );
@@ -6521,7 +6786,7 @@ function MarketTxPanel({ personal, update, walletNames, canAddPane, paneNote }) 
 
 // "My Activity": Average Acquisition Price against the current price, and the selected-range
 // summary. Wording per docs/market-analytics.md §9: "Difference", never a verdict.
-function MarketActivityView({ hasTx, aap, price, range, rangeName, scoped }) {
+function MarketActivityView({ hasTx, aap, price, range, rangeName, scoped, buckets = null }) {
   const item = (key, label, value, text, sub = null, tip = null, priv = true) => (
     <div className="mkt-stat" key={key}>
       <dt>{label}{tip ? <InfoTip text={tip} /> : null}</dt>
@@ -6571,7 +6836,61 @@ function MarketActivityView({ hasTx, aap, price, range, rangeName, scoped }) {
         </>
       ) : null}
       <p className="mkt-legal">Analytics only. Category and wallet filters apply to the range figures; internal transfers count as neither a purchase nor a sale.</p>
+      {buckets && buckets.count ? <MarketAcquisitionTables b={buckets} scoped={scoped} /> : null}
     </section>
+  );
+}
+
+// docs/personal-market-analytics.md §13: how acquisitions distribute across market conditions,
+// as plain tables. Descriptive only: no bucket is better than another. Every table sums to the
+// same total, Unknown included. A context table waits for the daily history rather than
+// counting not-yet-known rows as Unknown.
+function MarketAcquisitionTables({ b, scoped }) {
+  const pct = v => v == null ? '—' : `${(v * 100).toFixed(1)}%`;
+  return (
+    <div className="mkt-acq" data-acq-tables="1" data-total-sats={b.totalSats}>
+      <h3 className="mkt-activity-sub">Acquisitions by market conditions{scoped ? ' · selected wallets' : ''}</h3>
+      <p className="mkt-legal">
+        All your purchases and rewards ({b.count}), excluding rows marked “exclude from statistics”. Market values are daily,
+        from the last full UTC day before each acquisition. Lower bounds are inclusive.
+      </p>
+      <div className="mkt-acq-grid">
+        {b.tables.map(t => {
+          const capId = `mkt-acq-${t.id}`;
+          if(t.usesContext && t.loading) return (
+            <div className="mkt-acq-table" key={t.id} data-acq-table={t.id} data-loading="1">
+              <div className="mkt-acq-caption" id={capId}>{t.title}</div>
+              <p className="mkt-legal" role="status"><span className="mkt-spinner" aria-hidden="true" /> Waiting for the full daily history…</p>
+            </div>
+          );
+          return (
+            <div className="mkt-acq-table" key={t.id} data-acq-table={t.id}>
+              <table aria-labelledby={capId}>
+                <caption id={capId} className="mkt-acq-caption">{t.title}</caption>
+                <thead>
+                  <tr><th scope="col">Bucket</th><th scope="col">BTC</th><th scope="col">Count</th><th scope="col">Share</th><th scope="col">USD</th></tr>
+                </thead>
+                <tbody>
+                  {t.buckets.map(x => (
+                    <tr key={x.key} data-bucket={x.key} data-sats={x.sats}>
+                      <th scope="row">{x.label}</th>
+                      <td className="mkt-private">{fmtBTC(x.sats / 1e8)}</td>
+                      <td className="mkt-private">{x.count}</td>
+                      <td className="mkt-private">{pct(x.share)}</td>
+                      <td className="mkt-private">{x.count === 0 ? '—' : `${fmtUSD(x.usd)}${x.usdUnknown ? '*' : ''}`}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr><th scope="row">Total</th><td className="mkt-private">{fmtBTC(b.totalSats / 1e8)}</td><td className="mkt-private">{b.count}</td><td>100%</td><td /></tr>
+                </tfoot>
+              </table>
+            </div>
+          );
+        })}
+      </div>
+      <p className="mkt-legal">USD is what purchases cost including fees and rewards’ value at receipt; * a row of unknown value is counted in BTC but not in USD. Unknown: the price or the indicator was not available (warm-up, a gap in the provider’s data, before its history, or a price taken from that day’s close).</p>
+    </div>
   );
 }
 
@@ -6955,6 +7274,14 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const rangeSum = useMemo(() => hasTx && firstT != null ? PersonalMarket.rangeSummary(txList, {
     fromSec: firstT, toSec: endT, candlesDaily: daily, nowSec: Math.floor(Date.now() / 1000), filters: txFilters,
   }) : null, [transactions, firstT, endT, daily, today, txFilters]);
+
+  // ── market context at each transaction and the acquisition tables (§12–13): the daily context
+  // series are computed once per daily history, never per transaction or UI event ──
+  const ctxCache = useMemo(() => PersonalMarket.contextCache(daily, { nowSec: Math.floor(Date.now() / 1000), earliestSec }),
+    [daily, earliestSec, today]);
+  const ctxLabels = useMemo(() => Indicators.athLabels({ seedVerified: Indicators.ATH_SEED_VERIFIED, earliestSec }), [earliestSec]);
+  const acqBuckets = useMemo(() => hasTx ? PersonalMarket.bucketAcquisitions(chartTxs, ctxCache, { wallets: scope, contextLabels: ctxLabels }) : null,
+    [hasTx, chartTxs, ctxCache, scope, ctxLabels]);
 
   // ── marker selection: a single marker opens its detail, an aggregated one lists its members ──
   const openMarker = useCallback(m => {
@@ -7396,7 +7723,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         </div>
       </div>
       {summary ? <MarketSummaryView s={summary} rangeName={MARKET_RANGE_NAMES[view.range] || view.range} interval={view.interval} /> : null}
-      <MarketActivityView hasTx={hasTx} aap={aap} price={btcPrice} range={rangeSum} scoped={!!scope}
+      <MarketActivityView hasTx={hasTx} aap={aap} price={btcPrice} range={rangeSum} scoped={!!scope} buckets={acqBuckets}
         rangeName={view ? MARKET_RANGE_NAMES[view.range] || view.range : ''} />
       {sheet ? (
         <MarketSheet title="Indicators" onClose={() => setSheet(false)}>
@@ -7425,7 +7752,7 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
         if(!row || !tx) return null;
         return (
           <MarketSheet title={MKT_CATEGORY_TEXT[row.category]} onClose={close} className={hideValues ? 'mkt-values-hidden' : ''}>
-            <MarketTxDetail row={row} tx={tx} onView={viewTransaction} />
+            <MarketTxDetail row={row} tx={tx} onView={viewTransaction} ctx={PersonalMarket.contextAt(row, ctxCache)} labels={ctxLabels} />
           </MarketSheet>
         );
       })() : null}

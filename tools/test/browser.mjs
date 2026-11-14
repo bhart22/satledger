@@ -1083,11 +1083,12 @@ console.log('\n[Market candle store]');
         atr14: last('atr', { period: 14 }, 'atr'), hv30: last('volatility', { period: 30 }, 'volatility') };
       const bad = Object.entries(want).filter(([k, v]) => !(v != null && val(k) != null && Math.abs(val(k) - v) <= 1e-9 * Math.abs(v)));
       const text = document.querySelector('[data-market-view]').innerText;
-      return { ok: bad.length === 0, bad, highLabel: /High since \\d{2}\\/\\d{2}\\/\\d{4}/.test(text), noAth: !/All-Time High|\\bATH\\b/.test(text),
+      return { ok: bad.length === 0, bad, athLabel: /All-Time High/.test(text) && /Current Drawdown/.test(text), noHighSince: !/High since/.test(text),
         dd: val('drawdownFromHigh'), high: val('high') };
     });`);
   check('summary daily figures match Indicators on the cached daily candles', !!summary && sumCheck?.ok, JSON.stringify(sumCheck));
-  check('the high is labelled "High since <date>", never all-time high', sumCheck?.highLabel && sumCheck?.noAth, JSON.stringify(sumCheck));
+  // Phase 8 verified the ATH seed (Bitstamp, 2013-11-30), which is what allows this wording.
+  check('with the verified seed the high is labelled "All-Time High"', sumCheck?.athLabel && sumCheck?.noHighSince, JSON.stringify(sumCheck));
   check('drawdown from that high is price / high − 1', sumCheck?.high > 0 && Math.abs(sumCheck.dd - (60000 / sumCheck.high - 1)) < 1e-9, JSON.stringify(sumCheck));
 
   console.log('\n[Market preferences persist; the URL configures the view]');
@@ -1330,6 +1331,56 @@ console.log('\n[Market candle store]');
     || await evaluate(`return 'no detail; t=' + document.querySelector('[data-readout]').dataset.t + ' active=' + document.activeElement?.className;`);
   check('…including in the detail panel', /blur/.test(detailBlur), detailBlur);
   await closeSheet();
+  await evaluate(`document.querySelector('button[aria-label="Show financial values"]').click(); return 1;`);
+
+  // ── Phase 8: market context at a transaction, acquisition tables ──
+  console.log('\n[Market context at a transaction and acquisition tables]');
+  await show('Transactions'); await wait(300);
+  await evaluate(`document.querySelector('.tx-table-wrap [data-view-on-chart="pb1"]').click(); return 1;`);
+  await waitFor(`return document.querySelector('[data-tx-detail]')?.dataset.txDetail === 'pb1';`, 20000);
+  const ctxReady = await waitFor(`return document.querySelector('[data-tx-context]')?.dataset.txContext === 'ready';`, 40000);
+  check('the purchase detail shows a market context block once daily history is held', !!ctxReady,
+    await evaluate(`return document.querySelector('[data-tx-context]')?.dataset.txContext || (document.querySelector('[data-market-sheet]') ? 'no context block' : 'no detail');`));
+  const ctxCheck = await evaluate(`
+    if(!document.querySelector('[data-tx-context]')) return { ok: false, missing: true };
+    const T = Date.parse('${PTX[0].datetimeUtc}') / 1000, price = 50000;
+    const shown = {};
+    for(const d of document.querySelectorAll('[data-context]')) shown[d.dataset.context] = d.dataset.value === '' ? null : d.dataset.value;
+    const refT = +document.querySelector('[data-tx-context]').dataset.refT;
+    return MarketCandleStore.open().then(s => s.getCandles({ provider: 'coinbase', symbol: 'BTC-USD', interval: '1d' })).then(all => {
+      const cs = all.filter(c => c.t + 86400 <= T);   // only candles that had closed before the purchase
+      const last = (id, settings, key) => { const r = Indicators.calculateSegmented(id, cs, settings, '1d')[key]; return r[r.length - 1]; };
+      const high = Math.max(Indicators.ATH_SEED.price, ...cs.map(c => c.h));
+      const want = { sma20: last('sma', { period: 20 }, 'sma'), sma50: last('sma', { period: 50 }, 'sma'), sma200: last('sma', { period: 200 }, 'sma'),
+        rsi14: last('rsi', { period: 14 }, 'rsi'), macd: last('macd', {}, 'macd'), atr14: last('atr', { period: 14 }, 'atr'),
+        bollinger: last('bollinger', {}, 'middle'), hv30: last('volatility', { period: 30 }, 'volatility'),
+        high, drawdown: price / high - 1, trend: String(last('sma', { period: 50 }, 'sma') > last('sma', { period: 200 }, 'sma')) };
+      const bad = Object.entries(want).filter(([k, v]) => typeof v === 'string' ? shown[k] !== v
+        : !(v != null && shown[k] != null && Math.abs(+shown[k] - v) <= 1e-9 * Math.abs(v)));
+      return { ok: bad.length === 0 && refT === cs[cs.length - 1].t && refT === T - T % 86400 - 86400, bad, refT, n: cs.length };
+    });`);
+  check('context values equal Indicators on the daily candles closed before the transaction', ctxCheck?.ok, JSON.stringify(ctxCheck));
+  const ctxText = await evaluate(`return document.querySelector('[data-tx-context]')?.innerText || '';`);
+  check('context uses the verified seed\'s wording ("Previous ATH")', /Previous ATH/.test(ctxText) && /Drawdown from Previous ATH/.test(ctxText), ctxText);
+  check('the panel grades nothing', !/\b(good|bad|smart|early|late|cheap|expensive|buy signal|sell signal|recommend\w*|should)\b/i.test(ctxText), ctxText);
+  await closeSheet();
+
+  const tables = await waitFor(`const b = document.querySelector('[data-acq-tables]'); if(!b || b.querySelector('[data-loading]')) return null;
+    return { total: +b.dataset.totalSats, ids: [...b.querySelectorAll('[data-acq-table]')].map(t => t.dataset.acqTable),
+      sums: [...b.querySelectorAll('[data-acq-table]')].map(t => [...t.querySelectorAll('tbody tr')].reduce((s, r) => s + +r.dataset.sats, 0)),
+      unknownRows: [...b.querySelectorAll('[data-acq-table]')].map(t => !!t.querySelector('tr[data-bucket="unknown"]')),
+      accessible: [...b.querySelectorAll('table')].every(t => t.querySelector('caption') && t.querySelectorAll('th[scope=col]').length === 5),
+      text: b.innerText };`, 20000);
+  const ACQUIRED = 10_000_000 + 5_000_000 + 2_000_000 + 1_000_000 + 100_000; // buys (the value-unknown one included) + the reward
+  check('six acquisition tables are shown as accessible tables', JSON.stringify(tables?.ids) === '["price","sma50","sma200","trend","rsi","drawdown"]'
+    && tables.accessible && tables.unknownRows.every(Boolean), JSON.stringify(tables && { ids: tables.ids, accessible: tables.accessible }));
+  check('every table totals the acquired BTC exactly, Unknown included', tables?.total === ACQUIRED && tables.sums.every(s => s === ACQUIRED),
+    JSON.stringify(tables && { total: tables.total, sums: tables.sums }));
+  check('the drawdown table uses the verified-seed wording', /Drawdown from Previous ATH/.test(tables?.text || ''), tables?.text);
+  check('the tables grade nothing', !/\b(good|bad|smart|cheap|expensive|buy signal|sell signal|recommend\w*|should)\b/i.test(tables?.text || ''));
+  await evaluate(`document.querySelector('button[aria-label="Hide financial values"]').click(); return 1;`);
+  await wait(200);
+  check('hide values blurs the table figures', /blur/.test(await evaluate(`return getComputedStyle(document.querySelector('[data-acq-table] tbody td')).filter;`)));
   await evaluate(`document.querySelector('button[aria-label="Show financial values"]').click(); return 1;`);
 
   console.log('\n[Market personal data stays local]');
