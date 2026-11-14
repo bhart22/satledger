@@ -34,7 +34,8 @@ are added.
 
 ## 2. Normalization
 
-`PersonalMarket.toChartTransactions(transactions)` returns one object per usable transaction,
+`PersonalMarket.toChartTransactions(transactions, { candlesDaily, nowSec })` returns
+`{ items, skipped: { noTime, badType } }`: `items` holds one object per usable transaction,
 sorted with `compareTx`:
 
 ```js
@@ -48,13 +49,21 @@ sorted with `compareTx`:
   feeSats | feeUsd,      // see §4 — the fee unit depends on the type
   price,                 // resolved USD per BTC, or null
   priceSource,           // §3
+  usdValueSource,        // Reward with REWARD_RECEIPT_VALUE: the row's usdValueSource, else ''
   usdValue,              // §3, or null
+  allIn,                 // §3 all-in per-BTC figure, or null
   excludeStats,          // copied
   wallet, wallet2,       // copied
 }
 ```
 
-- Rows with no finite instant (`txInstant` not finite) are skipped and counted.
+- Rows with no finite instant (`txInstant` not finite) are skipped and counted in `noTime`; a
+  type outside the five is skipped and counted in `badType`.
+- `candlesDaily` supplies the daily closes for `HISTORICAL_MARKET_LOOKUP`. Only completed
+  candles are used: one flagged `partial`, or (when `nowSec` is given) one whose day has not
+  ended, is the forming candle and its close is not that day's close.
+- A Transfer naming neither wallet is `TRANSFER_INTERNAL`, because `txPortfolioDelta` treats it
+  as fee-only.
 - `dateOnly` rows are positioned by day. On an intraday chart they attach to the first candle
   of their UTC day and the detail panel shows "Time not recorded" instead of 12:00.
 - `notes` and `txhash` are not copied; the detail panel reads them from the original record
@@ -63,7 +72,8 @@ sorted with `compareTx`:
 ## 3. `price`, `totalUsd` and `fee` — actual repository semantics
 
 Established by reading the transaction form, the CoinLedger importer, the cost pool, the lot
-engine and the CoinLedger exporter in `app.dev.html`.
+engine and the CoinLedger exporter in `app.dev.html`. Re-verified against the code on
+2026-11-14 at the start of Phase 6: unchanged.
 
 **Buy and Sell**
 
@@ -129,7 +139,11 @@ Rules:
   Buy `(totalUsd + fee) / amount`, labelled "Cost per BTC including fees"; Sell
   `(totalUsd − fee) / amount`, labelled "Net per BTC after fees".
 - `usdValue`: Buy/Sell `numOr(tx.totalUsd, amount × price)` (the same expression the rest of
-  the app uses); Reward `usdValueAtReceipt`, else `amount × price`; otherwise `null`.
+  the app uses); Reward `usdValueAtReceipt`, else `amount × price`, else `amount ×` the day's
+  close (the same order as §7's `usdIn`, so the panel and the average never disagree; the row's
+  `priceSource` says it is an estimate); otherwise `null`. A value that is not positive is
+  `null`, never $0, so a stored `usdValueAtReceipt` of `0` is not a receipt value and
+  resolution falls through to the next source.
 - `HISTORICAL_MARKET_LOOKUP` uses the same-day daily close. That close is later than the
   transaction, so it is an **estimate of value**, clearly labelled, and is never described as
   the price the user got. It is used for marker placement and reward valuation only, never as
@@ -189,6 +203,11 @@ Derived from the existing balance rules; no second rule set.
 - All transactions count, including `excludeStats` rows and rows with a blank wallet, as the
   Dashboard's accumulated-BTC chart does.
 - Same-instant transactions are collapsed to the last value at that instant.
+- `balanceHistory(transactions, { wallets })`: with a wallet list, the balance of just those
+  wallets, summed from `txWalletDeltas(tx, toSatsInt)` — used when a wallet filter is active
+  (§10). An internal transfer between two listed wallets then costs only the fee.
+- `balanceBefore(history, tSec)` is the balance after every transaction with `tSec` strictly
+  earlier; `balanceAtBuckets(history, bucketTimes, interval)` is the resampling below.
 - For the chart, the series is resampled to candle buckets: the value at a bucket is the
   balance after the last transaction with `tSec < bucket end`.
 - Invariant tested: the final value equals the sum of `txWalletDeltas(tx, toSatsInt)` over all
@@ -202,14 +221,19 @@ An analytical measure: what the user's acquired BTC cost, or was worth, per BTC 
 AAP = Σ usdIn(tx) / ( Σ sats(tx) / 1e8 )        over included acquisitions with a known usdIn
 ```
 
-`PersonalMarket.avgAcquisition(transactions, { candlesDaily, include, feeMode, upToSec })`
-returns `{ price, sats, usd, count, skipped: { unknownValue, excluded } }`.
+`PersonalMarket.avgAcquisition(transactions, { candlesDaily, nowSec, include, feeMode, fromSec, upToSec, wallets })`
+returns `{ price, sats, usd, count, estimated, skipped: { unknownValue, excluded, nonPositive } }`.
+`price` is `null` when nothing is included. `estimated` counts rewards valued from the day's
+close; `nonPositive` counts rows whose amount is zero or negative (a holdings fix is not an
+acquisition).
 
 | Option | Default | Meaning |
 |---|---|---|
 | `include` | `['Buy', 'Reward']` | Which types count |
 | `feeMode` | `'include'` | `'include'`: Buy `usdIn = totalUsd + fee`. `'exclude'`: Buy `usdIn = totalUsd` |
 | `upToSec` | none | Only transactions at or before this instant (for the historical step line and for ranges) |
+| `fromSec` | none | Only transactions at or after this instant (ranges) |
+| `wallets` | none | Only rows whose `wallet` or `wallet2` is listed (the §10 wallet filter) |
 
 **Approved definition.** Average Acquisition Price is the default call: purchases **including
 applicable acquisition fees**, plus rewards at their USD value at receipt. It represents the
@@ -246,7 +270,8 @@ UI shows Average Acquisition Price only.
 
 **Historical step line.** `PersonalMarket.avgAcquisitionSeries(transactions, opts)` returns
 `[{ tSec, price }]`, one point per included acquisition, holding the running average after that
-acquisition. Drawn as a step line. A "current only" mode draws one horizontal line at the
+acquisition. Acquisitions sharing one instant give a single point holding the value after the
+last of them, because a chart series cannot hold two values at one time. Drawn as a step line. A "current only" mode draws one horizontal line at the
 latest value. Sales and transfers produce no step.
 
 **Current price versus Average Acquisition Price.** Shown as:
@@ -290,20 +315,31 @@ For the visible or selected range `[fromSec, toSec)`:
 | USD Invested | Σ `usdIn` of `ACQUISITION` rows with a known value (fees included) |
 | Average Acquisition Price (range) | `avgAcquisition` restricted to the range |
 
+`PersonalMarket.rangeSummary(transactions, { fromSec, toSec, candlesDaily, nowSec, filters })`
+returns `{ transactions, acquiredSats, rewardSats, soldSats, netSats, usdInvested,
+usdInvestedSkipped, avgAcquisition, netIncludesOther }`. Category and wallet filters (§10)
+apply to every line; with a wallet filter, Net BTC Change uses that wallet set's balance
+history.
+
 Internal transfers appear in none of these lines. If Net BTC Change differs from
 acquired + rewards − sold, a footnote reads "Includes network fees and transfers to or from
 untracked wallets".
 
 ## 9. Marker aggregation
 
-`PersonalMarket.aggregateMarkers(chartTxs, { interval, filters, maxMarkers })`:
+`PersonalMarket.aggregateMarkers(chartTxs, { interval, filters, maxMarkers, fromSec, toSec })`:
 
 1. Apply filters (§10).
-2. Key each transaction by `(Candles.bucketStart(tSec, interval), category)`.
-3. One marker per key: `{ t, category, count, sats, ids[], estimated }` where `estimated` is
-   true if any member's source is `HISTORICAL_MARKET_LOOKUP` or `UNKNOWN`.
+2. Key each transaction by `(Candles.bucketStart(tSec, interval), marker group)`. The marker
+   group is the category, except that the four transfer-like categories (internal, sent,
+   received, fee-only) form one group, `TRANSFER`: they share one shape and one filter. A
+   `dateOnly` row on an intraday interval is keyed by its UTC day's first candle.
+3. One marker per key: `{ t, category, count, sats, ids[], estimated, price }` where `estimated` is
+   true if any member's source is `HISTORICAL_MARKET_LOOKUP` or `UNKNOWN`, and `price` is the
+   member's resolved price when `count` is 1 (for exact-price placement), else `null`.
 4. If the number of markers in the visible range exceeds `maxMarkers` (default 300), re-key
-   with a bucket of `k ×` the interval, doubling `k` until it fits.
+   with a bucket of `k ×` the interval, doubling `k` until it fits. Widened buckets stay on the
+   interval's grid (Monday-anchored for `1w`), so every marker time is a candle time.
 
 Because the key uses the displayed interval, zooming in (a smaller interval) separates markers
 and zooming out merges them.

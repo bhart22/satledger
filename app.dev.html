@@ -1878,9 +1878,10 @@ const txEffectOnWallet = (tx, wallet) => {
   return txWalletDeltas(tx).reduce((d, [w, delta]) => w === wallet ? d + delta : d, 0);
 };
 // Change in total BTC held. Buy/Sell/Reward/Consolidation count even with a blank wallet
-// name, as they always have in the charts.
-const txPortfolioDelta = (tx) => {
-  const amt = numOr(tx.amount), fee = numOr(tx.fee);
+// name, as they always have in the charts. `toUnits` as in txWalletDeltas — the Market view's
+// balance history passes toSatsInt so it accumulates exact satoshis under these same rules.
+const txPortfolioDelta = (tx, toUnits = numOr) => {
+  const amt = toUnits(tx.amount), fee = toUnits(tx.fee);
   if(tx.type==='Buy' || tx.type==='Reward') return amt;
   if(tx.type==='Sell') return -amt;
   if(tx.type==='Consolidation') return -fee;
@@ -3299,6 +3300,394 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
     return `#market?${parts.join('&')}`;
   };
   return { normalizeMarketPrefs, parseMarketHash, formatMarketHash };
+})();
+
+// ─── Market: Personal ────────────────────────────────────────────────────────
+// The join between the user's transactions and market history: chart rows, price resolution,
+// balance history, Average Acquisition Price, the selected-range summary, filters and marker
+// aggregation. Analytics only — not tax accounting, and wired into no tax path. Spec:
+// docs/personal-market-analytics.md §1–10.
+//
+// Every function takes the transaction array as an argument and returns new objects: nothing is
+// mutated, nothing is stored, and no field is added to a transaction. Every BTC quantity is an
+// integer number of satoshis (toSatsInt); USD, prices and percentages are floats. Balance effects
+// come from txPortfolioDelta / txWalletDeltas and nowhere else.
+//
+// The four averages are different numbers and keep their own names:
+//   Average Acquisition Price  avgAcquisition, default options — purchases with their fees plus
+//                              rewards at receipt value. Sales do not change it.
+//   Average Purchase Price     the same function, AVG_PRESETS.PURCHASE_PRICE — purchases only,
+//                              pre-fee. Reserved; no UI yet.
+//   Dashboard Average Cost     applyTxToCostPool (not here)
+//   Tax-Lot Cost Basis         buildLots (not here)
+// `price` and `totalUsd / amount` are pre-fee unit prices, never "execution" prices.
+const PersonalMarket = (() => {
+  const DAY = 86400;
+  const PRICE_SOURCE = Object.freeze({
+    RECORDED_UNIT_PRICE:       'recorded_unit_price',
+    DERIVED_TRANSACTION_VALUE: 'derived_transaction_value',
+    REWARD_RECEIPT_VALUE:      'reward_receipt_value',
+    HISTORICAL_MARKET_LOOKUP:  'historical_market_lookup',
+    UNKNOWN:                   'unknown',
+  });
+  const CATEGORY = Object.freeze({
+    ACQUISITION: 'ACQUISITION', DISPOSAL: 'DISPOSAL', REWARD: 'REWARD',
+    TRANSFER_INTERNAL: 'TRANSFER_INTERNAL', SENT: 'SENT', RECEIVED: 'RECEIVED', FEE_ONLY: 'FEE_ONLY',
+  });
+  // Markers group the four transfer-like categories into one: they share a shape and a filter.
+  const MARKER_GROUP = Object.freeze({
+    ACQUISITION: 'ACQUISITION', DISPOSAL: 'DISPOSAL', REWARD: 'REWARD',
+    TRANSFER_INTERNAL: 'TRANSFER', SENT: 'TRANSFER', RECEIVED: 'TRANSFER', FEE_ONLY: 'TRANSFER',
+  });
+  const MARKER_GROUP_ORDER = Object.freeze(['ACQUISITION', 'REWARD', 'DISPOSAL', 'TRANSFER']);
+  const AVG_PRESETS = Object.freeze({
+    ACQUISITION_PRICE: Object.freeze({ include: Object.freeze(['Buy', 'Reward']), feeMode: 'include' }),
+    PURCHASE_PRICE:    Object.freeze({ include: Object.freeze(['Buy']), feeMode: 'exclude' }),
+  });
+  // §10: Purchases, Sales and Rewards on; Transfers (internal, sent, received, fee-only) off.
+  // `wallets` null = every wallet.
+  const DEFAULT_FILTERS = Object.freeze({ purchases: true, sales: true, rewards: true, transfers: false, wallets: null });
+  const FILTER_KEY = Object.freeze({
+    ACQUISITION: 'purchases', DISPOSAL: 'sales', REWARD: 'rewards',
+    TRANSFER_INTERNAL: 'transfers', SENT: 'transfers', RECEIVED: 'transfers', FEE_ONLY: 'transfers',
+  });
+  const DEFAULT_MAX_MARKERS = 300;
+
+  const isFiniteNum = x => typeof x === 'number' && Number.isFinite(x);
+  const positive = x => isFiniteNum(x) && x > 0 ? x : null;
+  const strOrEmpty = v => typeof v === 'string' ? v : '';
+
+  // ── Daily closes (§3 HISTORICAL_MARKET_LOOKUP) ──
+  // day start (UTC seconds) → close, from completed daily candles only. A candle flagged partial,
+  // or (when nowSec is given) one whose day has not ended, is the forming candle: its close is
+  // not that day's close, so it is not used.
+  const dailyCloseMap = (candlesDaily, nowSec = null) => {
+    const m = new Map();
+    if(!Array.isArray(candlesDaily)) return m;
+    for(const k of candlesDaily) {
+      if(!k || !isFiniteNum(k.t) || k.t % DAY !== 0 || !positive(k.c) || k.partial) continue;
+      if(isFiniteNum(nowSec) && k.t + DAY > nowSec) continue;
+      m.set(k.t, k.c);
+    }
+    return m;
+  };
+  const dayStart = tSec => tSec - (((tSec % DAY) + DAY) % DAY);
+
+  // ── Classification (§5), from the balance rules' reading of which ends are named ──
+  const categoryOf = tx => {
+    switch(tx.type) {
+      case 'Buy': return CATEGORY.ACQUISITION;
+      case 'Sell': return CATEGORY.DISPOSAL;
+      case 'Reward': return CATEGORY.REWARD;
+      case 'Consolidation': return CATEGORY.FEE_ONLY;
+      case 'Transfer':
+        // As txPortfolioDelta: from only = outflow, to only = inflow, otherwise only the fee
+        // leaves (both named, or — on a malformed row — neither).
+        if(tx.wallet && !tx.wallet2) return CATEGORY.SENT;
+        if(!tx.wallet && tx.wallet2) return CATEGORY.RECEIVED;
+        return CATEGORY.TRANSFER_INTERNAL;
+      default: return null;
+    }
+  };
+
+  // ── Price and value resolution (§3) ──
+  // Returns { price, priceSource, usdValue }. usdValue is the pre-fee USD value of the row:
+  // Buy/Sell numOr(totalUsd, amount × price) — the expression the rest of the app uses — and,
+  // for a Reward, its value at receipt (usdValueAtReceipt, else amount × recorded price, else
+  // amount × the day's close, then flagged by its priceSource). A value that is not positive is
+  // unknown (null), never $0.
+  const resolve = (tx, sats, closes) => {
+    const btc = sats / 1e8;
+    const close = closes.get(dayStart(Math.floor(txInstant(tx) / 1000)));
+    const lookup = close != null
+      ? { price: close, priceSource: PRICE_SOURCE.HISTORICAL_MARKET_LOOKUP }
+      : { price: null, priceSource: PRICE_SOURCE.UNKNOWN };
+    if(tx.type === 'Buy' || tx.type === 'Sell') {
+      const usdValue = positive(numOr(tx.totalUsd, numOr(tx.amount) * numOr(tx.price)));
+      const recorded = positive(numOr(tx.price, NaN));
+      if(recorded) return { price: recorded, priceSource: PRICE_SOURCE.RECORDED_UNIT_PRICE, usdValue };
+      const total = positive(numOr(tx.totalUsd, NaN));
+      if(total && sats > 0) return { price: total / btc, priceSource: PRICE_SOURCE.DERIVED_TRANSACTION_VALUE, usdValue };
+      return { ...lookup, usdValue };
+    }
+    if(tx.type === 'Reward') {
+      const receipt = hasUsdValue(tx) ? positive(parseFloat(tx.usdValueAtReceipt)) : null;
+      if(receipt && sats > 0) return { price: receipt / btc, priceSource: PRICE_SOURCE.REWARD_RECEIPT_VALUE, usdValue: receipt };
+      const recorded = positive(numOr(tx.price, NaN));
+      if(recorded) return { price: recorded, priceSource: PRICE_SOURCE.RECORDED_UNIT_PRICE, usdValue: sats > 0 ? btc * recorded : null };
+      return { ...lookup, usdValue: lookup.price && sats > 0 ? btc * lookup.price : null };
+    }
+    // Transfer, Consolidation: the day's close only places an optional marker; no value.
+    return { ...lookup, usdValue: null };
+  };
+
+  // §3 all-in figure, for Buy and Sell with a fee: Buy (totalUsd + fee) / amount, "Cost per BTC
+  // including fees"; Sell (totalUsd − fee) / amount, "Net per BTC after fees".
+  const allInOf = (type, usdValue, feeUsd, sats) => {
+    if(!(feeUsd > 0) || usdValue == null || !(sats > 0)) return null;
+    if(type === 'Buy') return (usdValue + feeUsd) / (sats / 1e8);
+    if(type === 'Sell') return (usdValue - feeUsd) / (sats / 1e8);
+    return null;
+  };
+
+  // ── Normalization (§2) ──
+  // → { items, skipped } — items sorted with compareTx, one per usable transaction; skipped
+  // counts rows with no usable instant (`noTime`) or an unknown type (`badType`). notes and
+  // txhash are not copied: the detail panel reads them from the original record by id.
+  const toChartTransactions = (transactions, { candlesDaily = null, nowSec = null } = {}) => {
+    const closes = dailyCloseMap(candlesDaily, nowSec);
+    const skipped = { noTime: 0, badType: 0 };
+    const usable = [];
+    (Array.isArray(transactions) ? transactions : []).forEach((tx, i) => {
+      if(!tx || typeof tx !== 'object') { skipped.noTime++; return; }
+      if(!Number.isFinite(txInstant(tx))) { skipped.noTime++; return; }
+      if(!categoryOf(tx)) { skipped.badType++; return; }
+      usable.push({ tx, i });
+    });
+    usable.sort((a, b) => compareTx(a.tx, b.tx) || a.i - b.i);
+    const items = usable.map(({ tx }) => {
+      const sats = toSatsInt(tx.amount);
+      const btcFee = tx.type === 'Transfer' || tx.type === 'Consolidation';
+      const feeUsd = (tx.type === 'Buy' || tx.type === 'Sell') ? numOr(tx.fee) : null;
+      const r = resolve(tx, sats, closes);
+      return {
+        id: tx.id,
+        tSec: Math.floor(txInstant(tx) / 1000),
+        dateOnly: isNoonPlaceholder(tx),
+        category: categoryOf(tx),
+        type: tx.type,
+        sats,
+        feeSats: btcFee ? toSatsInt(tx.fee) : null,
+        feeUsd,
+        price: r.price,
+        priceSource: r.priceSource,
+        usdValueSource: tx.type === 'Reward' && r.priceSource === PRICE_SOURCE.REWARD_RECEIPT_VALUE ? strOrEmpty(tx.usdValueSource) : '',
+        usdValue: r.usdValue,
+        allIn: allInOf(tx.type, r.usdValue, feeUsd, sats),
+        excludeStats: !!tx.excludeStats,
+        wallet: strOrEmpty(tx.wallet),
+        wallet2: strOrEmpty(tx.wallet2),
+      };
+    });
+    return { items, skipped };
+  };
+
+  // UI wording for a row's price source (§3 table). Never "execution price".
+  const priceSourceLabel = row => {
+    if(!row) return 'Price unknown';
+    const transferLike = row.type === 'Transfer' || row.type === 'Consolidation';
+    switch(row.priceSource) {
+      case PRICE_SOURCE.RECORDED_UNIT_PRICE:
+        return row.type === 'Reward' ? 'Recorded price' : 'Recorded price (before fees)';
+      case PRICE_SOURCE.DERIVED_TRANSACTION_VALUE:
+        return 'Implied price: total ÷ amount (before fees)';
+      case PRICE_SOURCE.REWARD_RECEIPT_VALUE: {
+        const detail = Object.prototype.hasOwnProperty.call(USD_VALUE_SOURCE_LABELS, row.usdValueSource)
+          ? USD_VALUE_SOURCE_LABELS[row.usdValueSource] : '';
+        return detail ? `Value at receipt (${detail})` : 'Value at receipt';
+      }
+      case PRICE_SOURCE.HISTORICAL_MARKET_LOOKUP:
+        return transferLike ? "Day's closing price (for reference)" : "Estimated from that day's closing price";
+      default: return 'Price unknown';
+    }
+  };
+  const allInLabel = row => !row || row.allIn == null ? null
+    : row.type === 'Buy' ? 'Cost per BTC including fees' : 'Net per BTC after fees';
+
+  // ── Filters (§10) ──
+  const normalizeFilters = f => {
+    const src = f && typeof f === 'object' ? f : {};
+    const out = {};
+    for(const k of ['purchases', 'sales', 'rewards', 'transfers']) out[k] = typeof src[k] === 'boolean' ? src[k] : DEFAULT_FILTERS[k];
+    out.wallets = Array.isArray(src.wallets) ? [...new Set(src.wallets.filter(w => typeof w === 'string' && w))] : null;
+    return out;
+  };
+  // A row matches the wallet filter when `wallet` or `wallet2` is listed.
+  const inWallets = (row, wallets) => !wallets || wallets.includes(row.wallet) || wallets.includes(row.wallet2);
+  const applyFilters = (rows, filters) => {
+    const f = normalizeFilters(filters);
+    return (Array.isArray(rows) ? rows : []).filter(r => r && f[FILTER_KEY[r.category]] && inWallets(r, f.wallets));
+  };
+
+  // ── Balance history (§6) ──
+  // [{ tSec, sats }] step series, compareTx order, one point per instant holding the balance after
+  // the last transaction at that instant. Every transaction counts, excludeStats included. With
+  // `wallets`, the balance of just those wallets (txWalletDeltas): an internal transfer between
+  // two of them costs only the fee, one to a wallet outside the set moves the amount.
+  const balanceHistory = (transactions, { wallets = null } = {}) => {
+    const scope = Array.isArray(wallets) ? new Set(wallets) : null;
+    const rows = (Array.isArray(transactions) ? transactions : [])
+      .map((tx, i) => ({ tx, i }))
+      .filter(({ tx }) => tx && typeof tx === 'object' && Number.isFinite(txInstant(tx)))
+      .sort((a, b) => compareTx(a.tx, b.tx) || a.i - b.i);
+    const out = [];
+    let bal = 0;
+    for(const { tx } of rows) {
+      const d = scope
+        ? txWalletDeltas(tx, toSatsInt).reduce((s, [w, x]) => scope.has(w) ? s + x : s, 0)
+        : txPortfolioDelta(tx, toSatsInt);
+      bal += d;
+      const tSec = Math.floor(txInstant(tx) / 1000);
+      if(out.length && out[out.length - 1].tSec === tSec) out[out.length - 1].sats = bal;
+      else out.push({ tSec, sats: bal });
+    }
+    return out;
+  };
+  // Balance after every transaction with tSec < atSec (0 before the first).
+  const balanceBefore = (history, atSec) => {
+    let lo = 0, hi = Array.isArray(history) ? history.length : 0;
+    while(lo < hi) { const mid = (lo + hi) >> 1; if(history[mid].tSec < atSec) lo = mid + 1; else hi = mid; }
+    return lo ? history[lo - 1].sats : 0;
+  };
+  // Resampled to candle buckets: the value at bucket t is the balance after the last transaction
+  // with tSec < t + interval (the bucket's end).
+  const balanceAtBuckets = (history, bucketTimes, interval) => {
+    const s = Candles.intervalSeconds(interval);
+    return (Array.isArray(bucketTimes) ? bucketTimes : []).map(t => ({ t, sats: balanceBefore(history, t + s) }));
+  };
+
+  // ── Average Acquisition Price (§7) ──
+  // Rows → { sats, usdIn } through a per-type table, then reduce. usdIn: Buy = pre-fee value plus
+  // the USD fee when feeMode is 'include'; Reward = value at receipt (estimated when it came from
+  // the day's close). A row with no known usdIn is left out of numerator AND denominator.
+  const USD_IN = Object.freeze({
+    Buy: (row, feeMode) => row.usdValue == null ? null : row.usdValue + (feeMode === 'include' ? (row.feeUsd || 0) : 0),
+    Reward: row => row.usdValue,
+  });
+  const avgOptions = opts => {
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const include = (Array.isArray(o.include) ? o.include : AVG_PRESETS.ACQUISITION_PRICE.include)
+      .filter(t => Object.prototype.hasOwnProperty.call(USD_IN, t));
+    return {
+      include, feeMode: o.feeMode === 'exclude' ? 'exclude' : 'include',
+      fromSec: isFiniteNum(o.fromSec) ? o.fromSec : -Infinity,
+      upToSec: isFiniteNum(o.upToSec) ? o.upToSec : Infinity,
+      wallets: Array.isArray(o.wallets) ? o.wallets : null,
+    };
+  };
+  // Over normalized rows; yields each included row with its usdIn, or the reason it was skipped.
+  const acquisitionRows = (rows, o) => {
+    const out = [];
+    for(const row of rows) {
+      if(!o.include.includes(row.type)) continue;
+      if(row.tSec < o.fromSec || row.tSec > o.upToSec) continue;
+      if(o.wallets && !inWallets(row, o.wallets)) continue;
+      if(row.excludeStats) { out.push({ row, skip: 'excluded' }); continue; }
+      if(!(row.sats > 0)) { out.push({ row, skip: 'nonPositive' }); continue; }
+      const usdIn = USD_IN[row.type](row, o.feeMode);
+      if(!(usdIn > 0)) { out.push({ row, skip: 'unknownValue' }); continue; }
+      out.push({ row, usdIn, estimated: row.priceSource === PRICE_SOURCE.HISTORICAL_MARKET_LOOKUP });
+    }
+    return out;
+  };
+  const avgFromRows = (rows, opts) => {
+    const o = avgOptions(opts);
+    const res = { price: null, sats: 0, usd: 0, count: 0, estimated: 0, skipped: { unknownValue: 0, excluded: 0, nonPositive: 0 } };
+    for(const a of acquisitionRows(rows, o)) {
+      if(a.skip) { res.skipped[a.skip]++; continue; }
+      res.sats += a.row.sats; res.usd += a.usdIn; res.count++;
+      if(a.estimated) res.estimated++;
+    }
+    res.price = res.sats > 0 ? res.usd / (res.sats / 1e8) : null;
+    return res;
+  };
+  // avgAcquisition(transactions, { candlesDaily, nowSec, include, feeMode, fromSec, upToSec, wallets })
+  // → { price, sats, usd, count, estimated, skipped: { unknownValue, excluded, nonPositive } }.
+  // fromSec and upToSec are both inclusive. Sell, Transfer and Consolidation never count.
+  const avgAcquisition = (transactions, opts = {}) =>
+    avgFromRows(toChartTransactions(transactions, opts).items, opts);
+  // Historical step line: [{ tSec, price }], the running average after each included
+  // acquisition. Acquisitions at one instant give one point (the value after the last of them),
+  // as the chart cannot hold two values at one time. Sales and transfers produce no step.
+  const avgAcquisitionSeries = (transactions, opts = {}) => {
+    const o = avgOptions(opts);
+    const out = [];
+    let sats = 0, usd = 0;
+    for(const a of acquisitionRows(toChartTransactions(transactions, opts).items, o)) {
+      if(a.skip) continue;
+      sats += a.row.sats; usd += a.usdIn;
+      const p = { tSec: a.row.tSec, price: usd / (sats / 1e8) };
+      if(out.length && out[out.length - 1].tSec === p.tSec) out[out.length - 1] = p; else out.push(p);
+    }
+    return out;
+  };
+
+  // ── Selected-range summary, "My Activity" (§8) ──
+  // [fromSec, toSec). Category filters and the wallet filter apply to every line; Net BTC Change
+  // comes from the balance history (scoped to the filtered wallets when there are any), so it
+  // reflects fees and transfers. Internal transfers count in none of the other lines.
+  const rangeSummary = (transactions, { fromSec, toSec, candlesDaily = null, nowSec = null, filters = null } = {}) => {
+    const f = normalizeFilters(filters);
+    const lo = isFiniteNum(fromSec) ? fromSec : -Infinity, hi = isFiniteNum(toSec) ? toSec : Infinity;
+    const all = toChartTransactions(transactions, { candlesDaily, nowSec }).items;
+    const rows = applyFilters(all.filter(r => r.tSec >= lo && r.tSec < hi), f);
+    const sum = cat => rows.reduce((s, r) => r.category === cat ? s + r.sats : s, 0);
+    const counted = rows.filter(r => r.category === CATEGORY.ACQUISITION || r.category === CATEGORY.DISPOSAL || r.category === CATEGORY.REWARD);
+    const history = balanceHistory(transactions, { wallets: f.wallets });
+    const netSats = balanceBefore(history, hi) - balanceBefore(history, lo);
+    const acquiredSats = sum(CATEGORY.ACQUISITION), rewardSats = sum(CATEGORY.REWARD), soldSats = sum(CATEGORY.DISPOSAL);
+    const include = [...(f.purchases ? ['Buy'] : []), ...(f.rewards ? ['Reward'] : [])];
+    const invested = avgFromRows(rows, { include: ['Buy'], feeMode: 'include' });
+    return {
+      transactions: counted.length,
+      acquiredSats, rewardSats, soldSats, netSats,
+      usdInvested: invested.usd,
+      usdInvestedSkipped: invested.skipped.unknownValue,
+      avgAcquisition: avgFromRows(rows, { include, feeMode: 'include' }),
+      // "Includes network fees and transfers to or from untracked wallets"
+      netIncludesOther: netSats !== acquiredSats + rewardSats - soldSats,
+    };
+  };
+
+  // ── Marker aggregation (§9) ──
+  // One marker per (bucket, marker group): { t, category, count, sats, ids, estimated, price }.
+  // `price` is the member's resolved price when the marker holds exactly one row (for exact-price
+  // placement), else null. A date-only row on an intraday chart attaches to the first candle of
+  // its UTC day. When more than maxMarkers fall in [fromSec, toSec), the bucket widens to k × the
+  // interval, k doubling until they fit; widened buckets stay aligned to the interval's grid.
+  const aggregateMarkers = (rows, { interval = '1d', filters = null, maxMarkers = DEFAULT_MAX_MARKERS, fromSec = null, toSec = null } = {}) => {
+    const s = Candles.intervalSeconds(interval);
+    const anchor = Candles.bucketStart(0, interval);
+    const cap = Number.isInteger(maxMarkers) && maxMarkers > 0 ? maxMarkers : DEFAULT_MAX_MARKERS;
+    const lo = isFiniteNum(fromSec) ? fromSec : -Infinity, hi = isFiniteNum(toSec) ? toSec : Infinity;
+    const placed = applyFilters(rows, filters).map(r => {
+      const at = r.dateOnly && s < DAY ? dayStart(r.tSec) : r.tSec;
+      return { r, b: Candles.bucketStart(at, interval) };
+    }).filter(x => x.b + s > lo && x.b < hi);
+    const build = k => {
+      const span = k * s;
+      const byKey = new Map();
+      for(const { r, b } of placed) {
+        const t = k === 1 ? b : b - (((b - anchor) % span) + span) % span;
+        const group = MARKER_GROUP[r.category];
+        const key = t + '|' + group;
+        let m = byKey.get(key);
+        if(!m) { m = { t, category: group, count: 0, sats: 0, ids: [], estimated: false, price: null, _p: null }; byKey.set(key, m); }
+        m.count++; m.sats += r.sats; m.ids.push(r.id); m._p = r.price;
+        if(r.priceSource === PRICE_SOURCE.HISTORICAL_MARKET_LOOKUP || r.priceSource === PRICE_SOURCE.UNKNOWN) m.estimated = true;
+      }
+      return [...byKey.values()];
+    };
+    let k = 1, markers = build(1);
+    // Each doubling at least halves the distinct buckets once they span more than one, so this
+    // ends; the guard stops at a single bucket per group whatever the cap.
+    for(let i = 0; markers.length > cap && i < 64; i++) {
+      const next = build(k * 2);
+      k *= 2; markers = next;
+      if(markers.length <= MARKER_GROUP_ORDER.length && new Set(markers.map(m => m.t)).size <= 1) break;
+    }
+    return markers
+      .map(({ _p, ...m }) => ({ ...m, price: m.count === 1 ? _p : null }))
+      .sort((a, b) => a.t - b.t || MARKER_GROUP_ORDER.indexOf(a.category) - MARKER_GROUP_ORDER.indexOf(b.category));
+  };
+
+  return Object.freeze({
+    PRICE_SOURCE, CATEGORY, MARKER_GROUP, AVG_PRESETS, DEFAULT_FILTERS, DEFAULT_MAX_MARKERS,
+    toChartTransactions, priceSourceLabel, allInLabel,
+    normalizeFilters, applyFilters,
+    balanceHistory, balanceBefore, balanceAtBuckets,
+    avgAcquisition, avgAcquisitionSeries, rangeSummary, aggregateMarkers,
+  });
 })();
 
 // ─── SVG Icons ───────────────────────────────────────────────────────────────

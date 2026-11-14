@@ -249,6 +249,26 @@ ok(/^\d{4}-\d{2}-\d{2}$/.test(H.todayLocal()), 'todayLocal shape');
     const sum = H.txWalletDeltas(t).reduce((s, [, d]) => s + d, 0);
     eq(+sum.toFixed(8), +H.txPortfolioDelta(t).toFixed(8), `wallet deltas sum to portfolio delta (${t.type} ${t.wallet}→${t.wallet2||''})`);
   }
+  // The optional toUnits parameter (Market balance history) leaves one-argument calls exactly as
+  // they were — the same floats, bit for bit — and gives the same rules in satoshis.
+  const sats = v => Math.round(H.numOr(v) * 1e8);
+  const cases = [out, inn, internal, { type:'Transfer', wallet:'', wallet2:'', amount:'1', fee:'0.0001' },
+    { type:'Buy', amount:'0.1' }, { type:'Reward', wallet:'A', amount:'0.00000546' }, { type:'Sell', amount:'0.3' },
+    { type:'Consolidation', wallet:'A', amount:'2', fee:'0.0002' }, { type:'Bogus', amount:'1' }, { type:'Buy', amount:'abc' }];
+  const legacy = tx => {   // the pre-Phase-6 body, verbatim
+    const amt = H.numOr(tx.amount), fee = H.numOr(tx.fee);
+    if(tx.type==='Buy' || tx.type==='Reward') return amt;
+    if(tx.type==='Sell') return -amt;
+    if(tx.type==='Consolidation') return -fee;
+    if(tx.type==='Transfer') { if(tx.wallet && !tx.wallet2) return -(amt + fee); if(!tx.wallet && tx.wallet2) return amt; return -fee; }
+    return 0;
+  };
+  for (const t of cases) {
+    ok(Object.is(H.txPortfolioDelta(t), legacy(t)), `txPortfolioDelta(tx) unchanged (${t.type} ${t.wallet||''}→${t.wallet2||''})`);
+    ok(Object.is(H.txPortfolioDelta(t, H.numOr), legacy(t)), `explicit numOr = default (${t.type})`);
+  }
+  eq(H.txPortfolioDelta(internal, sats), -100000, 'internal transfer in sats: exactly −fee');
+  eq(H.txPortfolioDelta(out, sats), -100100000, 'outflow in sats: −(amount + fee)');
 
   const prices = { '2024-03-01': 60000 };
   eq(H.rewardPriceFor({ date:'2024-03-01' }, prices), 60000, 'reward valued at that day\'s close');
