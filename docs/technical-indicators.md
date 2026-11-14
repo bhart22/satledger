@@ -30,15 +30,34 @@ Definition shape:
   id: 'sma', name: 'Simple Moving Average', category: 'TREND',   // TREND | MOMENTUM | VOLATILITY | VOLUME | STATISTICAL
   placement: 'overlay' | 'pane',
   defaults: { period: 50, source: 'close' },
+  presets: [20, 50, 100, 200] | null,
+  series: ['sma'],                                   // output names, in order
   validate(settings) → settings | throws,
-  warmup(settings) → number,
-  calculate(candles, settings) → { [seriesName]: (number|null)[] },
+  warmup(settings) → { [seriesName]: number },       // per series: MACD's line and signal differ
+  calculate(candles, settings, interval) → { [seriesName]: (number|null)[] },
 }
 ```
 
-Settings validation: periods are integers in `[2, 1000]`; multipliers are finite and in
-`(0, 10]`; MACD requires `fast < slow`. Invalid settings from a URL or stored preferences fall
-back to defaults rather than throwing in the UI.
+`interval` is used only by historical volatility (annualization, §10), which requires it; the
+others ignore it. Every public method validates its settings first, and none depends on `this`.
+Definitions are listed in `Indicators.definitions` and looked up with `Indicators.get(id)`.
+
+| id | Series | Placement |
+|---|---|---|
+| `sma` | `sma` | overlay |
+| `ema` | `ema` | overlay |
+| `rsi` | `rsi` | pane |
+| `macd` | `macd`, `signal`, `histogram` | pane |
+| `bollinger` | `upper`, `middle`, `lower`, `percentB`, `bandWidth` | overlay |
+| `atr` | `atr` | pane |
+| `volatility` | `volatility` | pane |
+
+Settings validation: periods are integers (Numbers, not numeric strings) in `[2, 1000]`;
+multipliers are finite and in `(0, 10]`; MACD requires `fast < slow`; RSI levels are in
+`(0, 100)` with `oversold < overbought`. A missing key takes its default and a key the
+definition does not know is dropped. `validate` throws on a bad value; invalid settings from a
+URL or stored preferences go through `Indicators.resolveSettings(id, settings)`, which falls back
+to the defaults rather than throwing in the UI.
 
 ## 2. Gaps
 
@@ -48,8 +67,9 @@ as they are; the caller is responsible for segmentation:
 - `Indicators.calculateSegmented(def, candles, settings, interval)` splits the series at every
   gap, runs `calculate` on each segment independently, and concatenates the results. Each
   segment therefore has its own warm-up.
+- A gap is any pair of consecutive candles whose `t` differ by anything other than one interval.
 - Aggregated candles flagged `partial` (a gap inside the bucket) end the segment before them and
-  start a new one after them.
+  start a new one after them. The partial candle itself gets `null` in every series.
 - Nothing is forward-filled.
 
 ## 3. The forming candle
@@ -88,7 +108,8 @@ only seeding method used anywhere in this module, including inside MACD.
 
 ## 6. RSI — Wilder's relative strength index
 
-Defaults: period 14. Pane, fixed scale 0–100, reference lines at 70, 50, 30 (configurable).
+Defaults: period 14. Pane, fixed scale 0–100, reference lines at 70, 50, 30. The outer two are
+the settings `overbought` (70) and `oversold` (30); the 50 line is fixed.
 
 ```
 d[i]   = C[i] - C[i-1]                                for i >= 1
@@ -219,8 +240,23 @@ All on completed candles unless stated.
 A metric whose reference candle is missing (before the earliest candle, or in a gap) is
 `null` and displayed as "—". It is never approximated from a neighbouring candle.
 
-Range high and low are the maximum `h` and minimum `l` over the range. 52-week high and low use
-daily candles over the trailing 365 days including the forming day.
+Exact rules used by the code:
+
+- `Indicators.returns.range(candles)` — the selected range return; `null` for no candles.
+- `Indicators.returns.periods(daily, priceNow, nowSec)` → `{ 1D, 7D, 30D, 90D, 1Y, 3Y, 5Y, YTD }`.
+  `k` is 1, 7, 30, 90, 365, 1095 and 1825 days (`Indicators.returns.PERIOD_DAYS`). The reference
+  candle is the one with `t = bucketStart(now - k days, '1d') - 86400` — the last daily candle
+  that had completed by the target time — looked up exactly; if that candle is absent the value
+  is `null`. YTD uses the target `1 January 00:00 UTC` of the current year, i.e. the candle of
+  31 December. Every value is `null` when `priceNow` is missing.
+- `Indicators.returns.daily(candles)` → `{ average, median, count }`. Only pairs of consecutive
+  daily candles exactly one day apart contribute; a pair across a gap is not a daily return.
+  All `null` (count 0) when there are no pairs.
+
+Range high and low are the maximum `h` and minimum `l` over the range
+(`Indicators.extremes(candles)` → `{ high, highT, low, lowT }`, the first occurrence of each).
+52-week high and low use daily candles over the trailing 365 days including the forming day; the
+caller passes that slice.
 
 ## 12. Drawdown and all-time high
 
@@ -233,7 +269,9 @@ Maximum drawdown for the range = min over i of DD[i]
 ```
 
 The peak resets at the start of the selected range. Maximum drawdown is reported with the
-dates of its peak and trough.
+dates of its peak and trough. `Indicators.drawdown(candles)` → `{ series, max }`, where `max` is
+`{ value, peakIndex, troughIndex, peakT, troughT }` (the first trough reaching the minimum) or
+`null` for no candles.
 
 **All-time high (high-based):**
 
@@ -266,6 +304,13 @@ Indicators.ATH_SEED = { price: <USD>, date: 'YYYY-MM-DD', source: '<citation>' }
   (`docs/market-data.md` §8). If the provider's history already covers that date, the seed is
   ignored.
 - Once available highs exceed the seed, the seed has no further effect.
+- The seed is also not used for a `T` before the end of its own day (`seedDay + 86400 > T`):
+  using it there would be look-ahead.
+
+`Indicators.previousAth(daily, T, { seed = ATH_SEED, earliestSec })` → `{ price, t, fromSeed }`
+or `null` when no candle had closed by `T` and the seed does not apply. `T` is in UTC seconds.
+`earliestSec` is the provider's verified earliest daily candle; when it is not passed, the first
+candle given stands in for it. An invalid seed (non-positive price, date not `YYYY-MM-DD`) throws.
 
 **Labels (approved decision).** `ATH_SEED` is `null` until Phase 8. A seed counts as verified
 only when all three hold: its value and date come from an authoritative source cited in the
@@ -283,7 +328,12 @@ told which source was used.
 - Without a seed there is no way to tell from the candles alone which transactions are
   affected, so the relabelling applies to every ATH-based figure, not only to early ones.
 - A single function, `Indicators.athLabels({ seedVerified, earliestSec })`, returns the label
-  strings so the rule lives in one place and is unit-tested.
+  strings so the rule lives in one place and is unit-tested. It returns
+  `{ loading, summaryHigh, summaryDistance, summaryDrawdown, contextHigh, contextDrawdown }`.
+  Without a verified seed, `summaryDistance` and `summaryDrawdown` are both
+  "Drawdown from High since <date>" (they are the same number). With no seed and no
+  `earliestSec`, `loading` is `true` and every label is `null`. Only `seedVerified === true`
+  counts as verified.
 - A value is never presented as an all-time high without a verified seed.
 - Phase 8 attempts the verification. If no authoritative source can be found, the seed stays
   `null`, the "High since" labels remain, and that outcome is reported to the owner. Phase 8
@@ -360,6 +410,14 @@ For every indicator, three independent checks:
    in the test. Values are copied from the source at implementation time, not from memory. If
    a published example uses a different definition (for example an EMA seeded with the first
    value), it is not used.
+
+   Used (fixture `tools/test/fixtures/indicators-published.json`, read programmatically from
+   the spreadsheets linked on each StockCharts ChartSchool page on 2026-11-14): RSI(14)
+   (`cs-rsi.xls`), SMA(10) and EMA(10) (`cs-movavg.xls`), Bollinger Bands (20, 2) upper,
+   middle and lower (`cs-bbands.xls`). All match to about `1e-16`. Not used: ChartSchool's ATR
+   (`cs-atr.xls`) seeds with the first bar's high − low as a true range, which §9 does not; its
+   Bollinger "BandWidth" column is upper − lower, not divided by the middle band; no MACD or
+   historical-volatility spreadsheet was found.
 
 Structural checks for every indicator:
 
