@@ -1,0 +1,387 @@
+# Technical Indicators
+
+Part of the Market Analytics design; see `docs/market-analytics.md`.
+Code lives in the helper region of `app.dev.html` as `const Indicators = { … }` and is tested by
+`tools/test/market-indicators.mjs`.
+
+Every formula the implementation uses is written here. If the code needs a rule that is not
+on this page, the page is updated first.
+
+---
+
+## 1. Conventions
+
+- Input is an array of candles `{ t, o, h, l, c, v }`, strictly ascending in `t`, already
+  validated (`docs/market-data.md` §6).
+- Indices are 0-based. `C[i]`, `H[i]`, `L[i]` are close, high and low of candle `i`.
+- `N` is the period.
+- Every indicator returns arrays **the same length as the input**, aligned by index. A position
+  with no defined value holds `null`. Never `0`, never `NaN`.
+- **Warm-up** is the number of leading `null` values.
+- Values are full-precision Numbers. Rounding happens only when formatting for display.
+- Indicators are pure: same input, same output, no I/O, no mutation of the input.
+- Source is the close unless stated. A `source` setting (`close`, `open`, `high`, `low`,
+  `hl2`, `ohlc4`) is accepted by SMA and EMA; default `close`.
+
+Definition shape:
+
+```js
+{
+  id: 'sma', name: 'Simple Moving Average', category: 'TREND',   // TREND | MOMENTUM | VOLATILITY | VOLUME | STATISTICAL
+  placement: 'overlay' | 'pane',
+  defaults: { period: 50, source: 'close' },
+  validate(settings) → settings | throws,
+  warmup(settings) → number,
+  calculate(candles, settings) → { [seriesName]: (number|null)[] },
+}
+```
+
+Settings validation: periods are integers in `[2, 1000]`; multipliers are finite and in
+`(0, 10]`; MACD requires `fast < slow`. Invalid settings from a URL or stored preferences fall
+back to defaults rather than throwing in the UI.
+
+## 2. Gaps
+
+A provider gap (`docs/market-data.md` §12) breaks continuity. `calculate` receives the candles
+as they are; the caller is responsible for segmentation:
+
+- `Indicators.calculateSegmented(def, candles, settings, interval)` splits the series at every
+  gap, runs `calculate` on each segment independently, and concatenates the results. Each
+  segment therefore has its own warm-up.
+- Aggregated candles flagged `partial` (a gap inside the bucket) end the segment before them and
+  start a new one after them.
+- Nothing is forward-filled.
+
+## 3. The forming candle
+
+- When the last candle is still forming, its indicator values are computed normally but are
+  **provisional**: the readout marks them and they are not used for any historical statement.
+- Transaction context (§13) never uses a forming candle.
+
+## 4. SMA — simple moving average
+
+Defaults: period 50. Offered presets 20, 50, 100, 200. Overlay.
+
+```
+SMA[i] = (C[i-N+1] + … + C[i]) / N        for i >= N-1
+SMA[i] = null                              for i <  N-1
+```
+
+Warm-up: `N-1`.
+
+Implementation may use a rolling sum. The rolling result must equal the direct sum to within
+`1e-9` relative; the test compares both.
+
+## 5. EMA — exponential moving average
+
+Defaults: period 21. Offered presets 12, 21, 50, 200. Overlay.
+
+```
+k        = 2 / (N + 1)
+EMA[N-1] = SMA[N-1]                                   (seed: simple average of the first N values)
+EMA[i]   = C[i] * k + EMA[i-1] * (1 - k)              for i >= N
+EMA[i]   = null                                       for i <  N-1
+```
+
+Warm-up: `N-1`. The seed is the SMA of the first `N` values, not the first value. This is the
+only seeding method used anywhere in this module, including inside MACD.
+
+## 6. RSI — Wilder's relative strength index
+
+Defaults: period 14. Pane, fixed scale 0–100, reference lines at 70, 50, 30 (configurable).
+
+```
+d[i]   = C[i] - C[i-1]                                for i >= 1
+gain[i] = max(d[i], 0)
+loss[i] = max(-d[i], 0)
+
+Seed at i = N (uses the first N changes, d[1]..d[N]):
+  avgGain[N] = (gain[1] + … + gain[N]) / N
+  avgLoss[N] = (loss[1] + … + loss[N]) / N
+
+Wilder smoothing for i > N:
+  avgGain[i] = (avgGain[i-1] * (N-1) + gain[i]) / N
+  avgLoss[i] = (avgLoss[i-1] * (N-1) + loss[i]) / N
+
+RS[i]  = avgGain[i] / avgLoss[i]
+RSI[i] = 100 - 100 / (1 + RS[i])
+RSI[i] = 100            when avgLoss[i] == 0   (including when avgGain[i] is also 0)
+RSI[i] = null           for i < N
+```
+
+Warm-up: `N`.
+
+The `avgLoss == 0 → 100` rule, including the flat case, deliberately matches the existing
+Dashboard implementation (`buildMovingAverageSeries`, which evaluates `rs = Infinity`).
+
+### Compatibility with the Dashboard RSI
+
+The Dashboard chart already shows a 14-day RSI computed by `buildMovingAverageSeries` in
+`app.dev.html`, rounded to one decimal. The two must agree.
+
+Test: extract `buildMovingAverageSeries` the same way `tools/test/moving-average.mjs` does, run
+it and `Indicators` RSI(14) on the same daily close series (the fixture, and a random walk of
+at least 2,000 points), and assert for every index that
+`Number(newRsi[i].toFixed(1)) === dashboard[i].rsi14` and that both are `null`/absent at the
+same indices. The same test asserts SMA(50) and SMA(200) against `ma50d` and `ma200d` after
+rounding to two decimals.
+
+`buildMovingAverageSeries` is not modified or replaced. Note that the Dashboard feeds it
+gap-filled closes; on a series with provider gaps the two screens can differ, by design.
+
+## 7. MACD
+
+Defaults: fast 12, slow 26, signal 9. Pane with MACD line, signal line and histogram.
+
+```
+MACD[i]   = EMA_fast[i] - EMA_slow[i]                 for i >= slow-1, else null
+Signal    = EMA of the MACD series with period `signal`, seeded with the SMA of the first
+            `signal` defined MACD values
+            → first value at i = slow - 1 + signal - 1
+Hist[i]   = MACD[i] - Signal[i]                       where both are defined, else null
+```
+
+Both EMAs use §5 exactly (SMA seed). Warm-up: `slow-1` for the MACD line (25 by default),
+`slow+signal-2` for signal and histogram (33 by default).
+
+## 8. Bollinger Bands
+
+Defaults: period 20, multiplier 2. Overlay with upper, middle and lower lines.
+
+```
+Mid[i]   = SMA_N[i]
+σ[i]     = sqrt( Σ (C[j] - Mid[i])² / N )   over j = i-N+1 … i      (population standard deviation, divisor N)
+Upper[i] = Mid[i] + m * σ[i]
+Lower[i] = Mid[i] - m * σ[i]
+```
+
+Optional derived series, computed by the same call:
+
+```
+PercentB[i]  = (C[i] - Lower[i]) / (Upper[i] - Lower[i])       null when Upper == Lower
+BandWidth[i] = (Upper[i] - Lower[i]) / Mid[i]
+```
+
+Warm-up: `N-1`. The divisor is `N`, not `N-1`; this is the conventional Bollinger definition
+and differs on purpose from historical volatility (§10), which uses the sample deviation.
+
+## 9. ATR — average true range
+
+Defaults: period 14. Pane.
+
+```
+TR[0] = null
+TR[i] = max( H[i] - L[i], |H[i] - C[i-1]|, |L[i] - C[i-1]| )       for i >= 1
+
+ATR[N] = (TR[1] + … + TR[N]) / N                                    (seed: simple average of the first N true ranges)
+ATR[i] = (ATR[i-1] * (N-1) + TR[i]) / N                             for i > N
+ATR[i] = null                                                       for i < N
+```
+
+Warm-up: `N`. The first candle has no previous close, so it contributes no true range.
+
+## 10. Historical (realized) volatility
+
+Defaults: period 30. Offered presets 7, 14, 30, 90. Pane, shown as a percentage.
+
+```
+r[i]  = ln( C[i] / C[i-1] )                                         for i >= 1   (log returns)
+mean  = ( r[i-N+1] + … + r[i] ) / N
+s[i]  = sqrt( Σ (r[j] - mean)² / (N - 1) )   over j = i-N+1 … i     (sample standard deviation, divisor N-1)
+HV[i] = s[i] * sqrt(P)                                              for i >= N
+HV[i] = null                                                        for i <  N
+```
+
+Annualization factor `P` = number of intervals per year, using a 365-day year because Bitcoin
+trades every day:
+
+```
+P = 365 * 86400 / intervalSeconds        → 365 for 1d, 8760 for 1h, 52.142857… for 1w
+```
+
+Return type: log returns. Result is a fraction (0.55 = 55 %). Warm-up: `N` (N returns need
+N+1 closes). The "30-Day Volatility" summary figure is HV(30) on completed daily candles.
+
+## 11. Returns
+
+All on completed candles unless stated.
+
+| Metric | Formula | Type |
+|---|---|---|
+| Selected range return | `lastClose / firstOpen - 1`, where `firstOpen` is the open of the first candle in the range | simple |
+| 1D, 7D, 30D, 90D, 1Y, 3Y, 5Y | `P_now / C_daily(k days ago) - 1`, where `C_daily` is the close of the last completed daily candle at or before `now - k days` and `P_now` is the current price | simple |
+| YTD | `P_now / C_daily(last completed day of the previous year) - 1` | simple |
+| Average daily return (range) | arithmetic mean of `C[i]/C[i-1] - 1` over daily candles in the range | simple |
+| Median daily return (range) | median of the same values; for an even count, the mean of the two middle values | simple |
+| Volatility input | §10 | log |
+
+`Indicators.returns.simple(a, b) = b / a - 1`; `Indicators.returns.log(a, b) = ln(b / a)`.
+A metric whose reference candle is missing (before the earliest candle, or in a gap) is
+`null` and displayed as "—". It is never approximated from a neighbouring candle.
+
+Range high and low are the maximum `h` and minimum `l` over the range. 52-week high and low use
+daily candles over the trailing 365 days including the forming day.
+
+## 12. Drawdown and all-time high
+
+**Drawdown series (close-based), within a range:**
+
+```
+peak[i] = max( C[start] … C[i] )
+DD[i]   = C[i] / peak[i] - 1                     (≤ 0)
+Maximum drawdown for the range = min over i of DD[i]
+```
+
+The peak resets at the start of the selected range. Maximum drawdown is reported with the
+dates of its peak and trough.
+
+**All-time high (high-based):**
+
+```
+ATH(t) = max( seed, max of h over all daily candles whose bucket END <= t )
+```
+
+- The summary's high is `max(ATH(now), high of the forming day)`.
+- "Current drawdown" and the distance from that high are the same number: `P_now / high - 1`.
+- **What these figures are called depends on the seed — see "Labels" below.** The words
+  "All-Time High" and "ATH" are used in this document for the formula; they appear in the UI
+  only when the labelling rule allows.
+- **Previous ATH at time `t`** is `ATH(t)` as defined above: only candles that had fully closed
+  by `t`. This is the value used for a transaction (§13).
+
+**ATH seed for history that predates the provider:**
+
+The provider's daily history starts later than Bitcoin's price history. For a transaction
+dated early in the provider's history, the true previous all-time high occurred before the
+first available candle, and a maximum over available candles alone would be wrong.
+
+```js
+Indicators.ATH_SEED = { price: <USD>, date: 'YYYY-MM-DD', source: '<citation>' } | null
+```
+
+- At implementation time, the value, date and a citable source for the highest BTC-USD price
+  reached before the provider's earliest daily candle are verified and recorded here and in
+  the code comment. It must not be filled in from memory.
+- The seed applies only when `seed.date` is earlier than the provider's earliest daily candle
+  (`docs/market-data.md` §8). If the provider's history already covers that date, the seed is
+  ignored.
+- Once available highs exceed the seed, the seed has no further effect.
+
+**Labels (approved decision).** `ATH_SEED` is `null` until Phase 8. A seed counts as verified
+only when all three hold: its value and date come from an authoritative source cited in the
+code comment and in this section; a test covers the seeded calculation; and the owner has been
+told which source was used.
+
+| State | Summary labels | Transaction context and buckets |
+|---|---|---|
+| No verified seed (default; Phases 3–7 and Phase 8 if verification fails) | "High since <date>", "Drawdown from High since <date>" | "High since <date>", "Drawdown from High since <date>" |
+| Verified seed recorded | "All-Time High", "Distance from ATH", "Current Drawdown" | "Previous ATH", "Drawdown from Previous ATH" |
+
+- `<date>` is the earliest **verified** provider daily candle date
+  (`docs/market-data.md` §8), formatted mm/dd/yyyy. While earliest-candle discovery is still
+  running, the figures show a loading state rather than a date that may move.
+- Without a seed there is no way to tell from the candles alone which transactions are
+  affected, so the relabelling applies to every ATH-based figure, not only to early ones.
+- A single function, `Indicators.athLabels({ seedVerified, earliestSec })`, returns the label
+  strings so the rule lives in one place and is unit-tested.
+- A value is never presented as an all-time high without a verified seed.
+- Phase 8 attempts the verification. If no authoritative source can be found, the seed stays
+  `null`, the "High since" labels remain, and that outcome is reported to the owner. Phase 8
+  can complete in either state; it cannot complete with an unverified seed in the code.
+
+## 13. No look-ahead: values "at" a transaction
+
+Any value presented as having been known when a transaction happened must be computable from
+data that existed at that moment.
+
+**Rule.** Let `T` be the transaction instant in UTC seconds (`txInstant(tx) / 1000`). The
+context series is the **daily** candle series restricted to candles with
+
+```
+t + 86400 <= T          (the daily candle had fully closed at or before the transaction)
+```
+
+All context indicators are computed on that restricted series and the value at its **last**
+index is reported. Equivalent and cheaper: compute the indicator once over all completed daily
+candles and read index `k`, where `k` is the last index with `t[k] + 86400 <= T`. This is valid
+only because every indicator on this page is causal — the value at index `k` depends only on
+indices `<= k`. Any future indicator that is not causal must not be used for context.
+
+Consequences:
+
+- The daily candle of the transaction's own UTC day is never used: its close is in the future
+  relative to the transaction.
+- Legacy rows without a time of day sit at 12:00:00 UTC (`isNoonPlaceholder`). The same rule
+  applies and yields the previous day's candle, which is correct for any time on that day.
+- Context is always daily, whatever interval is on screen.
+- The forming candle is never used.
+- If index `k` is inside the indicator's warm-up, or the previous day is a provider gap, the
+  value is `null` and shown as "—".
+
+Context values:
+
+| Value | Definition |
+|---|---|
+| SMA 20 / 50 / 200 | §4 at index `k` |
+| EMA (configured periods) | §5 at index `k` |
+| RSI 14 | §6 at index `k` |
+| MACD, signal, histogram | §7 at index `k` |
+| ATR 14 | §9 at index `k` |
+| Bollinger upper / mid / lower | §8 at index `k` |
+| 30-day volatility | §10 with N = 30 at index `k` |
+| Previous ATH | §12 `ATH(T)` |
+| Drawdown from previous ATH | `price_tx / ATH(T) - 1`; if `price_tx > ATH(T)` the value is positive and shown as "above previous ATH" |
+| Distance from SMA 50 / 200 | `price_tx / SMA[k] - 1` |
+| SMA 50 above SMA 200 | `SMA50[k] > SMA200[k]` |
+
+`price_tx` is the transaction's resolved price (`docs/personal-market-analytics.md` §3). When
+the price source is `UNKNOWN`, distance and drawdown are `null`.
+
+Anything computed with later data must be labelled "retrospective" in the UI. The first
+version contains no retrospective metrics.
+
+## 14. Reference and test methodology
+
+File: `tools/test/market-indicators.mjs`, run by `npm test`. No test framework; same style as
+the existing test files.
+
+For every indicator, three independent checks:
+
+1. **Naive oracle.** A second, deliberately simple implementation written in the test file
+   directly from the formula on this page (nested loops, no rolling state). The production
+   function must match it on the daily fixture and on seeded pseudo-random series, to within
+   `1e-9` relative. This is the method `tools/test/moving-average.mjs` already uses.
+2. **Hand-computed vector.** A short series (8–20 values) with the expected output worked out
+   by hand from the formula and written into the test with the arithmetic shown in a comment.
+   Covers the seed step and the first two smoothed steps of EMA, RSI, MACD signal and ATR.
+3. **Published example.** Where a widely published worked example exists for the same
+   definition (Wilder-smoothed RSI and ATR, SMA-seeded EMA and MACD, population-deviation
+   Bollinger Bands), its input and expected output are added as a fixture with the source cited
+   in the test. Values are copied from the source at implementation time, not from memory. If
+   a published example uses a different definition (for example an EMA seeded with the first
+   value), it is not used.
+
+Structural checks for every indicator:
+
+- Output length equals input length.
+- Exactly `warmup(settings)` leading `null` values, and no `null` after them on gap-free input.
+- No `NaN`, no `Infinity`.
+- Input array and its candles are unchanged (deep-frozen input).
+- Empty input and input shorter than the warm-up return all-`null` arrays without throwing.
+- **Causality:** for random `i`, changing every candle after `i` leaves outputs `0…i` identical.
+- **Segmentation:** a series with a gap produces a fresh warm-up after the gap.
+
+Specific checks:
+
+- RSI and SMA compatibility with `buildMovingAverageSeries` (§6).
+- RSI = 100 on a strictly rising series and on a flat series; RSI = 0 on a strictly falling series.
+- Bollinger uses divisor `N`; historical volatility uses divisor `N-1` — a test where the two
+  would differ.
+- Annualization factor for `1d`, `1h`, `1w`.
+- Drawdown: known peak and trough; monotonic rise gives 0.
+- Previous ATH: excludes the transaction day's candle; seed applied before it is exceeded and
+  ignored after.
+- `athLabels`: "High since <date>" wording when the seed is not verified; all-time-high
+  wording only when it is; loading state when the earliest date is not yet known.
+- Returns: each period against hand-computed values; `null` when the reference candle is missing.
+- Settings validation: out-of-range and non-integer periods, `fast >= slow`.
