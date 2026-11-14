@@ -7,6 +7,7 @@
 // Skips cleanly (exit 0) if no Chrome/Edge is installed — set CHROME_PATH to point at one.
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { launch, createChecks, findChrome, REPO_ROOT } from './lib/harness.mjs';
 
 if (!(await findChrome())) {
@@ -623,6 +624,69 @@ await wait(300);
 check('Reward shows the USD value and category fields', await evaluate(`return !!document.getElementById('tx-usd-value') && !!document.getElementById('tx-reward-cat');`));
 await press('Escape', 'Escape');
 await wait(400);
+
+// ── CoinLedger export is unchanged ───────────────────────────────────────────
+// Golden regression test for the tax export (Market Analytics plan, Phase 0). A fixed fixture
+// is exported through the real UI and compared to committed goldens as exact text, CRLF and
+// all. The goldens were generated once from the unmodified app and reviewed by hand. This test
+// NEVER writes them: when output differs (or a golden is missing) it fails and saves what the
+// app produced to the temp directory for inspection.
+//
+// Capture: URL.createObjectURL is wrapped to keep the Blob that downloadBlob creates, and the
+// anchor click for coinledger-* files is swallowed so headless Chrome downloads nothing.
+// downloadBlob and exportCSV themselves are untouched.
+console.log('\n[CoinLedger export is unchanged]');
+{
+  const FIXTURES = join(REPO_ROOT, 'tools', 'test', 'fixtures');
+  const fixture = JSON.parse(readFileSync(join(FIXTURES, 'coinledger-golden-input.json'), 'utf8'));
+  const GOLDENS = [
+    { card: 'All Years', file: 'coinledger-golden.csv',      name: /^coinledger-all-\d{4}-\d{2}-\d{2}\.csv$/ },
+    { card: '2024',      file: 'coinledger-golden-2024.csv', name: /^coinledger-2024-\d{4}-\d{2}-\d{2}\.csv$/ },
+  ];
+  await seed({ 'btc-tx-v2': fixture.transactions, 'btc-wallets': fixture.wallets });
+  await reload();
+  await clickByText('Export');
+  await wait(900);
+  for (const g of GOLDENS) {
+    const got = await evaluate(`
+      if(!window.__clHooked){
+        window.__clHooked = true;
+        const make = URL.createObjectURL.bind(URL);
+        URL.createObjectURL = b => { window.__clBlobs.push(b); return make(b); };
+        const click = HTMLAnchorElement.prototype.click;
+        HTMLAnchorElement.prototype.click = function(){
+          if(/^coinledger-/.test(this.download || '')) { window.__clNames.push(this.download); return; }
+          return click.call(this);
+        };
+      }
+      window.__clBlobs = []; window.__clNames = [];
+      const card=[...document.querySelectorAll('.stat-card')].find(c=>(c.querySelector('.stat-label')?.textContent||'').trim()===${JSON.stringify(g.card)});
+      if(!card) return { error: 'export card not found' };
+      card.click();
+      if(window.__clBlobs.length !== 1) return { error: 'expected exactly 1 blob, got ' + window.__clBlobs.length };
+      const blob = window.__clBlobs[0];
+      return blob.text().then(text => ({ text, type: blob.type, name: window.__clNames[0] || '' }));`);
+    const label = `"${g.card}"`;
+    if (!got || got.error) { check(`${label}: export captured`, false, got?.error || 'nothing returned'); continue; }
+    check(`${label}: blob is text/csv`, got.type === 'text/csv', got.type);
+    check(`${label}: filename unchanged`, g.name.test(got.name), got.name);
+    const goldenPath = join(FIXTURES, g.file);
+    let golden = null;
+    try { golden = readFileSync(goldenPath, 'utf8'); } catch {}
+    const same = golden !== null && got.text === golden;
+    let detail = '';
+    if (!same) {
+      const actualPath = join(tmpdir(), `satledger-actual-${g.file}`);
+      writeFileSync(actualPath, got.text);
+      if (golden === null) detail = `golden ${g.file} is MISSING (never auto-generated); app output saved to ${actualPath}`;
+      else {
+        let i = 0; while (i < golden.length && golden[i] === got.text[i]) i++;
+        detail = `first difference at char ${i}: golden ${JSON.stringify(golden.slice(i, i + 40))} vs app ${JSON.stringify(got.text.slice(i, i + 40))}; app output saved to ${actualPath}`;
+      }
+    }
+    check(`${label}: CSV is byte-identical to ${g.file}`, same, detail);
+  }
+}
 
 // ── a new deploy is announced ────────────────────────────────────────────────
 // Built page only: app.dev.html has no build id and skips the check.

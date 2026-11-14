@@ -1,0 +1,3 @@
+# Golden CSV fixtures are compared byte-for-byte: CRLF row separators plus a bare LF inside a
+# quoted field. Never let git convert their line endings.
+tools/test/fixtures/*.csv -text

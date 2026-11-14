@@ -1,0 +1,30 @@
+{
+  "_comment": "Fixed input for the CoinLedger golden export test (tools/test/browser.mjs). Never edit to make the test pass: a change here requires regenerating and re-reviewing both goldens. Array order is deliberately NOT chronological so the export's own sort (compareTx) is exercised.",
+  "wallets": [
+    { "id": "gw1", "name": "Kraken", "type": "Exchange", "address": "" },
+    { "id": "gw2", "name": "Ledger", "type": "Cold Storage", "address": "" },
+    { "id": "gw3", "name": "=Cmd Wallet", "type": "Exchange", "address": "" },
+    { "id": "gw4", "name": "+Plus", "type": "Exchange", "address": "" },
+    { "id": "gw5", "name": "-Minus", "type": "Wallet", "address": "" },
+    { "id": "gw6", "name": "@At", "type": "Wallet", "address": "" }
+  ],
+  "transactions": [
+    { "id": "g-seq2", "date": "2024-07-01", "datetimeUtc": "2024-07-01T12:34:00.000Z", "sequence": 2, "type": "Buy", "wallet": "Kraken", "wallet2": "", "amount": "0.002", "price": "62000", "fee": "", "totalUsd": "124", "notes": "same instant, sequence 2", "txhash": "", "excludeStats": false },
+    { "id": "g-seq1", "date": "2024-07-01", "datetimeUtc": "2024-07-01T12:34:00.000Z", "sequence": 1, "type": "Buy", "wallet": "Kraken", "wallet2": "", "amount": "0.001", "price": "62000", "fee": "", "totalUsd": "62", "notes": "same instant, sequence 1", "txhash": "", "excludeStats": false },
+    { "id": "g-legacy", "date": "2023-01-15", "type": "Buy", "wallet": "Kraken", "wallet2": "", "amount": "0.12345678", "price": "20000", "fee": "", "totalUsd": "2469.14", "notes": "legacy row, no time recorded", "txhash": "", "excludeStats": false },
+    { "id": "g-buy-fee-blank-total", "date": "2023-03-01", "datetimeUtc": "2023-03-01T14:22:05.000Z", "sequence": 1, "type": "Buy", "wallet": "=Cmd Wallet", "wallet2": "", "amount": "0.50000000", "price": "23456.78", "fee": "1.5", "totalUsd": "", "notes": "=SUM(A1:A2)", "txhash": "", "excludeStats": false },
+    { "id": "g-sell", "date": "2023-06-10", "datetimeUtc": "2023-06-10T09:00:00.000Z", "sequence": 1, "type": "Sell", "wallet": "Kraken", "wallet2": "", "amount": "0.1", "price": "26000", "fee": "", "totalUsd": "2600", "notes": "+plus note", "txhash": "", "excludeStats": false },
+    { "id": "g-transfer-both-fee", "date": "2023-07-04", "datetimeUtc": "2023-07-04T00:00:00.000Z", "sequence": 1, "type": "Transfer", "wallet": "Kraken", "wallet2": "Ledger", "amount": "0.2", "price": "", "fee": "0.00012345", "totalUsd": "", "notes": "", "txhash": "abc123", "excludeStats": false },
+    { "id": "g-year-edge", "date": "2023-12-31", "datetimeUtc": "2023-12-31T23:59:59.000Z", "sequence": 1, "type": "Buy", "wallet": "Kraken", "wallet2": "", "amount": "1", "price": "42000", "fee": "", "totalUsd": "42000", "notes": "", "txhash": "", "excludeStats": false },
+    { "id": "g-transfer-both-nofee", "date": "2024-01-05", "datetimeUtc": "2024-01-05T10:00:00.000Z", "sequence": 1, "type": "Transfer", "wallet": "Ledger", "wallet2": "-Minus", "amount": "0.01", "price": "", "fee": "", "totalUsd": "", "notes": "Moved, \"cold\"\nsecond line", "txhash": "", "excludeStats": false },
+    { "id": "g-sell-fee", "date": "2024-02-20", "datetimeUtc": "2024-02-20T18:45:30.000Z", "sequence": 1, "type": "Sell", "wallet": "+Plus", "wallet2": "", "amount": "0.05", "price": "52000.55", "fee": "2.499", "totalUsd": "2600.03", "notes": "-12.5", "txhash": "=HYPERLINK(\"x\")", "excludeStats": false },
+    { "id": "g-transfer-src-only", "date": "2024-03-01", "datetimeUtc": "2024-03-01T12:30:00.000Z", "sequence": 1, "type": "Transfer", "wallet": "@At", "wallet2": "", "amount": "0.03", "price": "", "fee": "0.0001", "totalUsd": "", "notes": "", "txhash": "", "excludeStats": false },
+    { "id": "g-transfer-dst-only", "date": "2024-03-02", "datetimeUtc": "2024-03-02T08:00:00.000Z", "sequence": 1, "type": "Transfer", "wallet": "", "wallet2": "Ledger", "amount": "0.04", "price": "", "fee": "", "totalUsd": "", "notes": "", "txhash": "", "excludeStats": false },
+    { "id": "g-consolidation-fee", "date": "2024-04-01", "datetimeUtc": "2024-04-01T06:00:00.000Z", "sequence": 1, "type": "Consolidation", "wallet": "Ledger", "wallet2": "", "amount": "", "price": "", "fee": "0.00005", "totalUsd": "", "notes": "", "txhash": "", "excludeStats": false },
+    { "id": "g-consolidation-nofee", "date": "2024-04-02", "datetimeUtc": "2024-04-02T06:00:00.000Z", "sequence": 1, "type": "Consolidation", "wallet": "Ledger", "wallet2": "", "amount": "0.5", "price": "", "fee": "", "totalUsd": "", "notes": "no fee: exports no row", "txhash": "", "excludeStats": false },
+    { "id": "g-reward-usd", "date": "2024-05-01", "datetimeUtc": "2024-05-01T00:00:01.000Z", "sequence": 1, "type": "Reward", "wallet": "Kraken", "wallet2": "", "amount": "0.00001234", "price": "", "fee": "", "totalUsd": "", "notes": "@reward", "txhash": "", "excludeStats": false, "usdValueAtReceipt": "0.740400", "usdValueSource": "manual", "rewardCategory": "cash_back" },
+    { "id": "g-reward-nousd", "date": "2024-05-02", "datetimeUtc": "2024-05-02T09:15:00.000Z", "sequence": 1, "type": "Reward", "wallet": "Ledger", "wallet2": "", "amount": "0.0000005", "price": "", "fee": "", "totalUsd": "", "notes": "", "txhash": "", "excludeStats": false, "rewardCategory": "cash_back" },
+    { "id": "g-excluded", "date": "2024-06-01", "datetimeUtc": "2024-06-01T15:00:00.000Z", "sequence": 1, "type": "Buy", "wallet": "Kraken", "wallet2": "", "amount": "0.25", "price": "67000", "fee": "0", "totalUsd": "16750", "notes": "excluded from stats", "txhash": "", "excludeStats": true },
+    { "id": "g-noon-placeholder", "date": "2024-08-15", "datetimeUtc": "2024-08-15T12:00:00.000Z", "sequence": 1, "type": "Sell", "wallet": "Ledger", "wallet2": "", "amount": "0.001", "price": "58500", "fee": "", "totalUsd": "58.5", "notes": "", "txhash": "", "excludeStats": false }
+  ]
+}
