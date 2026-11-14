@@ -453,7 +453,7 @@ read transactions in any Market code.
 
 ---
 
-## Phase 6 — PersonalMarket core
+## ✅ Phase 6 — PersonalMarket core
 
 **Objective.** The pure join between transactions and market data, fully tested, with no UI.
 
