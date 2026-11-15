@@ -4,7 +4,8 @@ import { loadAppHelpers } from '../lib/app-helpers.mjs';
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
   'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv',
   'lotMethodHistoryOf','appendLotMethodHistory','lotMethodAt','lotMethodSince',
-  'needsLotRecord','lotRecordFor','lotRecordsFor','compareLotRecord','latestLotRecord','withLotRecord','isLotRecordTimely','lotRecordAudit','lotRecordsCsv']);
+  'needsLotRecord','lotRecordFor','lotRecordsFor','compareLotRecord','latestLotRecord','withLotRecord','isLotRecordTimely','lotRecordAudit','lotRecordsCsv',
+  'txLoggedAt','txLoggedLag']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -367,21 +368,36 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   // CSV export
   const csv = H.lotRecordsCsv([b1, b2, tRec, sRec], okAudit, { year: '2026', generatedAtMs: Date.parse('2026-11-14T00:00:00Z') }).split('\r\n');
   eq(csv[0], '"Lot identification records: 2026","Generated (UTC): 2026-11-14 00:00:00"', 'records CSV header line');
-  eq(csv[1].split('","').length, 21, 'records CSV has 21 columns');
+  eq(csv[1].split('","').length, 23, 'records CSV has 23 columns');
   eq(csv.length, 2 + 3, 'one row per lot: transfer move + fee, sale');
   const cols = csv[2].slice(1, -1).split('","');
-  eq([cols[0], cols[1], cols[2], cols[3], cols[4], cols[6], cols[7], cols[8], cols[9], cols[10], cols[11], cols[12], cols[13], cols[16], cols[20]],
-    ['2026-11-12 15:00:00', 'Transfer', 'Bitkey', '1', 'yes', 'when saved', 'at the time', 'HIFO', '68808.69', 'Moved', '2025-01-01 10:00:00', 'Buy 2025-01-01 Bitkey', '0.30000000', 'LT', 'yes'],
+  eq([cols[0], cols[1], cols[2], cols[3], cols[4], cols[5], cols[6], cols[8], cols[9], cols[10], cols[11], cols[12], cols[13], cols[14], cols[15], cols[18], cols[22]],
+    ['2026-11-12 15:00:00', '', '', 'Transfer', 'Bitkey', '1', 'yes', 'when saved', 'at the time', 'HIFO', '68808.69', 'Moved', '2025-01-01 10:00:00', 'Buy 2025-01-01 Bitkey', '0.30000000', 'LT', 'yes'],
     'records CSV row: transfer, move of the $100k lot, made at the time, still matches');
   ok(csv[4].includes('"recorded later"'), 'a record made two days later says so');
   eq(H.lotRecordsCsv([b1, b2, tRec], okAudit, { year: '2025' }).split('\r\n').length, 2, 'another year: header only');
   const two = { ...tRec, lotRecords: [rec, { ...rec, source: 'rerecord', recordedAt: '2026-11-20T00:00:00.000Z' }] };
   const csv2 = H.lotRecordsCsv([b1, b2, two], H.lotRecordAudit([b1, b2, two], { methodFor }), {}).split('\r\n');
-  eq(csv2.slice(2).map(l => l.slice(1, -1).split('","')).map(c => [c[3], c[4], c[6], c[20]]),
+  eq(csv2.slice(2).map(l => l.slice(1, -1).split('","')).map(c => [c[5], c[6], c[8], c[22]]),
     [['1', 'no', 'when saved', ''], ['1', 'no', 'when saved', ''], ['2', 'yes', 'by Re-record', 'yes'], ['2', 'yes', 'by Re-record', 'yes']],
     'earlier records are exported too, numbered; only the latest carries the match status');
   const evil = H.lotRecordsCsv([b1, b2, { ...tRec, lotRecords: [{ ...rec, wallet: '=HYPERLINK(1)' }] }], okAudit, {}).split('\r\n')[2];
   ok(evil.includes(`"'=HYPERLINK(1)"`), 'a formula-looking wallet name is neutralised in the records CSV');
+
+  // when the row was first logged, read from its id (newTxId: 't' + Date.now() in base 36 + …)
+  const idAt = ms => 't' + ms.toString(36) + '0' + 'ab12';
+  const loggedMs = Date.parse('2026-11-12T15:35:00Z');
+  const logged = { ...tRec, id: idAt(loggedMs) };
+  eq(H.txLoggedAt(logged), loggedMs, 'logged time decoded from the id');
+  eq(H.txLoggedLag(logged), '35 min after', 'logged 35 minutes after the transfer');
+  eq(H.txLoggedLag({ ...logged, id: idAt(Date.parse('2026-11-12T20:10:00Z')) }), '5 h after', 'hours');
+  eq(H.txLoggedLag({ ...logged, datetimeUtc: '2026-11-08T15:00:00.000Z' }), '4 days after', 'days');
+  eq(H.txLoggedLag({ ...logged, id: idAt(Date.parse('2026-11-12T14:00:00Z')) }), '', 'logged before the transaction time: no lag shown');
+  eq(H.txLoggedLag({ ...logged, datetimeUtc: '2026-11-12T12:00:00.000Z' }), '', 'a row with no time of day: no lag shown');
+  eq([H.txLoggedAt({ id: 'x12' }), H.txLoggedAt({ id: 't1' }), H.txLoggedAt({}), H.txLoggedAt({ id: 'tzzzzzzzz0abc' })], [null, null, null, null],
+    'other id shapes and implausible times decode to nothing');
+  const csvLogged = H.lotRecordsCsv([b1, b2, logged], H.lotRecordAudit([b1, b2, logged], { methodFor }), {}).split('\r\n')[2].slice(1, -1).split('","');
+  eq([csvLogged[1], csvLogged[2]], ['2026-11-12 15:35:00', '35 min after'], 'records CSV carries when the row was logged');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

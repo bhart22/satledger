@@ -59,6 +59,11 @@ This feature lifts the Market plan's "never modify `buildLots`" rule, for these 
 - **Timeliness** is judged from the dates, not the source: `isLotRecordTimely` says "at the
   time" when `recordedAt` is within 36 hours of the transaction, otherwise the UI says
   "recorded later". A row logged days after the trade is honest about it.
+- **When the row was logged** is shown beside the record (edit form, Harvest cards, CSV
+  "Logged (UTC)" / "Logged After"). `txLoggedAt` decodes it from the row's id, which `newTxId`
+  builds from `Date.now()`; for an imported row it is the import time. It is evidence of when the
+  transaction was written down, separate from when its lot record was made, and never changes
+  the record's own timeliness.
 - Editing an *earlier* transaction can change what a later row would pick. That later row's
   record is not rewritten; the change shows up as drift.
 
