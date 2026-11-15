@@ -2,7 +2,8 @@
 import { loadAppHelpers } from '../lib/app-helpers.mjs';
 
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
-  'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv']);
+  'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv',
+  'lotMethodHistoryOf','appendLotMethodHistory','lotMethodAt','lotMethodSince']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -241,6 +242,30 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   ok(csv.some(l => l.startsWith('"Bitkey","FIFO"')), 'each row carries its wallet disposal method');
   const evil = H.harvestSummaryCsv({ wallets: [{ ...sum.wallets[0], wallet: '=SUM(A1)' }], total: sum.total }, { price: 60000, generatedAtMs: NOW2 }).split('\r\n')[2];
   ok(evil.startsWith(`"'=SUM(A1)"`), 'a formula-looking wallet name is neutralised in the summary CSV');
+}
+
+// ── lot-method history: the dated standing order ────────────────────────────
+{
+  const D = s => Date.parse(s);
+  eq(H.lotMethodSince({ name: 'A' }), null, 'no history: no "since" date');
+  eq(H.lotMethodSince({ name: 'A', lotMethod: 'HIFO', lotMethodHistory: 'junk' }), null, 'a non-array history is ignored');
+  const h1 = H.appendLotMethodHistory(undefined, 'HIFO', 'created', D('2025-01-05T10:00:00Z'));
+  eq(h1, [{ method: 'HIFO', from: '2025-01-05T10:00:00.000Z', source: 'created' }], 'append to nothing starts a history');
+  const h2 = H.appendLotMethodHistory(h1, 'FIFO', 'changed', D('2025-06-01T10:00:00Z'));
+  eq(h1.length, 1, 'append never mutates the earlier history');
+  const h3 = H.appendLotMethodHistory(h2, 'HIFO', 'changed', D('2026-02-01T10:00:00Z'));
+  const w = { name: 'A', lotMethod: 'HIFO', lotMethodHistory: h3 };
+  eq(H.lotMethodSince(w), D('2026-02-01T10:00:00Z'), '"since" is the start of the current unbroken run');
+  eq(H.lotMethodAt(w, D('2025-01-01T00:00:00Z')), null, 'before the first entry, nothing is on record');
+  eq(H.lotMethodAt(w, D('2025-03-01T00:00:00Z')), 'HIFO', 'method at a moment: the last entry at or before it');
+  eq(H.lotMethodAt(w, D('2025-06-01T10:00:00Z')), 'FIFO', 'an entry is in force from its own instant');
+  eq(H.lotMethodAt(w, D('2026-11-12T00:00:00Z')), 'HIFO', 'method at a recent moment');
+  const confirmed = { ...w, lotMethodHistory: H.appendLotMethodHistory(h3, 'HIFO', 'confirmed', D('2026-11-14T10:00:00Z')) };
+  eq(H.lotMethodSince(confirmed), D('2026-02-01T10:00:00Z'), 'a later confirmation of the same method keeps the earlier "since"');
+  eq(H.lotMethodSince({ ...w, lotMethod: 'FIFO' }), null, 'a method changed without a record has no "since" date');
+  eq(H.lotMethodSince({ name: 'A', lotMethodHistory: h1 }), D('2025-01-05T10:00:00Z'), 'a wallet with no lotMethod is HIFO by default');
+  const shuffled = { name: 'A', lotMethod: 'HIFO', lotMethodHistory: [h3[2], { method: 'LIFO', from: '2025-02-01T00:00:00Z' }, h3[0], h3[1], { method: 'HIFO', from: 'bad' }] };
+  eq(H.lotMethodHistoryOf(shuffled).map(e => e.method), ['HIFO', 'FIFO', 'HIFO'], 'history is read in time order, invalid entries dropped');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
