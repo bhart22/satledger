@@ -3,7 +3,8 @@ import { loadAppHelpers } from '../lib/app-helpers.mjs';
 
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
   'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv',
-  'lotMethodHistoryOf','appendLotMethodHistory','lotMethodAt','lotMethodSince']);
+  'lotMethodHistoryOf','appendLotMethodHistory','lotMethodAt','lotMethodSince',
+  'needsLotRecord','lotRecordFor','lotRecordsFor','compareLotRecord','latestLotRecord','withLotRecord','isLotRecordTimely','lotRecordAudit','lotRecordsCsv']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -266,6 +267,121 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   eq(H.lotMethodSince({ name: 'A', lotMethodHistory: h1 }), D('2025-01-05T10:00:00Z'), 'a wallet with no lotMethod is HIFO by default');
   const shuffled = { name: 'A', lotMethod: 'HIFO', lotMethodHistory: [h3[2], { method: 'LIFO', from: '2025-02-01T00:00:00Z' }, h3[0], h3[1], { method: 'HIFO', from: 'bad' }] };
   eq(H.lotMethodHistoryOf(shuffled).map(e => e.method), ['HIFO', 'FIFO', 'HIFO'], 'history is read in time order, invalid entries dropped');
+}
+
+// ── disposals name their source lot; internal transfers record 'move' ───────
+{
+  const b1 = buy('2025-01-01T10:00:00.000Z', 'Bitkey', '0.5', 50000);   // $100k/BTC
+  const b2 = buy('2025-02-01T10:00:00.000Z', 'Bitkey', '0.5', 30000);   // $60k/BTC
+  const t = xfer('2026-11-12T15:00:00.000Z', 'Bitkey', 'Cash App', '0.3', '0.00000890');
+  const s = sell('2026-11-12T15:05:00.000Z', 'Cash App', '0.3', 20700);
+  const r = H.buildLots([b1, b2, t, s]);
+  const moves = r.disposals.filter(d => d.kind === 'move');
+  eq(moves.map(d => [d.txId, d.wallet, d.sats, d.originTxId, d.lotType, d.platform]), [[t.id, 'Bitkey', sats(0.3), b1.id, 'Buy', 'Bitkey']],
+    'an internal transfer records which lot it moved (HIFO: the $100k lot), with its origin');
+  ok(r.disposals.filter(d => d.kind === 'fee').every(d => d.originTxId === b1.id), 'the fee comes from the next lot in the same ranking');
+  eq(r.disposals.filter(d => d.kind === 'sell').map(d => d.originTxId), [b1.id], 'the sale in the receiving wallet names the original buy');
+  eq(lotsIn(r, 'Bitkey').reduce((n, l) => n + l.sats, 0) + lotsIn(r, 'Cash App').reduce((n, l) => n + l.sats, 0), sats(1 - 0.3 - 0.0000089),
+    'recording moves changes no lot');
+
+  // the record for the transfer
+  const methodFor = () => 'HIFO';
+  const rec = H.lotRecordFor([b1, b2, t, s], t.id, { methodFor, recordedAtMs: Date.parse('2026-11-12T15:01:00Z'), priceUsd: 68808.694 });
+  eq([rec.v, rec.source, rec.wallet, rec.method, rec.txAt, rec.recordedAt, rec.priceUsd],
+    [1, 'save', 'Bitkey', 'HIFO', '2026-11-12T15:00:00.000Z', '2026-11-12T15:01:00.000Z', 68808.69], 'record header');
+  eq(rec.lots.map(l => [l.k, l.o, l.s]), [['move', b1.id, sats(0.3)], ['fee', b1.id, 890]], 'record lots: what moved and what paid the fee');
+  near(rec.lots[0].b, 30000, 'moved basis carried in the record');
+  eq(rec.lots[0].lt, true, 'term judged at the transfer: held more than a year');
+  eq('shortSats' in rec, false, 'no shortfall when the wallet held enough');
+  const recSell = H.lotRecordFor([b1, b2, t, s], s.id, { methodFor });
+  eq([recSell.wallet, recSell.priceUsd, recSell.lots.map(l => [l.k, l.o, l.s])], ['Cash App', 69000, [['sell', b1.id, sats(0.3)]]], 'a sale record uses its own price');
+
+  // FIFO picks the older lot instead
+  const fifo = H.lotRecordFor([b1, b2, t], t.id, { methodFor: () => 'FIFO' });
+  eq([fifo.method, fifo.lots[0].o], ['FIFO', b1.id], 'FIFO record: oldest lot');
+  const fifo2 = H.lotRecordFor([b2, b1, t].map((x, i) => i === 0 ? { ...x, datetimeUtc: '2024-12-01T10:00:00.000Z', date: '2024-12-01' } : x), t.id, { methodFor: () => 'FIFO' });
+  eq(fifo2.lots[0].o, b2.id, 'FIFO record follows acquisition time, not list order');
+
+  // outflow and shortfall
+  const out = xfer('2026-03-01T10:00:00.000Z', 'Bitkey', '', '0.2', '');
+  eq(H.lotRecordFor([b1, b2, out], out.id, { methodFor }).lots.map(l => l.k), ['out'], 'a from-only transfer records "out"');
+  const big = xfer('2026-03-01T10:00:00.000Z', 'Bitkey', 'Cash App', '1.5', '');
+  eq(H.lotRecordFor([b1, b2, big], big.id, { methodFor }).shortSats, sats(0.5), 'a shortfall is recorded');
+
+  // which rows get records
+  eq([H.needsLotRecord(s), H.needsLotRecord(t), H.needsLotRecord(out), H.needsLotRecord(b1),
+    H.needsLotRecord(xfer('2026-01-01T00:00:00.000Z', '', 'Bitkey', '1', '')), H.needsLotRecord({ ...s, amount: '0' })],
+    [true, true, true, false, false, false], 'records go on sells and transfers that leave a wallet');
+  eq(H.lotRecordFor([b1, b2, t], b1.id), null, 'no record for a buy');
+  eq(H.lotRecordFor([b1, b2, t], 'nope'), null, 'no record for a missing id');
+
+  // stability and drift
+  const early = buy('2024-06-01T10:00:00.000Z', 'Kraken', '1', 20000);
+  const again = H.lotRecordFor([early, b1, b2, t, s], t.id, { methodFor, recordedAtMs: Date.parse('2026-11-12T15:01:00Z'), priceUsd: 68808.694 });
+  eq(H.compareLotRecord(rec, again).status, 'match', 'an unrelated earlier insert (lot ids renumbered) still matches');
+  const pricier = { ...b2, totalUsd: '60000', price: '120000' };   // edit an earlier buy: now the costliest lot
+  const drift = H.compareLotRecord(rec, H.lotRecordFor([b1, pricier, t, s], t.id, { methodFor }));
+  eq([drift.status, drift.removed.map(l => l.o), drift.added.map(l => l.o)], ['differs', [b1.id, b1.id], [b2.id, b2.id]], 'editing an earlier buy changes the picks: drift');
+  eq(H.compareLotRecord(rec, null).status, 'differs', 'a row that can no longer be recomputed differs');
+  const cents = { ...rec, lots: rec.lots.map(l => ({ ...l, b: l.b + 0.001 })) };
+  eq(H.compareLotRecord(rec, cents).status, 'match', 'sub-cent basis noise is not drift');
+  eq(H.compareLotRecord(rec, { ...rec, wallet: 'Ledger' }).status, 'differs', 'a different wallet differs');
+
+  // latest record
+  eq(H.latestLotRecord({}), null, 'no records');
+  eq(H.latestLotRecord({ lotRecords: [rec, 'junk', again] }), again, 'latest valid record');
+
+  // batch: one replay, same records as one at a time
+  const batch = H.lotRecordsFor([b1, b2, t, s, out], [t.id, s.id, b1.id, out.id], { methodFor, recordedAtMs: Date.parse('2026-11-12T15:01:00Z'), priceFor: tx => tx.id === t.id ? 68808.694 : null });
+  eq([...batch.keys()].sort(), [t.id, s.id, out.id].sort(), 'batch: records only for rows that take lots');
+  eq(batch.get(t.id), H.lotRecordFor([b1, b2, t, s, out], t.id, { methodFor, recordedAtMs: Date.parse('2026-11-12T15:01:00Z'), priceUsd: 68808.694 }), 'batch record equals the single one');
+
+  // appending: new when none, never when unchanged, appended when the picks changed
+  const row = { ...t };
+  const r1 = H.withLotRecord(row, rec);
+  eq(r1.lotRecords.length, 1, 'first record appended');
+  eq(H.withLotRecord(r1, again), r1, 'an unchanged recompute appends nothing (same row back)');
+  const changed = H.lotRecordFor([b1, pricier, t, s], t.id, { methodFor, source: 'edit' });
+  const r2 = H.withLotRecord(r1, changed);
+  eq([r2.lotRecords.length, r2.lotRecords[0], r2.lotRecords[1].source], [2, rec, 'edit'], 'changed picks append; the earlier record is kept as is');
+  eq(H.withLotRecord(r1, null), r1, 'no fresh record: nothing changes');
+
+  // timeliness
+  eq(H.isLotRecordTimely(rec), true, 'recorded a minute after: at the time');
+  eq(H.isLotRecordTimely({ ...rec, recordedAt: '2026-11-14T18:00:00.000Z' }), false, 'recorded two days later: later');
+  eq(H.isLotRecordTimely(null), false, 'no record is not timely');
+
+  // self-audit over the whole ledger
+  const tRec = { ...t, lotRecords: [rec] };
+  const sRec = { ...s, lotRecords: [H.lotRecordFor([b1, b2, t, s], s.id, { methodFor, recordedAtMs: Date.parse('2026-11-14T18:00:00Z') })] };
+  const outLate = xfer('2026-12-01T10:00:00.000Z', 'Bitkey', '', '0.1', '');
+  const okAudit = H.lotRecordAudit([b1, b2, tRec, sRec, outLate], { methodFor });
+  eq([okAudit.rows.map(r => [r.txId, r.status]), okAudit.unrecorded], [[[t.id, 'match'], [s.id, 'match']], 1], 'audit: both records match, the outflow has none');
+  const driftAudit = H.lotRecordAudit([b1, pricier, tRec, sRec], { methodFor });
+  eq(driftAudit.rows.map(r => r.status), ['differs', 'differs'], 'audit: an edited earlier buy makes later records differ');
+  eq(H.lotRecordAudit([b1, b2, tRec, sRec], { methodFor: () => 'FIFO' }).rows.map(r => r.status), ['match', 'match'],
+    'audit: a method change that picks the same lots is not drift');
+  eq(H.lotRecordAudit([b1, b2, { ...tRec, type: 'Buy' }], { methodFor }).rows[0].status, 'differs', 'audit: a row that no longer takes lots differs');
+  eq(H.lotRecordAudit([], {}), { rows: [], unrecorded: 0 }, 'audit of nothing');
+
+  // CSV export
+  const csv = H.lotRecordsCsv([b1, b2, tRec, sRec], okAudit, { year: '2026', generatedAtMs: Date.parse('2026-11-14T00:00:00Z') }).split('\r\n');
+  eq(csv[0], '"Lot identification records: 2026","Generated (UTC): 2026-11-14 00:00:00"', 'records CSV header line');
+  eq(csv[1].split('","').length, 21, 'records CSV has 21 columns');
+  eq(csv.length, 2 + 3, 'one row per lot: transfer move + fee, sale');
+  const cols = csv[2].slice(1, -1).split('","');
+  eq([cols[0], cols[1], cols[2], cols[3], cols[4], cols[6], cols[7], cols[8], cols[9], cols[10], cols[11], cols[12], cols[13], cols[16], cols[20]],
+    ['2026-11-12 15:00:00', 'Transfer', 'Bitkey', '1', 'yes', 'when saved', 'at the time', 'HIFO', '68808.69', 'Moved', '2025-01-01 10:00:00', 'Buy 2025-01-01 Bitkey', '0.30000000', 'LT', 'yes'],
+    'records CSV row: transfer, move of the $100k lot, made at the time, still matches');
+  ok(csv[4].includes('"recorded later"'), 'a record made two days later says so');
+  eq(H.lotRecordsCsv([b1, b2, tRec], okAudit, { year: '2025' }).split('\r\n').length, 2, 'another year: header only');
+  const two = { ...tRec, lotRecords: [rec, { ...rec, source: 'rerecord', recordedAt: '2026-11-20T00:00:00.000Z' }] };
+  const csv2 = H.lotRecordsCsv([b1, b2, two], H.lotRecordAudit([b1, b2, two], { methodFor }), {}).split('\r\n');
+  eq(csv2.slice(2).map(l => l.slice(1, -1).split('","')).map(c => [c[3], c[4], c[6], c[20]]),
+    [['1', 'no', 'when saved', ''], ['1', 'no', 'when saved', ''], ['2', 'yes', 'by Re-record', 'yes'], ['2', 'yes', 'by Re-record', 'yes']],
+    'earlier records are exported too, numbered; only the latest carries the match status');
+  const evil = H.lotRecordsCsv([b1, b2, { ...tRec, lotRecords: [{ ...rec, wallet: '=HYPERLINK(1)' }] }], okAudit, {}).split('\r\n')[2];
+  ok(evil.includes(`"'=HYPERLINK(1)"`), 'a formula-looking wallet name is neutralised in the records CSV');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -641,6 +641,105 @@ check('Reward shows the USD value and category fields', await evaluate(`return !
 await press('Escape', 'Escape');
 await wait(400);
 
+// ── lot identification records ───────────────────────────────────────────────
+console.log('\n[lot records]');
+await seed({
+  'btc-tx-v2': [
+    tx({ id:'r1', date:'2024-01-01', datetimeUtc:'2024-01-01T12:00:00.000Z', sequence:1, wallet:'Bitkey', amount:'0.5', price:'100000', totalUsd:'50000' }),
+    tx({ id:'r2', date:'2024-02-01', datetimeUtc:'2024-02-01T12:00:00.000Z', sequence:1, wallet:'Bitkey', amount:'0.5', price:'60000', totalUsd:'30000' }),
+    tx({ id:'r3', date:'2024-03-01', datetimeUtc:'2024-03-01T12:00:00.000Z', sequence:1, type:'Transfer', wallet:'Bitkey', wallet2:'Kraken', amount:'0.2', price:'', totalUsd:'', fee:'0.00000890' }),
+  ],
+  'btc-wallets': [{ id:'w9', name:'Bitkey', type:'Wallet', address:'' }, ...WALLETS],
+  'btc-last-modified': '2024-01-01T00:00:00.000Z',
+});
+await reload();
+await clickByText('Harvest');
+await wait(600);
+check('Harvest offers to record lots for a past transfer', await evaluate(`return !!document.getElementById('harvest-backfill-records') && /1 sell and transfer has no lot record/.test(document.body.innerText);`));
+await evaluate(`document.getElementById('harvest-backfill-records').click(); return 1;`);
+await wait(300);
+check('recording past lots asks first', (await clickByText('Record')) === 'clicked');
+await wait(400);
+const backfilled = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).find(t => t.id === 'r3').lotRecords;`);
+check('the past transfer gets one backfill record: HIFO moved the $100k lot, fee from the same lot',
+  Array.isArray(backfilled) && backfilled.length === 1 && backfilled[0].source === 'backfill' && backfilled[0].method === 'HIFO'
+  && JSON.stringify(backfilled[0].lots.map(l => [l.k, l.o, l.s])) === JSON.stringify([['move','r1',20000000],['fee','r1',890]]), JSON.stringify(backfilled));
+check('buys get no record', await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).filter(t => t.lotRecords).length === 1;`));
+check('the prompt disappears once every row has a record', await evaluate(`return !document.getElementById('harvest-backfill-records');`));
+// a new sale is recorded as it is saved
+await clickByText('Transactions');
+await wait(400);
+await openAdd();
+await wait(500);
+await setField('tx-type', 'Sell');
+await wait(150);
+await setField('tx-wallet', 'Bitkey');
+await setField('tx-amount', '0.1');
+await setField('tx-price', '70000');
+await wait(200);
+await submit();
+await wait(500);
+const saleRec = await evaluate(`const t = JSON.parse(localStorage.getItem('btc-tx-v2')).find(t => t.type === 'Sell'); return t && t.lotRecords;`);
+check('a new sale is saved with its record: the highest-cost lot left after the transfer',
+  Array.isArray(saleRec) && saleRec.length === 1 && saleRec[0].source === 'save' && saleRec[0].priceUsd === 70000
+  && JSON.stringify(saleRec[0].lots.map(l => [l.k, l.o, l.s])) === JSON.stringify([['sell','r1',10000000]]), JSON.stringify(saleRec));
+// editing it without changing the picks adds nothing; the modal shows the record made at the time
+const saleId = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).find(t => t.type === 'Sell').id;`);
+await evaluate(`document.querySelector('.tx-table-wrap button[aria-label^="Edit Sell"]').click(); return 1;`);
+await wait(500);
+check('the edit form shows the lot record, made at the time', await evaluate(`const el = document.getElementById('tx-lot-record'); return !!el && /at the time/.test(el.innerText) && /Sold/.test(el.innerText);`));
+await setField('tx-notes', 'harvest');
+await submit();
+await wait(500);
+check('an edit that keeps the same picks appends no record', await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).find(t => t.id === '${saleId}').lotRecords.length === 1;`));
+// changing the amount changes the picks: a second record is appended, the first kept
+await evaluate(`document.querySelector('.tx-table-wrap button[aria-label^="Edit Sell"]').click(); return 1;`);
+await wait(500);
+await setField('tx-amount', '0.4');
+await wait(150);
+await submit();
+await wait(500);
+const edited = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).find(t => t.id === '${saleId}').lotRecords;`);
+check('an edit that changes the picks appends an "edit" record and keeps the first',
+  edited.length === 2 && edited[0].source === 'save' && edited[1].source === 'edit' && edited[1].lots.length === 2, JSON.stringify(edited.map(r => [r.source, r.lots.length])));
+// a duplicate starts without the original's records
+await evaluate(`document.querySelector('.tx-table-wrap button[aria-label^="Duplicate Sell"]').click(); return 1;`);
+await wait(500);
+await setField('tx-amount', '0.01');
+await wait(150);
+await submit();
+await wait(500);
+const dupRecs = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).filter(t => t.type === 'Sell').map(t => (t.lotRecords||[]).map(r => r.source));`);
+check('a duplicated sale gets its own single record, not a copy of the original history', JSON.stringify(dupRecs.map(x => x.length).sort()) === '[1,2]', JSON.stringify(dupRecs));
+// self-audit: the Harvest card reports all records matching, then drift after an earlier buy is edited
+await clickByText('Harvest');
+await wait(500);
+check('the records card counts the records and finds no drift', await evaluate(`const el = document.getElementById('harvest-lot-records'); return !!el && /3 records/.test(el.innerText) && /All match/.test(el.innerText) && !document.getElementById('harvest-records-drift');`));
+check('records can be exported per year', await evaluate(`return [...document.querySelectorAll('#harvest-lot-records button')].some(b => /All years/.test(b.innerText));`));
+await clickByText('Transactions');
+await wait(400);
+// the February buy (listed first: newest first) becomes the costliest lot
+await evaluate(`document.querySelector('.tx-table-wrap button[aria-label^="Edit Buy"]').click(); return 1;`);
+await wait(500);
+await setField('tx-price', '200000');
+await wait(150);
+await submit();
+await wait(500);
+await clickByText('Harvest');
+await wait(500);
+check('editing an earlier buy shows the later records as no longer matching', await evaluate(`return /no longer match/.test(document.getElementById('harvest-records-drift')?.innerText || '');`));
+const before = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).map(t => (t.lotRecords||[]).length).join(',');`);
+await evaluate(`[...document.querySelectorAll('#harvest-lot-records button')].find(b => /^\\s*Re-record\\s*$/.test(b.textContent)).click(); return 1;`);
+await wait(300);
+check('re-recording asks first', await evaluate(`const b = [...document.querySelectorAll('[role="dialog"] button')].find(x => /^\\s*Re-record\\s*$/.test(x.textContent)); if(!b) return false; b.click(); return true;`));
+await wait(400);
+const rerec = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).filter(t => (t.lotRecords||[]).some(r => r.source === 'rerecord')).map(t => t.lotRecords.map(r => r.source));`);
+check('re-recording appends one "rerecord" record and keeps the earlier ones', rerec.length === 1 && rerec[0][rerec[0].length - 1] === 'rerecord' && rerec[0].length >= 2, JSON.stringify([before, rerec]));
+await evaluate(`document.getElementById('harvest-wallet').value; return 1;`);
+await setField('harvest-wallet', 'Bitkey');
+await wait(400);
+check('the wallet view lists its recorded identifications', await evaluate(`const el = document.getElementById('harvest-wallet-records'); return !!el && el.querySelectorAll('tbody tr').length >= 1;`));
+
 // ── CoinLedger export is unchanged ───────────────────────────────────────────
 // Golden regression test for the tax export (Market Analytics plan, Phase 0). A fixed fixture
 // is exported through the real UI and compared to committed goldens as exact text, CRLF and
