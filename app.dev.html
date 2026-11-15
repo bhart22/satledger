@@ -1720,39 +1720,64 @@ const LOT_RECORD_SOURCES = ['save','edit','backfill'];
 const LOT_RECORD_KINDS = ['sell','move','out','fee'];
 // Does this transaction take lots out of a wallet (and so deserve a record)?
 const needsLotRecord = tx => !!tx && !!tx.wallet && numOr(tx.amount) > 0 && (tx.type === 'Sell' || tx.type === 'Transfer');
-// The lots `txId` used, from a full replay of `transactions`. Null when the transaction isn't
-// one that takes lots, isn't in the list, or has no usable time.
-const lotRecordFor = (transactions, txId, { prices = {}, methodFor = () => DEFAULT_LOT_METHOD, recordedAtMs = Date.now(), source = 'save', priceUsd = null } = {}) => {
-  const tx = (transactions || []).find(t => t && t.id === txId);
-  if(!needsLotRecord(tx)) return null;
-  const at = txInstant(tx);
-  if(!Number.isFinite(at)) return null;
+// Records for several transactions from ONE replay of `transactions`: Map txId → record. Rows
+// that don't take lots, aren't in the list or have no usable time are left out. `priceFor(tx)`
+// supplies a BTC price for a Transfer (a Sell uses its own price).
+const lotRecordsFor = (transactions, txIds, { prices = {}, methodFor = () => DEFAULT_LOT_METHOD, recordedAtMs = Date.now(), source = 'save', priceFor = () => null } = {}) => {
+  const want = new Map();
+  for(const tx of transactions || []) {
+    if(tx && txIds.includes(tx.id) && needsLotRecord(tx) && Number.isFinite(txInstant(tx))) want.set(tx.id, tx);
+  }
+  const out = new Map();
+  if(!want.size) return out;
   const { disposals, warnings } = buildLots(transactions, { prices, methodFor });
-  // Sats the wallet didn't hold tracked lots for (an earlier transaction is probably missing)
-  const shortSats = warnings.filter(w => w.txId === txId).reduce((n, w) => n + w.shortfallSats, 0);
-  const merged = new Map();
+  const merged = new Map([...want.keys()].map(id => [id, new Map()]));
   for(const d of disposals) {
-    if(d.txId !== txId || !LOT_RECORD_KINDS.includes(d.kind)) continue;
+    const m = merged.get(d.txId);
+    if(!m || !LOT_RECORD_KINDS.includes(d.kind)) continue;
     const key = `${d.kind}|${d.originTxId ?? ''}|${d.acquiredAt}`;
-    const m = merged.get(key);
-    if(m) { m.s += d.sats; m.b += d.basisUsd; continue; }
+    const e = m.get(key);
+    if(e) { e.s += d.sats; e.b += d.basisUsd; continue; }
     const entry = { k: d.kind, o: d.originTxId ?? null, a: d.acquiredAt, s: d.sats, b: d.basisUsd, lt: !!d.longTerm };
     if(d.estimated) entry.e = 1;
     if(d.noBasis) entry.nb = 1;
-    merged.set(key, entry);
+    m.set(key, entry);
   }
-  // What left first (sold / moved / sent), then the fee; within a kind, the order lots were taken
-  const lots = [...merged.values()]
-    .map((l, i) => ({ l, i }))
-    .sort((x, y) => LOT_RECORD_KINDS.indexOf(x.l.k) - LOT_RECORD_KINDS.indexOf(y.l.k) || x.i - y.i)
-    .map(({ l }) => ({ ...l, b: Math.round(l.b * 1e6) / 1e6 }));
-  const ownPrice = tx.type === 'Sell' ? numOr(tx.price, 0) : 0;
-  const p = ownPrice > 0 ? ownPrice : numOr(priceUsd, 0);
-  return {
-    v: 1, recordedAt: new Date(recordedAtMs).toISOString(), source: LOT_RECORD_SOURCES.includes(source) ? source : 'save',
-    txAt: new Date(at).toISOString(), wallet: tx.wallet, method: methodFor(tx.wallet),
-    priceUsd: p > 0 ? Math.round(p * 100) / 100 : null, lots, ...(shortSats > 0 ? { shortSats } : {}),
-  };
+  for(const [id, tx] of want) {
+    // Sats the wallet didn't hold tracked lots for (an earlier transaction is probably missing)
+    const shortSats = warnings.filter(w => w.txId === id).reduce((n, w) => n + w.shortfallSats, 0);
+    // What left first (sold / moved / sent), then the fee; within a kind, the order lots were taken
+    const lots = [...merged.get(id).values()]
+      .map((l, i) => ({ l, i }))
+      .sort((x, y) => LOT_RECORD_KINDS.indexOf(x.l.k) - LOT_RECORD_KINDS.indexOf(y.l.k) || x.i - y.i)
+      .map(({ l }) => ({ ...l, b: Math.round(l.b * 1e6) / 1e6 }));
+    const ownPrice = tx.type === 'Sell' ? numOr(tx.price, 0) : 0;
+    const p = ownPrice > 0 ? ownPrice : numOr(priceFor(tx), 0);
+    out.set(id, {
+      v: 1, recordedAt: new Date(recordedAtMs).toISOString(), source: LOT_RECORD_SOURCES.includes(source) ? source : 'save',
+      txAt: new Date(txInstant(tx)).toISOString(), wallet: tx.wallet, method: methodFor(tx.wallet),
+      priceUsd: p > 0 ? Math.round(p * 100) / 100 : null, lots, ...(shortSats > 0 ? { shortSats } : {}),
+    });
+  }
+  return out;
+};
+// The record for one transaction, or null
+const lotRecordFor = (transactions, txId, { priceUsd = null, ...opts } = {}) =>
+  lotRecordsFor(transactions, [txId], { ...opts, priceFor: () => priceUsd }).get(txId) || null;
+// A record counts as made at the time when it was made within 36 hours of the transaction
+// (room for logging the same evening in any timezone); anything later is shown as "recorded
+// later" with its date, whatever its source.
+const LOT_RECORD_GRACE_MS = 36 * 3600 * 1000;
+const isLotRecordTimely = rec => !!rec && Date.parse(rec.recordedAt) - Date.parse(rec.txAt) <= LOT_RECORD_GRACE_MS;
+// Append a fresh record to a row's history when it says something new: always when there is
+// none yet, otherwise only when the picks differ from the latest. Earlier records are never
+// touched. Returns the row (the same object when nothing changed).
+const withLotRecord = (tx, fresh) => {
+  if(!tx || !fresh) return tx;
+  const list = Array.isArray(tx.lotRecords) ? tx.lotRecords : [];
+  const latest = latestLotRecord(tx);
+  if(latest && compareLotRecord(latest, fresh).status === 'match') return tx;
+  return { ...tx, lotRecords: [...list, fresh] };
 };
 // Compare a saved record with a fresh one. 'match' when the same lots in the same amounts were
 // taken (basis compared to the cent, since it is derived), else 'differs' with what was added
@@ -9441,6 +9466,14 @@ function App() {
     else if(!v && editId === null && form.usdValueAtReceipt) setForm(f => ({ ...f, usdValueAtReceipt: '', usdValueSource: '' }));
   }, [showModal, form.type, form.date, form.time, form.amount, form.usdValueSource, historicalPrices, btcPrice, editId]);
 
+  // BTC price to note on a transfer's lot record: that UTC day's close, or the live price today
+  const lotRecordPriceFor = tx => {
+    const t = txInstant(tx);
+    if(!Number.isFinite(t)) return null;
+    const day = dayKeyUTC(t);
+    return dailyClose(historicalPrices, day) || (day === dayKeyUTC(Date.now()) ? numOr(btcPrice, 0) : 0) || null;
+  };
+
   // ─── CRUD ─────────────────────────────────────────────────────────────────
   const handleSubmit = () => {
     const formDate = normalizeDate(form.date);
@@ -9522,6 +9555,14 @@ function App() {
     // copy would silently revert that update.
     const commitTransaction = () => {
       const txs = transactionsRef.current, wals = walletsRef.current;
+      // Lot identification record: which lots this Sell or outgoing Transfer takes, saved with
+      // the row as it is saved. On an edit a new record is appended only if the picks changed.
+      const recordLots = (list, i, source) => {
+        const fresh = lotRecordFor(list, list[i].id, { prices: historicalPrices, methodFor: w => lotMethodFor(wals, w), source, priceUsd: lotRecordPriceFor(list[i]) });
+        const next = withLotRecord(list[i], fresh);
+        if(next !== list[i]) list[i] = next;
+        return list;
+      };
       if(editId!==null) {
         // Look up by id, not index: a Drive pull resolving while the modal was open used to
         // land this edit on whichever row happened to occupy that index.
@@ -9531,10 +9572,16 @@ function App() {
           setShowModal(false); setEditId(null); setForm(emptyForm());
           return;
         }
-        const u=[...txs]; u[i]={...finalForm, id: editId}; setTransactions(u); save(u, wals);
+        // Records come from the live row, never the form: they are history, not editable fields
+        const { lotRecords: _formRecords, ...edited } = finalForm;
+        const u=[...txs]; u[i]={...edited, id: editId, ...(Array.isArray(txs[i].lotRecords) ? { lotRecords: txs[i].lotRecords } : {})};
+        recordLots(u, i, latestLotRecord(txs[i]) ? 'edit' : 'save');
+        setTransactions(u); save(u, wals);
         showToast('Transaction updated');
       } else {
-        const added=[...txs, {...finalForm, id: newTxId()}]; setTransactions(added); save(added, wals);
+        const { lotRecords: _formRecords, ...fresh } = finalForm;
+        const added = recordLots([...txs, {...fresh, id: newTxId()}], txs.length, 'save');
+        setTransactions(added); save(added, wals);
         showToast('Transaction added');
       }
       setShowModal(false); setEditId(null); setForm(emptyForm());
@@ -9616,7 +9663,7 @@ function App() {
   // wallet and amount. Dated today; the txhash is cleared because it identifies one on-chain
   // transaction and can't repeat.
   const handleDuplicate = tx => {
-    const { id, txhash, datetimeUtc: _dt, sequence: _sq, usdValueAtReceipt: _uv, usdValueSource: _us, ...rest } = tx;
+    const { id, txhash, datetimeUtc: _dt, sequence: _sq, usdValueAtReceipt: _uv, usdValueSource: _us, lotRecords: _lr, ...rest } = tx;
     const amtN = numOr(tx.amount, null), priceN = numOr(tx.price, null);
     const totalUsd = tx.totalUsd || ((amtN !== null && priceN !== null) ? (amtN*priceN).toFixed(2) : '');
     setForm({...emptyForm(), ...rest, totalUsd, txhash:'', date: todayLocal(), time: nowTimeLocal(), sequence: '', usdValueAtReceipt:'', usdValueSource:'', rewardCategory: REWARD_CATEGORIES.includes(tx.rewardCategory) ? tx.rewardCategory : 'cash_back'});
@@ -9787,6 +9834,35 @@ function App() {
         if(live.txs === transactionsRef.current) { showToast('Nothing to fill'); return; }
         setTransactions(live.txs); save(live.txs, walletsRef.current);
         showToast(`Filled ${live.summary.count} reward USD value${live.summary.count===1?'':'s'}`);
+      },
+    });
+  };
+
+  // Lot records for sells and transfers saved before records existed (or imported). Dry run
+  // first; each is dated now and shows as "recorded later". Rows with a record are never touched.
+  const lotRecordBackfill = list => {
+    const ids = list.filter(tx => needsLotRecord(tx) && !latestLotRecord(tx)).map(tx => tx.id);
+    if(!ids.length) return { txs: list, count: 0 };
+    const recs = lotRecordsFor(list, ids, { prices: historicalPrices, methodFor: w => lotMethodFor(walletsRef.current, w), source: 'backfill', priceFor: lotRecordPriceFor });
+    if(!recs.size) return { txs: list, count: 0 };
+    return { txs: list.map(tx => recs.has(tx.id) ? withLotRecord(tx, recs.get(tx.id)) : tx), count: recs.size };
+  };
+  const handleBackfillLotRecords = () => {
+    const { count } = lotRecordBackfill(transactionsRef.current);
+    if(!count) { showToast('Every sell and transfer already has a lot record'); return; }
+    setConfirmDialog({
+      title: 'Record lots for past sells and transfers?',
+      message: `${count} sell${count===1?'':'s'} and transfer${count===1?'':'s'} without a lot record would get one, worked out from your current transactions and each wallet's current method. They are dated today and marked "recorded later", never as made at the time. Existing records are never changed.`,
+      confirmLabel: 'Record',
+      danger: false,
+      confirmIcon: false,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        // Recompute on the live list: a sync may have landed since the summary was shown
+        const live = lotRecordBackfill(transactionsRef.current);
+        if(!live.count) { showToast('Nothing to record'); return; }
+        setTransactions(live.txs); save(live.txs, walletsRef.current);
+        showToast(`Recorded lots for ${live.count} transaction${live.count===1?'':'s'}`);
       },
     });
   };
@@ -10863,6 +10939,7 @@ function App() {
           const methodSinceMs = name => { const w = wallets.find(x => x.name === name); return w ? lotMethodSince(w) : null; };
           const methodSinceText = name => { const s = methodSinceMs(name); return s ? `since ${fmtDate(localDateKey(new Date(s)))}` : 'no dated record'; };
           const unrecorded = wallets.filter(w => !lotMethodSince(w));
+          const unrecordedTx = transactions.filter(tx => needsLotRecord(tx) && !latestLotRecord(tx)).length;
           const confirmMethods = () => setConfirmDialog({
             title: 'Record lot methods as a standing order?',
             message: `This adds a dated entry to the method history of ${unrecorded.length} wallet${unrecorded.length===1?'':'s'} without one (${unrecorded.map(w => `${w.name}: ${lotMethodFor(wallets, w.name)}`).join(', ')}), dated now. It records which lots each wallet sells or sends first from today on. It does not change any method, and it doesn't date anything before today.`,
@@ -10923,6 +11000,12 @@ function App() {
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.75rem',flexWrap:'wrap',marginTop:'.75rem',padding:'.625rem .75rem',borderRadius:8,background:'var(--bg-tertiary)',fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.5}}>
                     <span>{unrecorded.length} wallet{unrecorded.length===1?' has':'s have'} no dated record of {unrecorded.length===1?'its':'their'} lot method. A dated record is a standing order for which lots leave first.</span>
                     <button type="button" id="harvest-confirm-methods" className="btn btn-secondary btn-sm" onClick={confirmMethods}>Record lot methods</button>
+                  </div>
+                )}
+                {unrecordedTx > 0 && (
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.75rem',flexWrap:'wrap',marginTop:'.75rem',padding:'.625rem .75rem',borderRadius:8,background:'var(--bg-tertiary)',fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.5}}>
+                    <span>{unrecordedTx} sell{unrecordedTx===1?'':'s'} and transfer{unrecordedTx===1?'':'s'} {unrecordedTx===1?'has':'have'} no lot record. New ones are recorded when you save them; past ones can be recorded now, marked as recorded later.</span>
+                    <button type="button" id="harvest-backfill-records" className="btn btn-secondary btn-sm" onClick={handleBackfillLotRecords}>Record past lots</button>
                   </div>
                 )}
               </div>
@@ -11751,6 +11834,49 @@ function App() {
                     </label>
                   </div>
                 </div>
+                {editId!==null && (() => {
+                  const row = transactions.find(t => t.id === editId);
+                  if(!row || !(needsLotRecord(row) || latestLotRecord(row))) return null;
+                  const recs = Array.isArray(row.lotRecords) ? row.lotRecords.filter(r => r && Array.isArray(r.lots)) : [];
+                  const rec = recs[recs.length - 1];
+                  const fmtAt = iso => fmtTxDate({ date: iso.slice(0,10), datetimeUtc: iso });
+                  const KIND = { sell:'Sold', move:'Moved', out:'Sent out', fee:'Network fee' };
+                  const SOURCE = { save:'when saved', edit:'after an edit', backfill:'by "Record past lots"' };
+                  return (
+                    <div id="tx-lot-record" style={{marginTop:'1rem',paddingTop:'.875rem',borderTop:'1px solid var(--border-color)'}}>
+                      <div style={{fontSize:'.75rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text-secondary)',marginBottom:'.375rem'}}>Lot identification record</div>
+                      {!rec ? (
+                        <div style={{fontSize:'.75rem',color:'var(--text-tertiary)',lineHeight:1.5}}>No record yet. One is saved when you save this transaction.</div>
+                      ) : (<>
+                        <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6}}>
+                          {rec.wallet} · {rec.method} · recorded {fmtAt(rec.recordedAt)} {SOURCE[rec.source] || ''}
+                          {' '}{isLotRecordTimely(rec)
+                            ? <span style={{color:'var(--green)'}}>· at the time</span>
+                            : <span style={{color:'#d97706'}}>· recorded later</span>}
+                          {rec.priceUsd ? ` · BTC ${fmtUSD(rec.priceUsd)}` : ''}
+                          {recs.length > 1 && ` · ${recs.length - 1} earlier record${recs.length===2?'':'s'} kept`}
+                        </div>
+                        {rec.shortSats > 0 && <div style={{fontSize:'.75rem',color:'var(--red)',marginTop:'.25rem'}}>{(rec.shortSats/1e8).toFixed(8)} BTC had no tracked lot in {rec.wallet}; an earlier transaction may be missing.</div>}
+                        <div className="table-wrap" style={{marginTop:'.5rem'}}>
+                          <table style={{fontSize:'.75rem'}}>
+                            <thead><tr><th>Lot acquired</th><th></th><th>BTC</th><th>Basis</th><th>Term</th></tr></thead>
+                            <tbody>
+                              {rec.lots.map((l, i) => (
+                                <tr key={i}>
+                                  <td style={{whiteSpace:'nowrap'}}>{fmtAt(new Date(l.a).toISOString())}</td>
+                                  <td>{KIND[l.k] || l.k}</td>
+                                  <td className="mono">{(l.s/1e8).toFixed(8)}</td>
+                                  <td className="mono">{l.nb ? 'no basis' : fmtUSD(l.b)}{l.e ? ' est.' : ''}</td>
+                                  <td>{l.lt ? 'LT' : 'ST'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>)}
+                    </div>
+                  );
+                })()}
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={requestCloseTxModal}>Cancel</button>

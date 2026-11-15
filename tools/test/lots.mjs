@@ -4,7 +4,7 @@ import { loadAppHelpers } from '../lib/app-helpers.mjs';
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
   'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv',
   'lotMethodHistoryOf','appendLotMethodHistory','lotMethodAt','lotMethodSince',
-  'needsLotRecord','lotRecordFor','compareLotRecord','latestLotRecord']);
+  'needsLotRecord','lotRecordFor','lotRecordsFor','compareLotRecord','latestLotRecord','withLotRecord','isLotRecordTimely']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -330,6 +330,26 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   // latest record
   eq(H.latestLotRecord({}), null, 'no records');
   eq(H.latestLotRecord({ lotRecords: [rec, 'junk', again] }), again, 'latest valid record');
+
+  // batch: one replay, same records as one at a time
+  const batch = H.lotRecordsFor([b1, b2, t, s, out], [t.id, s.id, b1.id, out.id], { methodFor, recordedAtMs: Date.parse('2026-11-12T15:01:00Z'), priceFor: tx => tx.id === t.id ? 68808.694 : null });
+  eq([...batch.keys()].sort(), [t.id, s.id, out.id].sort(), 'batch: records only for rows that take lots');
+  eq(batch.get(t.id), H.lotRecordFor([b1, b2, t, s, out], t.id, { methodFor, recordedAtMs: Date.parse('2026-11-12T15:01:00Z'), priceUsd: 68808.694 }), 'batch record equals the single one');
+
+  // appending: new when none, never when unchanged, appended when the picks changed
+  const row = { ...t };
+  const r1 = H.withLotRecord(row, rec);
+  eq(r1.lotRecords.length, 1, 'first record appended');
+  eq(H.withLotRecord(r1, again), r1, 'an unchanged recompute appends nothing (same row back)');
+  const changed = H.lotRecordFor([b1, pricier, t, s], t.id, { methodFor, source: 'edit' });
+  const r2 = H.withLotRecord(r1, changed);
+  eq([r2.lotRecords.length, r2.lotRecords[0], r2.lotRecords[1].source], [2, rec, 'edit'], 'changed picks append; the earlier record is kept as is');
+  eq(H.withLotRecord(r1, null), r1, 'no fresh record: nothing changes');
+
+  // timeliness
+  eq(H.isLotRecordTimely(rec), true, 'recorded a minute after: at the time');
+  eq(H.isLotRecordTimely({ ...rec, recordedAt: '2026-11-14T18:00:00.000Z' }), false, 'recorded two days later: later');
+  eq(H.isLotRecordTimely(null), false, 'no record is not timely');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

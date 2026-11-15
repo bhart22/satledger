@@ -1,6 +1,6 @@
 # Lot identification records
 
-Status: phases 1–2 of 4 built. Plan: lot-method history → engine records → capture on save,
+Status: phases 1–3 of 4 built. Plan: lot-method history → engine records → capture on save,
 view and backfill → drift check and export.
 
 ## Why
@@ -44,6 +44,23 @@ This feature lifts the Market plan's "never modify `buildLots`" rule, for these 
   transfers are never acquisitions or disposals.
 
 `buildLots`' `lots` and `balancesSats` output is unchanged.
+
+## When records are made
+
+- **On save** (`commitTransaction`): a new Sell or outgoing Transfer gets its record from a
+  replay of the list it is saved into (`source: 'save'`). On an edit, a fresh record is appended
+  (`source: 'edit'`, or `'save'` if the row had none) only when its picks differ from the latest;
+  earlier records are kept as they are. Records are read from the live row, never from the
+  form, so an edit can't rewrite them. Duplicating a row does not copy them.
+- **Backfill** (Harvest → "Record past lots"): rows with no record get one dated now
+  (`source: 'backfill'`), built in one replay by `lotRecordsFor`. Rows with a record are never
+  touched. Imported rows and rows completed in the Fix Transfers wizard arrive without records
+  and are picked up here.
+- **Timeliness** is judged from the dates, not the source: `isLotRecordTimely` says "at the
+  time" when `recordedAt` is within 36 hours of the transaction, otherwise the UI says
+  "recorded later". A row logged days after the trade is honest about it.
+- Editing an *earlier* transaction can change what a later row would pick. That later row's
+  record is not rewritten; the change shows up as drift.
 
 ## Drift
 
