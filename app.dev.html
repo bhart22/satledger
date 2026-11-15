@@ -1217,7 +1217,7 @@ function useThrottledCallback(fn, delay) {
 // Two versions on purpose: APP_VERSION is what the UI shows, BACKUP_SCHEMA_VERSION is a
 // data contract read by importers. Collapsing them guarantees pain at the first real
 // migration. Keep APP_VERSION in sync with the footer in index.html.
-const APP_VERSION = '5.0';
+const APP_VERSION = '5.1';
 const BACKUP_SCHEMA_VERSION = 2;
 const HISTORICAL_PRICE_CACHE_KEY = 'btc-price-history-v1';
 // Earliest daily candle Coinbase Exchange has for BTC-USD (checked against the API).
@@ -1716,7 +1716,7 @@ const buildLots = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_ME
 // survive replays; slices of one lot are merged so a record compares cleanly with a recompute.
 //   { v, recordedAt, source: 'save'|'edit'|'backfill', txAt, wallet, method, priceUsd,
 //     lots: [{ k: 'sell'|'move'|'out'|'fee', o: originTxId, a: acquiredAtMs, s: sats, b: basisUsd, lt, e?, nb? }] }
-const LOT_RECORD_SOURCES = ['save','edit','backfill'];
+const LOT_RECORD_SOURCES = ['save','edit','backfill','rerecord'];
 const LOT_RECORD_KINDS = ['sell','move','out','fee'];
 // Does this transaction take lots out of a wallet (and so deserve a record)?
 const needsLotRecord = tx => !!tx && !!tx.wallet && numOr(tx.amount) > 0 && (tx.type === 'Sell' || tx.type === 'Transfer');
@@ -1800,6 +1800,63 @@ const compareLotRecord = (saved, fresh) => {
 const latestLotRecord = tx => {
   const list = tx && Array.isArray(tx.lotRecords) ? tx.lotRecords.filter(r => r && Array.isArray(r.lots)) : [];
   return list.length ? list[list.length - 1] : null;
+};
+// Self-audit: every row's latest record against a fresh replay of the current data, in one
+// replay. Rows with no record are counted, not audited. Pure; never writes anything.
+//   { rows: [{ txId, tx, saved, fresh, status: 'match'|'differs', added, removed }], unrecorded }
+const lotRecordAudit = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_METHOD } = {}) => {
+  const list = transactions || [];
+  const withRec = list.filter(tx => latestLotRecord(tx));
+  const fresh = lotRecordsFor(list, withRec.map(tx => tx.id), { prices, methodFor });
+  const rows = withRec.map(tx => {
+    const saved = latestLotRecord(tx), f = fresh.get(tx.id) || null;
+    const c = compareLotRecord(saved, f);
+    return { txId: tx.id, tx, saved, fresh: f, status: c.status, added: c.added, removed: c.removed };
+  }).sort((a, b) => compareTx(a.tx, b.tx));
+  return { rows, unrecorded: list.filter(tx => needsLotRecord(tx) && !latestLotRecord(tx)).length };
+};
+// Lot records as CSV for a tax year (by the transaction's UTC date) or all years: a header
+// line, the columns, then one row per lot of every record (earlier records included, numbered),
+// each with how it was made, whether it was made at the time, and whether the latest record
+// still matches the current data. Free-text cells are guarded against spreadsheet formulas.
+const LOT_RECORDS_CSV_COLUMNS = ['Transaction (UTC)','Type','Wallet','Record #','Latest','Recorded (UTC)','How Recorded','Timing','Method','BTC Price (USD)',
+  'Lot','Lot Acquired (UTC)','Lot Origin','BTC','Sats','Basis (USD)','Term','Estimated','No Basis','Shortfall Sats','Matches Current Data'];
+const LOT_RECORD_SOURCE_LABELS = { save:'when saved', edit:'after an edit', backfill:'by Record past lots', rerecord:'by Re-record' };
+const LOT_KIND_LABELS = { sell:'Sold', move:'Moved', out:'Sent out', fee:'Network fee' };
+const lotRecordsCsv = (transactions, audit, { year = null, generatedAtMs = Date.now() } = {}) => {
+  const cell = (v, guard) => {
+    let t = v == null ? '' : String(v);
+    if(guard && /^[=+\-@\t\r]/.test(t)) t = "'" + t;
+    return '"' + t.replace(/"/g, '""') + '"';
+  };
+  const byId = new Map((transactions || []).map(t => [t && t.id, t]));
+  const statusOf = new Map(((audit && audit.rows) || []).map(r => [r.txId, r.status]));
+  const origin = id => { const o = byId.get(id); return o ? `${o.type} ${fmtUtcStamp(txInstant(o)).slice(0, 10)}${o.wallet ? ' ' + o.wallet : ''}` : ''; };
+  const lines = [
+    [cell('Lot identification records: ' + (year ? year : 'all years')), cell('Generated (UTC): ' + fmtUtcStamp(generatedAtMs))].join(','),
+    LOT_RECORDS_CSV_COLUMNS.map(c => cell(c)).join(','),
+  ];
+  const rows = (transactions || []).filter(tx => latestLotRecord(tx)).sort(compareTx);
+  for(const tx of rows) {
+    const at = txInstant(tx);
+    if(year && fmtUtcStamp(at).slice(0, 4) !== String(year)) continue;
+    const recs = tx.lotRecords.filter(r => r && Array.isArray(r.lots));
+    recs.forEach((r, n) => {
+      const latest = n === recs.length - 1;
+      const status = latest ? (statusOf.get(tx.id) === 'match' ? 'yes' : statusOf.has(tx.id) ? 'no' : '') : '';
+      for(const l of r.lots) {
+        lines.push([
+          cell(fmtUtcStamp(at)), cell(tx.type), cell(r.wallet, true), cell(n + 1), cell(latest ? 'yes' : 'no'),
+          cell(fmtUtcStamp(Date.parse(r.recordedAt))), cell(LOT_RECORD_SOURCE_LABELS[r.source] || r.source), cell(isLotRecordTimely(r) ? 'at the time' : 'recorded later'),
+          cell(r.method), cell(r.priceUsd ? Number(r.priceUsd).toFixed(2) : ''),
+          cell(LOT_KIND_LABELS[l.k] || l.k), cell(fmtUtcStamp(l.a)), cell(origin(l.o), true),
+          cell((l.s / 1e8).toFixed(8)), cell(l.s), cell(l.nb ? '' : Number(l.b).toFixed(2)), cell(l.lt ? 'LT' : 'ST'),
+          cell(l.e ? 'yes' : 'no'), cell(l.nb ? 'yes' : 'no'), cell(r.shortSats || ''), cell(status),
+        ].join(','));
+      }
+    });
+  }
+  return lines.join('\r\n');
 };
 // ─── Harvest ─────────────────────────────────────────────────────────────────────────
 // The lots in one wallet whose basis per BTC is above a price, highest cost first: the coins
@@ -9409,6 +9466,11 @@ function App() {
     return { totalBought, totalSold, totalFeesBTC, costBasis, costPoolBtc: runningBTC, rewardsIncome, currentValue, unrealized };
   }, [transactions, btcPrice, trackedHoldings, historicalPrices]);
 
+  // ─── Lot record self-audit: saved records vs. a fresh replay (read-only) ─────
+  const lotAudit = useMemo(() => lotRecordAudit(transactions, { prices: historicalPrices, methodFor: w => lotMethodFor(wallets, w) }),
+    [transactions, wallets, historicalPrices]);
+  const lotRecordAuditByTx = useMemo(() => new Map(lotAudit.rows.map(r => [r.txId, r])), [lotAudit]);
+
   // ─── Filtered transactions ────────────────────────────────────────────────
   const filtered = useMemo(() => {
     // Insertion order, used as the same-day tie-break below.
@@ -9865,6 +9927,40 @@ function App() {
         showToast(`Recorded lots for ${live.count} transaction${live.count===1?'':'s'}`);
       },
     });
+  };
+
+  // Re-record rows whose saved record no longer matches the current data: a NEW record, dated
+  // now and marked re-recorded, is appended; the earlier ones stay exactly as they were.
+  const handleRerecordLots = (txIds) => {
+    const ids = txIds.filter(id => lotRecordAuditByTx.get(id)?.status === 'differs');
+    if(!ids.length) return;
+    setConfirmDialog({
+      title: ids.length === 1 ? 'Re-record this transaction’s lots?' : `Re-record ${ids.length} transactions’ lots?`,
+      message: 'A new record of the lots your current transactions pick is added, dated now and marked "re-recorded" and "recorded later". The earlier record is kept unchanged, so the history shows both.',
+      confirmLabel: 'Re-record',
+      danger: false,
+      confirmIcon: false,
+      onConfirm: () => {
+        setConfirmDialog(null);
+        const live = transactionsRef.current;
+        const recs = lotRecordsFor(live, ids, { prices: historicalPrices, methodFor: w => lotMethodFor(walletsRef.current, w), source: 'rerecord', priceFor: lotRecordPriceFor });
+        let count = 0;
+        const next = live.map(tx => {
+          if(!recs.has(tx.id)) return tx;
+          const u = withLotRecord(tx, recs.get(tx.id));
+          if(u !== tx) count++;
+          return u;
+        });
+        if(!count) { showToast('Nothing to re-record'); return; }
+        setTransactions(next); save(next, walletsRef.current);
+        showToast(`Re-recorded ${count} transaction${count===1?'':'s'}`);
+      },
+    });
+  };
+  const exportLotRecords = (year) => {
+    const csv = lotRecordsCsv(transactionsRef.current, lotAudit, { year, generatedAtMs: Date.now() });
+    downloadBlob(new Blob([csv], { type:'text/csv' }), `lot-records-${year || 'all'}-${todayLocal()}.csv`);
+    showToast(`Exported lot records${year ? ' for ' + year : ''}`);
   };
 
   const exportCSV = (yearFilter) => {
@@ -10961,6 +11057,37 @@ function App() {
               showToast(`Recorded the lot method for ${count} wallet${count===1?'':'s'}`);
             },
           });
+          // Lot identification records: self-audit and export
+          const auditRows = lotAudit.rows;
+          const differing = auditRows.filter(r => r.status === 'differs');
+          const timely = auditRows.filter(r => isLotRecordTimely(r.saved)).length;
+          const recordYears = [...new Set(auditRows.map(r => fmtUtcStamp(txInstant(r.tx)).slice(0, 4)))].sort().reverse();
+          const takenSats = rec => rec.lots.filter(l => l.k !== 'fee').reduce((n, l) => n + l.s, 0);
+          const recordsTable = rows => (
+            <div className="table-wrap">
+              <table>
+                <thead><tr><th>Transaction</th><th>Type</th><th>Wallet</th><th>Method</th><th>BTC</th><th>Recorded</th><th>Current data</th><th></th></tr></thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={r.txId}>
+                      <td style={{whiteSpace:'nowrap',fontSize:'.8125rem'}}>{fmtTxDate(r.tx)}</td>
+                      <td><span className={`badge badge-${r.tx.type.toLowerCase()}`}>{r.tx.type}</span></td>
+                      <td>{r.saved.wallet}</td>
+                      <td>{r.saved.method}</td>
+                      <td className="mono">{(takenSats(r.saved)/1e8).toFixed(8)}</td>
+                      <td style={{fontSize:'.75rem',whiteSpace:'nowrap'}}>{fmtTxDate({ date: r.saved.recordedAt.slice(0,10), datetimeUtc: r.saved.recordedAt })}
+                        <div style={{color:isLotRecordTimely(r.saved)?'var(--green)':'#d97706'}}>{isLotRecordTimely(r.saved) ? 'at the time' : 'recorded later'}</div></td>
+                      <td style={{fontSize:'.75rem',color:r.status==='match'?'var(--green)':'#d97706',fontWeight:600}}>{r.status === 'match' ? 'Matches' : 'Differs'}</td>
+                      <td style={{whiteSpace:'nowrap'}}>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={()=>handleViewTransaction(r.txId)}>View</button>
+                        {r.status === 'differs' && <button type="button" className="btn btn-secondary btn-sm" style={{marginLeft:'.25rem'}} onClick={()=>handleRerecordLots([r.txId])}>Re-record</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
           const lossColor = v => v > 0 ? 'var(--red)' : undefined;
           const stat = s => (
             <div className="stats-grid">
@@ -11065,6 +11192,33 @@ function App() {
                   </div>
                 </div>
               </div>
+              <div className="card" id="harvest-lot-records">
+                <div className="card-header"><div className="card-title">Lot identification records</div></div>
+                <div className="card-body">
+                  {!auditRows.length ? (
+                    <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>No records yet. Each sale and transfer out of a wallet is recorded when you save it.</div>
+                  ) : (<>
+                    <div style={{fontSize:'.8125rem',color:'var(--text-secondary)',lineHeight:1.6}}>
+                      {auditRows.length} record{auditRows.length===1?'':'s'}: {timely} made at the time, {auditRows.length - timely} recorded later.
+                      {' '}{differing.length
+                        ? <span id="harvest-records-drift" style={{color:'#d97706',fontWeight:600}}>{differing.length} no longer match{differing.length===1?'es':''} your current transactions.</span>
+                        : <span style={{color:'var(--green)'}}>All match your current transactions.</span>}
+                    </div>
+                    {differing.length > 0 && (<>
+                      <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,margin:'.5rem 0'}}>
+                        A record differs when a later change (an edited or added earlier transaction, or a changed lot method) means the lots picked today aren't the ones recorded. Check the change was intended, then re-record if so; the original record is kept.
+                      </div>
+                      {recordsTable(differing)}
+                      {differing.length > 1 && <button type="button" className="btn btn-secondary btn-sm" style={{marginTop:'.5rem'}} onClick={()=>handleRerecordLots(differing.map(r => r.txId))}>Re-record all {differing.length}</button>}
+                    </>)}
+                    <div style={{display:'flex',gap:'.5rem',flexWrap:'wrap',alignItems:'center',marginTop:'.875rem'}}>
+                      <span style={{fontSize:'.75rem',color:'var(--text-secondary)'}}>Export records (CSV):</span>
+                      <button type="button" className="btn btn-secondary btn-sm" onClick={()=>exportLotRecords(null)} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>{Icon.Download({width:12,height:12})} All years</button>
+                      {recordYears.map(y => <button key={y} type="button" className="btn btn-secondary btn-sm" onClick={()=>exportLotRecords(y)} style={{display:'inline-flex',alignItems:'center',gap:'.375rem'}}>{Icon.Download({width:12,height:12})} {y}</button>)}
+                    </div>
+                  </>)}
+                </div>
+              </div>
             </>) : (<>
               <div>
                 <button type="button" id="harvest-back" className="btn btn-secondary btn-sm" onClick={()=>setHarvestWalletPick('')}>← All wallets</button>
@@ -11108,6 +11262,18 @@ function App() {
                   )}
                 </div>
               </div>
+              {(() => {
+                const mine = auditRows.filter(r => r.saved.wallet === wallet);
+                return (
+                  <div className="card" id="harvest-wallet-records">
+                    <div className="card-header"><div className="card-title">Recorded identifications — {wallet}</div></div>
+                    <div className="card-body" style={{padding: mine.length ? 0 : undefined}}>
+                      {mine.length ? recordsTable(mine.slice().reverse())
+                        : <div style={{fontSize:'.8125rem',color:'var(--text-secondary)'}}>No sales or transfers out of {wallet} have a lot record yet.</div>}
+                    </div>
+                  </div>
+                );
+              })()}
             </>)}
           </>);
         })()}
@@ -11840,8 +12006,8 @@ function App() {
                   const recs = Array.isArray(row.lotRecords) ? row.lotRecords.filter(r => r && Array.isArray(r.lots)) : [];
                   const rec = recs[recs.length - 1];
                   const fmtAt = iso => fmtTxDate({ date: iso.slice(0,10), datetimeUtc: iso });
-                  const KIND = { sell:'Sold', move:'Moved', out:'Sent out', fee:'Network fee' };
-                  const SOURCE = { save:'when saved', edit:'after an edit', backfill:'by "Record past lots"' };
+                  const KIND = LOT_KIND_LABELS, SOURCE = LOT_RECORD_SOURCE_LABELS;
+                  const drift = rec ? lotRecordAuditByTx.get(row.id) : null;
                   return (
                     <div id="tx-lot-record" style={{marginTop:'1rem',paddingTop:'.875rem',borderTop:'1px solid var(--border-color)'}}>
                       <div style={{fontSize:'.75rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text-secondary)',marginBottom:'.375rem'}}>Lot identification record</div>
@@ -11856,6 +12022,7 @@ function App() {
                           {rec.priceUsd ? ` · BTC ${fmtUSD(rec.priceUsd)}` : ''}
                           {recs.length > 1 && ` · ${recs.length - 1} earlier record${recs.length===2?'':'s'} kept`}
                         </div>
+                        {drift && drift.status === 'differs' && <div id="tx-lot-record-drift" style={{fontSize:'.75rem',color:'#d97706',marginTop:'.25rem'}}>Your current transactions would now pick different lots for this {row.type.toLowerCase()}. The record below is kept as made; see Harvest → this wallet to compare or re-record.</div>}
                         {rec.shortSats > 0 && <div style={{fontSize:'.75rem',color:'var(--red)',marginTop:'.25rem'}}>{(rec.shortSats/1e8).toFixed(8)} BTC had no tracked lot in {rec.wallet}; an earlier transaction may be missing.</div>}
                         <div className="table-wrap" style={{marginTop:'.5rem'}}>
                           <table style={{fontSize:'.75rem'}}>

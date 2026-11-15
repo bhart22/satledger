@@ -1,7 +1,7 @@
 # Lot identification records
 
-Status: phases 1–3 of 4 built. Plan: lot-method history → engine records → capture on save,
-view and backfill → drift check and export.
+Status: built (v5.1). Phases: lot-method history → engine records → capture on save, view and
+backfill → self-audit and export.
 
 ## Why
 
@@ -68,3 +68,24 @@ This feature lifts the Market plan's "never modify `buildLots`" rule, for these 
 (basis compared to the cent), otherwise `differs` with `added` and `removed`. Drift means later
 edits to the ledger changed what the engine would pick, and the saved record no longer agrees
 with the current data. Records are never rewritten to hide that.
+
+`lotRecordAudit` runs that comparison for every row's latest record in one replay. It is
+memoised in `App` (`lotAudit`) and is read-only: rendering never writes storage. The Harvest tab
+shows it:
+
+- **Overview → "Lot identification records"**: counts (made at the time / recorded later), the
+  rows that differ with **Re-record** (one or all), and CSV export for all years or one tax year.
+- **Wallet view → "Recorded identifications"**: that wallet's records, each with View and, when
+  it differs, Re-record.
+- The transaction edit form says so when its record differs.
+
+**Re-record** appends a new record (`source: 'rerecord'`, dated now, so "recorded later"); the
+earlier one stays. A wallet method change that still picks the same lots is not drift.
+
+## Export
+
+`lotRecordsCsv` writes one row per lot of every record, earlier records included and numbered,
+filtered by the transaction's UTC year. Each row includes how and when the record was made,
+whether that was at the time, the method and price, the lot's acquisition time, its origin
+transaction, sats, basis and term. The latest record also shows whether it still matches the
+current data. Wallet names and lot origins are guarded against spreadsheet formulas.

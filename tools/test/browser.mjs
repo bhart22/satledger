@@ -711,6 +711,34 @@ await submit();
 await wait(500);
 const dupRecs = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).filter(t => t.type === 'Sell').map(t => (t.lotRecords||[]).map(r => r.source));`);
 check('a duplicated sale gets its own single record, not a copy of the original history', JSON.stringify(dupRecs.map(x => x.length).sort()) === '[1,2]', JSON.stringify(dupRecs));
+// self-audit: the Harvest card reports all records matching, then drift after an earlier buy is edited
+await clickByText('Harvest');
+await wait(500);
+check('the records card counts the records and finds no drift', await evaluate(`const el = document.getElementById('harvest-lot-records'); return !!el && /3 records/.test(el.innerText) && /All match/.test(el.innerText) && !document.getElementById('harvest-records-drift');`));
+check('records can be exported per year', await evaluate(`return [...document.querySelectorAll('#harvest-lot-records button')].some(b => /All years/.test(b.innerText));`));
+await clickByText('Transactions');
+await wait(400);
+// the February buy (listed first: newest first) becomes the costliest lot
+await evaluate(`document.querySelector('.tx-table-wrap button[aria-label^="Edit Buy"]').click(); return 1;`);
+await wait(500);
+await setField('tx-price', '200000');
+await wait(150);
+await submit();
+await wait(500);
+await clickByText('Harvest');
+await wait(500);
+check('editing an earlier buy shows the later records as no longer matching', await evaluate(`return /no longer match/.test(document.getElementById('harvest-records-drift')?.innerText || '');`));
+const before = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).map(t => (t.lotRecords||[]).length).join(',');`);
+await evaluate(`[...document.querySelectorAll('#harvest-lot-records button')].find(b => /^\\s*Re-record\\s*$/.test(b.textContent)).click(); return 1;`);
+await wait(300);
+check('re-recording asks first', await evaluate(`const b = [...document.querySelectorAll('[role="dialog"] button')].find(x => /^\\s*Re-record\\s*$/.test(x.textContent)); if(!b) return false; b.click(); return true;`));
+await wait(400);
+const rerec = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2')).filter(t => (t.lotRecords||[]).some(r => r.source === 'rerecord')).map(t => t.lotRecords.map(r => r.source));`);
+check('re-recording appends one "rerecord" record and keeps the earlier ones', rerec.length === 1 && rerec[0][rerec[0].length - 1] === 'rerecord' && rerec[0].length >= 2, JSON.stringify([before, rerec]));
+await evaluate(`document.getElementById('harvest-wallet').value; return 1;`);
+await setField('harvest-wallet', 'Bitkey');
+await wait(400);
+check('the wallet view lists its recorded identifications', await evaluate(`const el = document.getElementById('harvest-wallet-records'); return !!el && el.querySelectorAll('tbody tr').length >= 1;`));
 
 // ── CoinLedger export is unchanged ───────────────────────────────────────────
 // Golden regression test for the tax export (Market Analytics plan, Phase 0). A fixed fixture

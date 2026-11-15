@@ -4,7 +4,7 @@ import { loadAppHelpers } from '../lib/app-helpers.mjs';
 const H = loadAppHelpers(['buildLots','isLongTerm','lotMethodFor','compareTx','migrateTxTimestamps',
   'txWalletDeltas','toSatsInt','backfillRewardUsd','harvestLots','harvestCsv','harvestSummaryAll','harvestSummaryCsv',
   'lotMethodHistoryOf','appendLotMethodHistory','lotMethodAt','lotMethodSince',
-  'needsLotRecord','lotRecordFor','lotRecordsFor','compareLotRecord','latestLotRecord','withLotRecord','isLotRecordTimely']);
+  'needsLotRecord','lotRecordFor','lotRecordsFor','compareLotRecord','latestLotRecord','withLotRecord','isLotRecordTimely','lotRecordAudit','lotRecordsCsv']);
 
 let pass = 0, fail = 0;
 const eq = (actual, expected, name) => {
@@ -350,6 +350,38 @@ const lotsIn = (r, w) => r.lots.filter(l => l.wallet === w).sort((a, b) => a.ord
   eq(H.isLotRecordTimely(rec), true, 'recorded a minute after: at the time');
   eq(H.isLotRecordTimely({ ...rec, recordedAt: '2026-11-14T18:00:00.000Z' }), false, 'recorded two days later: later');
   eq(H.isLotRecordTimely(null), false, 'no record is not timely');
+
+  // self-audit over the whole ledger
+  const tRec = { ...t, lotRecords: [rec] };
+  const sRec = { ...s, lotRecords: [H.lotRecordFor([b1, b2, t, s], s.id, { methodFor, recordedAtMs: Date.parse('2026-11-14T18:00:00Z') })] };
+  const outLate = xfer('2026-12-01T10:00:00.000Z', 'Bitkey', '', '0.1', '');
+  const okAudit = H.lotRecordAudit([b1, b2, tRec, sRec, outLate], { methodFor });
+  eq([okAudit.rows.map(r => [r.txId, r.status]), okAudit.unrecorded], [[[t.id, 'match'], [s.id, 'match']], 1], 'audit: both records match, the outflow has none');
+  const driftAudit = H.lotRecordAudit([b1, pricier, tRec, sRec], { methodFor });
+  eq(driftAudit.rows.map(r => r.status), ['differs', 'differs'], 'audit: an edited earlier buy makes later records differ');
+  eq(H.lotRecordAudit([b1, b2, tRec, sRec], { methodFor: () => 'FIFO' }).rows.map(r => r.status), ['match', 'match'],
+    'audit: a method change that picks the same lots is not drift');
+  eq(H.lotRecordAudit([b1, b2, { ...tRec, type: 'Buy' }], { methodFor }).rows[0].status, 'differs', 'audit: a row that no longer takes lots differs');
+  eq(H.lotRecordAudit([], {}), { rows: [], unrecorded: 0 }, 'audit of nothing');
+
+  // CSV export
+  const csv = H.lotRecordsCsv([b1, b2, tRec, sRec], okAudit, { year: '2026', generatedAtMs: Date.parse('2026-11-14T00:00:00Z') }).split('\r\n');
+  eq(csv[0], '"Lot identification records: 2026","Generated (UTC): 2026-11-14 00:00:00"', 'records CSV header line');
+  eq(csv[1].split('","').length, 21, 'records CSV has 21 columns');
+  eq(csv.length, 2 + 3, 'one row per lot: transfer move + fee, sale');
+  const cols = csv[2].slice(1, -1).split('","');
+  eq([cols[0], cols[1], cols[2], cols[3], cols[4], cols[6], cols[7], cols[8], cols[9], cols[10], cols[11], cols[12], cols[13], cols[16], cols[20]],
+    ['2026-11-12 15:00:00', 'Transfer', 'Bitkey', '1', 'yes', 'when saved', 'at the time', 'HIFO', '68808.69', 'Moved', '2025-01-01 10:00:00', 'Buy 2025-01-01 Bitkey', '0.30000000', 'LT', 'yes'],
+    'records CSV row: transfer, move of the $100k lot, made at the time, still matches');
+  ok(csv[4].includes('"recorded later"'), 'a record made two days later says so');
+  eq(H.lotRecordsCsv([b1, b2, tRec], okAudit, { year: '2025' }).split('\r\n').length, 2, 'another year: header only');
+  const two = { ...tRec, lotRecords: [rec, { ...rec, source: 'rerecord', recordedAt: '2026-11-20T00:00:00.000Z' }] };
+  const csv2 = H.lotRecordsCsv([b1, b2, two], H.lotRecordAudit([b1, b2, two], { methodFor }), {}).split('\r\n');
+  eq(csv2.slice(2).map(l => l.slice(1, -1).split('","')).map(c => [c[3], c[4], c[6], c[20]]),
+    [['1', 'no', 'when saved', ''], ['1', 'no', 'when saved', ''], ['2', 'yes', 'by Re-record', 'yes'], ['2', 'yes', 'by Re-record', 'yes']],
+    'earlier records are exported too, numbered; only the latest carries the match status');
+  const evil = H.lotRecordsCsv([b1, b2, { ...tRec, lotRecords: [{ ...rec, wallet: '=HYPERLINK(1)' }] }], okAudit, {}).split('\r\n')[2];
+  ok(evil.includes(`"'=HYPERLINK(1)"`), 'a formula-looking wallet name is neutralised in the records CSV');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

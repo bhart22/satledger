@@ -120,6 +120,9 @@ of the logic. Therefore:
 - **Two cost-basis models on purpose**: the Dashboard uses the average-cost pool; the Harvest tab
   uses per-wallet lots (`buildLots`, HIFO default, per-wallet `lotMethod`). They differ by design.
 - **`excludeStats`** transactions skip cost basis and P&L but still count toward holdings.
+- **Lot identification records** (`docs/lot-records.md`): `wallet.lotMethodHistory` and
+  `tx.lotRecords` are append-only history. Never rewrite or delete entries; a change appends.
+  The `'move'` disposal kind from `buildLots` is an internal transfer, never a disposal.
 - **Charts use all transactions and wallets**, not the active-wallet filter.
 - **Versions**: `APP_VERSION` (UI) must match the footer in `index.html`.
   `BACKUP_SCHEMA_VERSION` and `VAULT_SCHEMA_VERSION` are data contracts — bump only for a real
