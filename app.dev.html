@@ -1632,6 +1632,8 @@ const buildLots = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_ME
         proceedsUsd: proceedsTotal === null ? null : proceedsTotal * sl.sats / totalSats,
         acquiredAt: sl.lot.acquiredAt, longTerm: isLongTerm(sl.lot.acquiredAt, at),
         estimated: !!sl.lot.estimated, noBasis: !!sl.lot.noBasis, excluded: !!tx.excludeStats,
+        // Which lot the slice came from, stable across replays (lot ids are not)
+        originTxId: sl.lot.originTxId, platform: sl.lot.platform || '', lotType: sl.lot.type,
       });
     }
   };
@@ -1684,6 +1686,9 @@ const buildLots = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_ME
       }
       if(burned.length) record('fee', tx, w1, burned, null, burned.reduce((n, b) => n + b.sats, 0));
       if(w2) {
+        // 'move' says which lots an internal transfer carried. It is NOT a disposal: anything
+        // summing proceeds, basis or gains must skip it.
+        if(moved.length) record('move', tx, w1, moved, null, moved.reduce((n, m) => n + m.sats, 0));
         for(const m of moved) {
           const { id, order, wallet, sats, basisUsd, ...keep } = m.lot;
           addLot(w2, { ...keep, sats: m.sats, basisUsd: m.basisUsd });
@@ -1704,6 +1709,72 @@ const buildLots = (transactions, { prices = {}, methodFor = () => DEFAULT_LOT_ME
     for(const l of list) lots.push(l);
   }
   return { lots, balancesSats, disposals, warnings };
+};
+// ─── Lot identification records ──────────────────────────────────────────────────────
+// A record of which lots one Sell or outgoing Transfer took from its wallet, kept on the
+// transaction (tx.lotRecords, append-only). Lots are named by originTxId + acquiredAt, which
+// survive replays; slices of one lot are merged so a record compares cleanly with a recompute.
+//   { v, recordedAt, source: 'save'|'edit'|'backfill', txAt, wallet, method, priceUsd,
+//     lots: [{ k: 'sell'|'move'|'out'|'fee', o: originTxId, a: acquiredAtMs, s: sats, b: basisUsd, lt, e?, nb? }] }
+const LOT_RECORD_SOURCES = ['save','edit','backfill'];
+const LOT_RECORD_KINDS = ['sell','move','out','fee'];
+// Does this transaction take lots out of a wallet (and so deserve a record)?
+const needsLotRecord = tx => !!tx && !!tx.wallet && numOr(tx.amount) > 0 && (tx.type === 'Sell' || tx.type === 'Transfer');
+// The lots `txId` used, from a full replay of `transactions`. Null when the transaction isn't
+// one that takes lots, isn't in the list, or has no usable time.
+const lotRecordFor = (transactions, txId, { prices = {}, methodFor = () => DEFAULT_LOT_METHOD, recordedAtMs = Date.now(), source = 'save', priceUsd = null } = {}) => {
+  const tx = (transactions || []).find(t => t && t.id === txId);
+  if(!needsLotRecord(tx)) return null;
+  const at = txInstant(tx);
+  if(!Number.isFinite(at)) return null;
+  const { disposals, warnings } = buildLots(transactions, { prices, methodFor });
+  // Sats the wallet didn't hold tracked lots for (an earlier transaction is probably missing)
+  const shortSats = warnings.filter(w => w.txId === txId).reduce((n, w) => n + w.shortfallSats, 0);
+  const merged = new Map();
+  for(const d of disposals) {
+    if(d.txId !== txId || !LOT_RECORD_KINDS.includes(d.kind)) continue;
+    const key = `${d.kind}|${d.originTxId ?? ''}|${d.acquiredAt}`;
+    const m = merged.get(key);
+    if(m) { m.s += d.sats; m.b += d.basisUsd; continue; }
+    const entry = { k: d.kind, o: d.originTxId ?? null, a: d.acquiredAt, s: d.sats, b: d.basisUsd, lt: !!d.longTerm };
+    if(d.estimated) entry.e = 1;
+    if(d.noBasis) entry.nb = 1;
+    merged.set(key, entry);
+  }
+  // What left first (sold / moved / sent), then the fee; within a kind, the order lots were taken
+  const lots = [...merged.values()]
+    .map((l, i) => ({ l, i }))
+    .sort((x, y) => LOT_RECORD_KINDS.indexOf(x.l.k) - LOT_RECORD_KINDS.indexOf(y.l.k) || x.i - y.i)
+    .map(({ l }) => ({ ...l, b: Math.round(l.b * 1e6) / 1e6 }));
+  const ownPrice = tx.type === 'Sell' ? numOr(tx.price, 0) : 0;
+  const p = ownPrice > 0 ? ownPrice : numOr(priceUsd, 0);
+  return {
+    v: 1, recordedAt: new Date(recordedAtMs).toISOString(), source: LOT_RECORD_SOURCES.includes(source) ? source : 'save',
+    txAt: new Date(at).toISOString(), wallet: tx.wallet, method: methodFor(tx.wallet),
+    priceUsd: p > 0 ? Math.round(p * 100) / 100 : null, lots, ...(shortSats > 0 ? { shortSats } : {}),
+  };
+};
+// Compare a saved record with a fresh one. 'match' when the same lots in the same amounts were
+// taken (basis compared to the cent, since it is derived), else 'differs' with what was added
+// to and removed from the saved picks. A missing fresh record (row now unusable) also differs.
+const compareLotRecord = (saved, fresh) => {
+  const key = l => `${l.k}|${l.o ?? ''}|${l.a}`;
+  const index = rec => new Map(((rec && rec.lots) || []).map(l => [key(l), l]));
+  const a = index(saved), b = index(fresh);
+  const added = [], removed = [];
+  for(const [k, l] of b) {
+    const o = a.get(k);
+    if(!o) added.push(l);
+    else if(o.s !== l.s || Math.abs(o.b - l.b) >= 0.005) { removed.push(o); added.push(l); }
+  }
+  for(const [k, l] of a) if(!b.has(k)) removed.push(l);
+  const same = !!saved && !!fresh && saved.wallet === fresh.wallet && (saved.shortSats || 0) === (fresh.shortSats || 0);
+  return { status: same && !added.length && !removed.length ? 'match' : 'differs', added, removed };
+};
+// The latest record on a transaction, or null
+const latestLotRecord = tx => {
+  const list = tx && Array.isArray(tx.lotRecords) ? tx.lotRecords.filter(r => r && Array.isArray(r.lots)) : [];
+  return list.length ? list[list.length - 1] : null;
 };
 // ─── Harvest ─────────────────────────────────────────────────────────────────────────
 // The lots in one wallet whose basis per BTC is above a price, highest cost first: the coins
