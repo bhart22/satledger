@@ -1395,6 +1395,26 @@ const parseCoinLedgerRows = (rows) => {
 // millisecond cannot collide.
 let _txIdSeq = 0;
 const newTxId = () => `t${Date.now().toString(36)}${(_txIdSeq++).toString(36)}${Math.random().toString(36).slice(2,6)}`;
+// When a row was first saved, read back from its id: newTxId puts Date.now() in base 36 right
+// after the 't' (8 digits from 1972 to 2059). For an imported row this is the import time. Null
+// for ids of any other shape or that decode to an implausible time. Edits keep the id, so this
+// stays the first-save time.
+const txLoggedAt = tx => {
+  const m = tx && typeof tx.id === 'string' ? /^t([0-9a-z]{8})[0-9a-z]+$/.exec(tx.id) : null;
+  if(!m) return null;
+  const ms = parseInt(m[1], 36);
+  return Number.isFinite(ms) && ms >= Date.UTC(2015, 0, 1) && ms <= Date.now() + 86400000 ? ms : null;
+};
+// "35 min after" / "5 h after" / "3 days after" the transaction; '' when either time is unknown
+// (including the 12:00 UTC placeholder of a row with no time of day) or the order is reversed.
+const txLoggedLag = tx => {
+  const logged = txLoggedAt(tx), at = txInstant(tx);
+  if(logged === null || !Number.isFinite(at) || isNoonPlaceholder(tx) || logged < at) return '';
+  const min = Math.round((logged - at) / 60000);
+  if(min < 60) return `${min} min after`;
+  const h = Math.round((logged - at) / 3600000);
+  return h < 48 ? `${h} h after` : `${Math.round((logged - at) / 86400000)} days after`;
+};
 // Backfills missing ids and de-collides duplicates (a hand-edited backup or a cloned
 // dataset could otherwise make one edit write two rows). Returns the same array
 // reference when nothing changed, so callers can skip a redundant write.
@@ -1819,7 +1839,7 @@ const lotRecordAudit = (transactions, { prices = {}, methodFor = () => DEFAULT_L
 // line, the columns, then one row per lot of every record (earlier records included, numbered),
 // each with how it was made, whether it was made at the time, and whether the latest record
 // still matches the current data. Free-text cells are guarded against spreadsheet formulas.
-const LOT_RECORDS_CSV_COLUMNS = ['Transaction (UTC)','Type','Wallet','Record #','Latest','Recorded (UTC)','How Recorded','Timing','Method','BTC Price (USD)',
+const LOT_RECORDS_CSV_COLUMNS = ['Transaction (UTC)','Logged (UTC)','Logged After','Type','Wallet','Record #','Latest','Recorded (UTC)','How Recorded','Timing','Method','BTC Price (USD)',
   'Lot','Lot Acquired (UTC)','Lot Origin','BTC','Sats','Basis (USD)','Term','Estimated','No Basis','Shortfall Sats','Matches Current Data'];
 const LOT_RECORD_SOURCE_LABELS = { save:'when saved', edit:'after an edit', backfill:'by Record past lots', rerecord:'by Re-record' };
 const LOT_KIND_LABELS = { sell:'Sold', move:'Moved', out:'Sent out', fee:'Network fee' };
@@ -1841,12 +1861,13 @@ const lotRecordsCsv = (transactions, audit, { year = null, generatedAtMs = Date.
     const at = txInstant(tx);
     if(year && fmtUtcStamp(at).slice(0, 4) !== String(year)) continue;
     const recs = tx.lotRecords.filter(r => r && Array.isArray(r.lots));
+    const logged = txLoggedAt(tx), lag = txLoggedLag(tx);
     recs.forEach((r, n) => {
       const latest = n === recs.length - 1;
       const status = latest ? (statusOf.get(tx.id) === 'match' ? 'yes' : statusOf.has(tx.id) ? 'no' : '') : '';
       for(const l of r.lots) {
         lines.push([
-          cell(fmtUtcStamp(at)), cell(tx.type), cell(r.wallet, true), cell(n + 1), cell(latest ? 'yes' : 'no'),
+          cell(fmtUtcStamp(at)), cell(logged === null ? '' : fmtUtcStamp(logged)), cell(lag), cell(tx.type), cell(r.wallet, true), cell(n + 1), cell(latest ? 'yes' : 'no'),
           cell(fmtUtcStamp(Date.parse(r.recordedAt))), cell(LOT_RECORD_SOURCE_LABELS[r.source] || r.source), cell(isLotRecordTimely(r) ? 'at the time' : 'recorded later'),
           cell(r.method), cell(r.priceUsd ? Number(r.priceUsd).toFixed(2) : ''),
           cell(LOT_KIND_LABELS[l.k] || l.k), cell(fmtUtcStamp(l.a)), cell(origin(l.o), true),
@@ -11076,7 +11097,8 @@ function App() {
                       <td>{r.saved.method}</td>
                       <td className="mono">{(takenSats(r.saved)/1e8).toFixed(8)}</td>
                       <td style={{fontSize:'.75rem',whiteSpace:'nowrap'}}>{fmtTxDate({ date: r.saved.recordedAt.slice(0,10), datetimeUtc: r.saved.recordedAt })}
-                        <div style={{color:isLotRecordTimely(r.saved)?'var(--green)':'#d97706'}}>{isLotRecordTimely(r.saved) ? 'at the time' : 'recorded later'}</div></td>
+                        <div style={{color:isLotRecordTimely(r.saved)?'var(--green)':'#d97706'}}>{isLotRecordTimely(r.saved) ? 'at the time' : 'recorded later'}</div>
+                        {txLoggedLag(r.tx) && <div style={{color:'var(--text-tertiary)'}}>row logged {txLoggedLag(r.tx)}</div>}</td>
                       <td style={{fontSize:'.75rem',color:r.status==='match'?'var(--green)':'#d97706',fontWeight:600}}>{r.status === 'match' ? 'Matches' : 'Differs'}</td>
                       <td style={{whiteSpace:'nowrap'}}>
                         <button type="button" className="btn btn-secondary btn-sm" onClick={()=>handleViewTransaction(r.txId)}>View</button>
@@ -12008,9 +12030,11 @@ function App() {
                   const fmtAt = iso => fmtTxDate({ date: iso.slice(0,10), datetimeUtc: iso });
                   const KIND = LOT_KIND_LABELS, SOURCE = LOT_RECORD_SOURCE_LABELS;
                   const drift = rec ? lotRecordAuditByTx.get(row.id) : null;
+                  const loggedMs = txLoggedAt(row), lag = txLoggedLag(row);
                   return (
                     <div id="tx-lot-record" style={{marginTop:'1rem',paddingTop:'.875rem',borderTop:'1px solid var(--border-color)'}}>
                       <div style={{fontSize:'.75rem',fontWeight:600,textTransform:'uppercase',letterSpacing:'.06em',color:'var(--text-secondary)',marginBottom:'.375rem'}}>Lot identification record</div>
+                      {loggedMs !== null && <div id="tx-logged-at" style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6}}>Transaction logged {fmtAt(new Date(loggedMs).toISOString())}{lag ? ` (${lag})` : ''}</div>}
                       {!rec ? (
                         <div style={{fontSize:'.75rem',color:'var(--text-tertiary)',lineHeight:1.5}}>No record yet. One is saved when you save this transaction.</div>
                       ) : (<>

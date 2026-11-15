@@ -688,6 +688,7 @@ const saleId = await evaluate(`return JSON.parse(localStorage.getItem('btc-tx-v2
 await evaluate(`document.querySelector('.tx-table-wrap button[aria-label^="Edit Sell"]').click(); return 1;`);
 await wait(500);
 check('the edit form shows the lot record, made at the time', await evaluate(`const el = document.getElementById('tx-lot-record'); return !!el && /at the time/.test(el.innerText) && /Sold/.test(el.innerText);`));
+check('the edit form shows when the row was logged, minutes after the trade', await evaluate(`return /Transaction logged .*\\(\\d+ min after\\)/.test(document.getElementById('tx-logged-at')?.innerText || '');`));
 await setField('tx-notes', 'harvest');
 await submit();
 await wait(500);
