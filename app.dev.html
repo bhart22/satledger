@@ -1554,6 +1554,34 @@ const lotMethodFor = (wallets, name) => {
   const w = (wallets || []).find(x => x && x.name === name);
   return w && LOT_METHODS.includes(w.lotMethod) ? w.lotMethod : DEFAULT_LOT_METHOD;
 };
+// Dated history of a wallet's lot method: its standing order for which lots leave first. Each
+// entry is { method, from: ISO instant, source: 'created' | 'changed' | 'confirmed' }, appended
+// when a wallet is created, when its method is changed, or when the owner confirms the current
+// methods. Entries are never edited or removed. `lotMethod` stays the setting the lot engine
+// reads; this only records since when it has been in force.
+const lotMethodHistoryOf = w => (w && Array.isArray(w.lotMethodHistory) ? w.lotMethodHistory : [])
+  .filter(e => e && LOT_METHODS.includes(e.method) && Number.isFinite(Date.parse(e.from)))
+  .map((e, i) => ({ e, i }))
+  .sort((a, b) => Date.parse(a.e.from) - Date.parse(b.e.from) || a.i - b.i)
+  .map(o => o.e);
+const appendLotMethodHistory = (history, method, source, atMs) =>
+  [...(Array.isArray(history) ? history : []), { method, from: new Date(atMs).toISOString(), source }];
+// The method on record at a moment (the last entry at or before it), or null when none covers it
+const lotMethodAt = (wallet, ms) => {
+  let method = null;
+  for(const e of lotMethodHistoryOf(wallet)) if(Date.parse(e.from) <= ms) method = e.method;
+  return method;
+};
+// Epoch ms since which the wallet's CURRENT method has been on record without a break, or null
+// when the history doesn't end on the current method (no history, or changed without a record)
+const lotMethodSince = wallet => {
+  const h = lotMethodHistoryOf(wallet);
+  const current = lotMethodFor([wallet], wallet && wallet.name);
+  if(!h.length || h[h.length - 1].method !== current) return null;
+  let i = h.length - 1;
+  while(i > 0 && h[i - 1].method === current) i--;
+  return Date.parse(h[i].from);
+};
 // Held MORE than one year from acquisition: strictly after the same UTC moment a year later
 const isLongTerm = (acquiredMs, atMs) => {
   const d = new Date(acquiredMs);
@@ -9633,9 +9661,14 @@ function App() {
     if(collides) { showToast(`A wallet named "${name}" already exists`); return; }
     const cleanForm = {...walletForm, name, address: String(walletForm.address||'').trim(), lotMethod: LOT_METHODS.includes(walletForm.lotMethod) ? walletForm.lotMethod : DEFAULT_LOT_METHOD};
 
+    const nowMs = Date.now();
     if(editWalletTarget!==null) {
       const oldName = String(wals[editIdx]?.name||'');
       const u=[...wals]; u[editIdx]={...u[editIdx],...cleanForm};
+      // Record a method change with its date: that history is the wallet's standing order
+      if(lotMethodFor([wals[editIdx]], oldName) !== cleanForm.lotMethod) {
+        u[editIdx].lotMethodHistory = appendLotMethodHistory(wals[editIdx].lotMethodHistory, cleanForm.lotMethod, 'changed', nowMs);
+      }
       // Cascade the rename through every transaction that references the old name, or the
       // wallet's entire balance is orphaned.
       const affected = oldName !== name ? countWalletReferences(txs, oldName) : 0;
@@ -9654,7 +9687,7 @@ function App() {
       }
       if(affected) showToast(`Wallet renamed — updated ${affected} transaction${affected===1?'':'s'}`);
     } else {
-      const nw=[...wals,{id:'w'+Date.now(),...cleanForm}]; setWallets(nw); save(txs, nw);
+      const nw=[...wals,{id:'w'+nowMs,...cleanForm, lotMethodHistory: appendLotMethodHistory([], cleanForm.lotMethod, 'created', nowMs)}]; setWallets(nw); save(txs, nw);
     }
     setShowWalletModal(false); setEditWalletTarget(null); setWalletForm({name:'',type:'Exchange',address:'',lotMethod:DEFAULT_LOT_METHOD});
   };
@@ -10755,6 +10788,31 @@ function App() {
             downloadBlob(new Blob([harvestSummaryCsv(all, { price, generatedAtMs: Date.now() })], {type:'text/csv'}), `harvest-summary-all-wallets-${todayLocal()}.csv`);
             showToast('Exported the total summary');
           };
+          // Standing order: since when each wallet's current method has been on record
+          const methodSinceMs = name => { const w = wallets.find(x => x.name === name); return w ? lotMethodSince(w) : null; };
+          const methodSinceText = name => { const s = methodSinceMs(name); return s ? `since ${fmtDate(localDateKey(new Date(s)))}` : 'no dated record'; };
+          const unrecorded = wallets.filter(w => !lotMethodSince(w));
+          const confirmMethods = () => setConfirmDialog({
+            title: 'Record lot methods as a standing order?',
+            message: `This adds a dated entry to the method history of ${unrecorded.length} wallet${unrecorded.length===1?'':'s'} without one (${unrecorded.map(w => `${w.name}: ${lotMethodFor(wallets, w.name)}`).join(', ')}), dated now. It records which lots each wallet sells or sends first from today on. It does not change any method, and it doesn't date anything before today.`,
+            confirmLabel: 'Record',
+            danger: false,
+            confirmIcon: false,
+            onConfirm: () => {
+              setConfirmDialog(null);
+              // Live lists: a sync may have landed while the dialog was open
+              const at = Date.now();
+              let count = 0;
+              const nw = walletsRef.current.map(w => {
+                if(lotMethodSince(w)) return w;
+                count++;
+                return { ...w, lotMethodHistory: appendLotMethodHistory(w.lotMethodHistory, lotMethodFor([w], w.name), 'confirmed', at) };
+              });
+              if(!count) { showToast('Every wallet already has a dated method'); return; }
+              setWallets(nw); save(transactionsRef.current, nw);
+              showToast(`Recorded the lot method for ${count} wallet${count===1?'':'s'}`);
+            },
+          });
           const lossColor = v => v > 0 ? 'var(--red)' : undefined;
           const stat = s => (
             <div className="stats-grid">
@@ -10787,9 +10845,15 @@ function App() {
                 </div>
                 <div style={{fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.6,marginTop:'.5rem'}}>
                   {wallet
-                    ? <>Lots in {wallet} that cost more per BTC than the price above, highest cost first. Lots with no known basis are left out. {wallet} disposes lots {lotMethodFor(wallets, wallet)}. Long term means held more than one year from the acquisition time, as of now.</>
+                    ? <>Lots in {wallet} that cost more per BTC than the price above, highest cost first. Lots with no known basis are left out. {wallet} disposes lots {lotMethodFor(wallets, wallet)} (<span id="harvest-method-since">{methodSinceText(wallet)}</span>). Long term means held more than one year from the acquisition time, as of now.</>
                     : <>Every wallet at the price above. Pick a wallet to see its lots and export an identification list. Lots with no known basis are left out; long term means held more than one year, as of now.</>}
                 </div>
+                {unrecorded.length > 0 && (
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'.75rem',flexWrap:'wrap',marginTop:'.75rem',padding:'.625rem .75rem',borderRadius:8,background:'var(--bg-tertiary)',fontSize:'.75rem',color:'var(--text-secondary)',lineHeight:1.5}}>
+                    <span>{unrecorded.length} wallet{unrecorded.length===1?' has':'s have'} no dated record of {unrecorded.length===1?'its':'their'} lot method. A dated record is a standing order for which lots leave first.</span>
+                    <button type="button" id="harvest-confirm-methods" className="btn btn-secondary btn-sm" onClick={confirmMethods}>Record lot methods</button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -10814,7 +10878,8 @@ function App() {
                         <tbody>
                           {all.wallets.map(w => (
                             <tr key={w.wallet} onClick={()=>setHarvestWalletPick(w.wallet)} style={{cursor:'pointer',opacity:w.lotCount?1:.6}}>
-                              <td style={{fontWeight:600}}>{w.wallet}</td><td>{w.method}</td>
+                              <td style={{fontWeight:600}}>{w.wallet}</td>
+                              <td>{w.method}<div style={{fontSize:'.6875rem',color:methodSinceMs(w.wallet)?'var(--text-tertiary)':'#d97706',whiteSpace:'nowrap'}}>{methodSinceText(w.wallet)}</div></td>
                               <td className="mono">{(w.heldSats/1e8).toFixed(8)}</td>
                               <td className="mono">{w.lotCount}</td>
                               <td className="mono">{(w.totalSats/1e8).toFixed(8)}</td>
@@ -11644,7 +11709,19 @@ function App() {
                   <select id="wallet-lot-method" className="form-select" value={walletForm.lotMethod||DEFAULT_LOT_METHOD} onChange={e=>setWalletForm({...walletForm,lotMethod:e.target.value})}>
                     <option value="HIFO">HIFO — highest cost first</option><option value="FIFO">FIFO — oldest first</option>
                   </select>
-                  <div style={{fontSize:'.6875rem',color:'var(--text-tertiary)',marginTop:'.25rem'}}>Which lots a sale or transfer takes from this wallet first. Used by the Harvest view.</div>
+                  <div style={{fontSize:'.6875rem',color:'var(--text-tertiary)',marginTop:'.25rem'}}>Which lots a sale or transfer takes from this wallet first. Used by the Harvest view. A change is recorded with its date.</div>
+                  {editWalletTarget!==null && (() => {
+                    const h = lotMethodHistoryOf(editWalletTarget);
+                    const label = { created:'wallet created', changed:'changed', confirmed:'recorded' };
+                    return (
+                      <div id="wallet-method-history" style={{fontSize:'.6875rem',color:'var(--text-secondary)',marginTop:'.375rem',lineHeight:1.6}}>
+                        {h.length
+                          ? h.slice(-5).reverse().map((e, i) => <div key={i}>{e.method} from {fmtTxDate({ date: e.from.slice(0,10), datetimeUtc: e.from })} · {label[e.source] || e.source}</div>)
+                          : 'No dated record of this method yet.'}
+                        {h.length > 5 && <div>…and {h.length - 5} earlier</div>}
+                      </div>
+                    );
+                  })()}
                 </div>
                 <div className="form-group">
                   <label className="form-label" htmlFor="wallet-address">Bitcoin Address (optional)</label>

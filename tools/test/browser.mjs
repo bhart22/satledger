@@ -604,6 +604,16 @@ const totalRows = await evaluate(`return [...document.querySelectorAll('#harvest
 check('the summary lists the wallet plus a Total row', totalRows.length === 2 && /^Bitkey\b/.test(totalRows[0]) && /^Total\b/.test(totalRows[1]), JSON.stringify(totalRows));
 check('the Total row: 1 lot under water, $100,000 basis, $40,000 est. loss at $60,000', /\b1\b/.test(totalRows[1] || '') && /\$100,000\.00/.test(totalRows[1] || '') && /\$40,000\.00/.test(totalRows[1] || ''), JSON.stringify(totalRows));
 check('the summary export button is enabled', await evaluate(`return [...document.querySelectorAll('button')].some(b => /Export summary/.test(b.innerText) && !b.disabled);`));
+// lot-method standing order: a wallet with no history says so, and can be recorded with a date
+check('a wallet with no method history shows "no dated record"', /no dated record/.test(totalRows[0] || ''), JSON.stringify(totalRows));
+await evaluate(`document.getElementById('harvest-confirm-methods').click(); return 1;`);
+await wait(300);
+check('recording lot methods asks first', (await clickByText('Record')) === 'clicked');
+await wait(400);
+const histories = await evaluate(`return JSON.parse(localStorage.getItem('btc-wallets')).map(w => [w.name, (w.lotMethodHistory||[]).map(e => e.method + ':' + e.source)]);`);
+check('every wallet gets one dated "confirmed" entry for its current method', JSON.stringify(histories) === JSON.stringify([['Bitkey',['HIFO:confirmed']],['Kraken',['HIFO:confirmed']],['Ledger',['HIFO:confirmed']]]), JSON.stringify(histories));
+check('the prompt disappears once every wallet has a dated method', await evaluate(`return !document.getElementById('harvest-confirm-methods');`));
+check('the summary shows since when the method holds', await evaluate(`return /HIFO\\s*since \\d{2}\\/\\d{2}\\/\\d{4}/.test(document.querySelector('#harvest-total-table tbody tr').innerText);`));
 // drill into the wallet by clicking its row
 await evaluate(`document.querySelector('#harvest-total-table tbody tr').click(); return 1;`);
 await wait(400);
