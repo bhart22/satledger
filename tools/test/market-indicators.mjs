@@ -520,5 +520,42 @@ const CASES = [
   eq(I.athLabels({ seedVerified: 'yes', earliestSec: e }).summaryHigh, 'High since 07/20/2015', 'only seedVerified === true counts');
 }
 
+// ── weeklySma (the 200-week moving average on any interval) ─────────────────
+{
+  const t0 = utc(2020, 1, 6); // a Monday, so weeks start on day 0, 7, 14…
+  eq(C.bucketStart(t0 + 3 * D, '1w'), t0, 'weeks start on Monday (UTC)');
+  const daily = deepFreeze(randomCandles(1600, 11, t0));
+  const weekly = C.aggregate(daily, '1w', '1d');
+  // On weekly candles it is exactly the weekly SMA.
+  seriesNear(I.weeklySma(daily, weekly, 200), I.calculateSegmented('sma', weekly, { period: 200 }, '1w').sma, 'weekly candles: equals SMA 200 of weekly closes');
+  seriesNear(I.weeklySma(daily, weekly, 3), I.calculateSegmented('sma', weekly, { period: 3 }, '1w').sma, 'weekly candles, period 3');
+  // On daily candles: the 199 weeks before plus the candle's own close (oracle from the formula).
+  const weekClose = new Map(weekly.map(w => [w.t, w.c]));
+  const oracle = daily.map(c => {
+    const w = C.bucketStart(c.t, '1w'), prev = [];
+    for (let k = 199; k >= 1; k--) { const x = weekClose.get(w - k * 7 * D); if (x === undefined) return null; prev.push(x); }
+    return (sum(prev) + c.c) / 200;
+  });
+  const onDaily = I.weeklySma(daily, daily, 200);
+  seriesNear(onDaily, oracle, 'daily candles: 199 earlier weekly closes + the candle\'s close');
+  eq(onDaily.findIndex(v => v !== null), 199 * 7, 'first value on the Monday of week 200');
+  // Causal: later days never change an earlier value.
+  seriesNear(I.weeklySma(daily.slice(0, 1500), daily.slice(0, 1500), 200), onDaily.slice(0, 1500), 'later history does not change earlier values');
+  // Hand-computed, period 2: weekly closes 10 (week 0 Sunday), then a mid-week candle closing 30.
+  const tiny = [{ t: t0 + 6 * D, o: 10, h: 10, l: 10, c: 10 }];
+  eq(I.weeklySma(tiny, [{ t: t0 + 9 * D + 3600, c: 30 }], 2), [20], '(10 + 30) / 2 = 20');
+  eq(I.weeklySma([{ t: t0 + 5 * D, o: 10, h: 10, l: 10, c: 10 }], [{ t: t0 + 9 * D, c: 30 }], 2), [null], 'a week without its Sunday close does not count');
+  eq(I.weeklySma(tiny, [{ t: t0 + 9 * D, c: 30, partial: true }, null, { t: t0 + 9 * D }], 2), [null, null, null], 'partial or malformed candles → null');
+  // A missing Sunday breaks the run: values needing that week are null, later ones recover.
+  const gap = daily.filter(c => c.t !== t0 + (5 * 7 + 6) * D);
+  const g = I.weeklySma(gap, daily, 200);
+  eq(g.slice(0, 205 * 7).every(v => v === null), true, 'every value whose 199 weeks include the gap is null');
+  ok(g[205 * 7] !== null && near(g[205 * 7], onDaily[205 * 7]), 'values resume once 199 unbroken weeks follow the gap');
+  eq(I.weeklySma([], daily.slice(0, 3), 200), [null, null, null], 'no daily history → null');
+  eq(I.weeklySma(null, null, 200), [], 'non-arrays are empty');
+  for (const bad of [1, 1001, 2.5, '200', null]) throws(() => I.weeklySma(daily, daily, bad), `period ${bad} throws`);
+  const before = JSON.stringify(daily); I.weeklySma(daily, daily, 200); eq(JSON.stringify(daily), before, 'input not mutated');
+}
+
 console.log(`market-indicators: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

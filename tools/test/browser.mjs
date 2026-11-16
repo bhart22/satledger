@@ -1204,6 +1204,9 @@ console.log('\n[Market candle store]');
       const want = { sma50: last('sma', { period: 50 }, 'sma'), sma200: last('sma', { period: 200 }, 'sma'), rsi14: last('rsi', { period: 14 }, 'rsi'),
         atr14: last('atr', { period: 14 }, 'atr'), hv30: last('volatility', { period: 30 }, 'volatility') };
       const bad = Object.entries(want).filter(([k, v]) => !(v != null && val(k) != null && Math.abs(val(k) - v) <= 1e-9 * Math.abs(v)));
+      // 200-week MA: 420 synthetic days are not 199 weeks, so both sides are null; the item is there.
+      const w = Indicators.weeklySma(cs, [{ t: now, c: 60000 }], 200)[0];
+      if(!document.querySelector('[data-summary="sma200w"]') || !(w === null ? val('sma200w') === null : Math.abs(val('sma200w') - w) <= 1e-9 * w)) bad.push(['sma200w', w, val('sma200w')]);
       const text = document.querySelector('[data-market-view]').innerText;
       return { ok: bad.length === 0, bad, athLabel: /All-Time High/.test(text) && /Current Drawdown/.test(text), noHighSince: !/High since/.test(text),
         dd: val('drawdownFromHigh'), high: val('high') };
@@ -1235,6 +1238,23 @@ console.log('\n[Market candle store]');
   check('a hash edited by hand is applied', c?.range === '1M' && JSON.stringify(await counts()) === JSON.stringify({ overlays: 1, panes: 1, legends: 0, volume: '1' }), JSON.stringify([c, await counts()]));
   // (1h, not 1M's default 4h: the 1h chosen for 1M earlier in this run is a saved preference)
   check('the URL holds only view parameters', /^#market\?range=1m&interval=1h&scale=log&sma=20&vol=1$/.test(await evaluate(`return location.hash;`)), await evaluate(`return location.hash;`));
+  // The 200-week MA: one overlay from daily history, named in the readout. The synthetic history
+  // (420 days) is too short for a value, so it reads "—" rather than a made-up figure.
+  await evaluate(`location.hash = '#market?range=1m&ma200w=1'; return 1;`);
+  await waitFor(`return +(document.querySelector('.mkt-chart').dataset.overlays || 0) === 1;`, 5000);
+  const ma200w = await evaluate(`const b = document.querySelector('[data-readout-indicators] [data-ind="ma200w"]');
+    return { overlays: +(document.querySelector('.mkt-chart').dataset.overlays || 0), label: /200W MA/.test(document.querySelector('[data-readout-indicators]').textContent),
+      value: b ? b.dataset.value : 'missing', hash: location.hash };`);
+  check('ma200w=1 draws the 200-week MA as one overlay, named in the readout', ma200w.overlays === 1 && ma200w.label && ma200w.value === ''
+    && ma200w.hash === '#market?range=1m&interval=1h&scale=log&ma200w=1&vol=1', JSON.stringify(ma200w));
+  await evaluate(`document.querySelector('[data-open-indicators]').click(); return 1;`);
+  await wait(300);
+  check('the Trend group has a 200-Week Moving Average switch, on', (await inSheet(`return s.querySelector('[data-indicator="ma200w"] [role=switch]')?.getAttribute('aria-checked');`)) === 'true');
+  await toggle('ma200w');
+  await waitFor(`return +(document.querySelector('.mkt-chart').dataset.overlays || 0) === 0;`, 4000);
+  check('turning it off removes the overlay and the hash entry', (await counts()).overlays === 0 && !(await evaluate(`return location.hash;`)).includes('ma200w'));
+  await press('Escape', 'Escape');
+  await wait(200);
 
   // Narrow screen: two indicator panes; a third is refused with a reason.
   await evaluate(`location.hash = '#market?range=1y&rsi=14&macd=12,26,9&atr=14'; return 1;`);
