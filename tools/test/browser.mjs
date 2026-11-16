@@ -1253,8 +1253,26 @@ console.log('\n[Market candle store]');
   await toggle('ma200w');
   await waitFor(`return +(document.querySelector('.mkt-chart').dataset.overlays || 0) === 0;`, 4000);
   check('turning it off removes the overlay and the hash entry', (await counts()).overlays === 0 && !(await evaluate(`return location.hash;`)).includes('ma200w'));
+  // 50-day and 200-day: daily lines on hourly candles. 420 synthetic days are enough for a value.
+  check('the Trend group lists the 50-Day, 200-Day and 200-Week switches', (await inSheet(`return [...s.querySelectorAll('[data-indicator="ma50d"] [role=switch], [data-indicator="ma200d"] [role=switch], [data-indicator="ma200w"] [role=switch]')].map(b => b.textContent).join('|');`))
+    === '50-Day Moving Average|200-Day Moving Average|200-Week Moving Average');
+  await toggle('ma50d');
+  await toggle('ma200d');
+  await waitFor(`return +(document.querySelector('.mkt-chart').dataset.overlays || 0) === 2;`, 4000);
   await press('Escape', 'Escape');
-  await wait(200);
+  await wait(300);
+  const fixedCheck = await evaluate(`
+    const v = k => { const b = document.querySelector('[data-readout-indicators] [data-ind="' + k + '"]'); return b && b.dataset.value !== '' ? +b.dataset.value : null; };
+    return MarketCandleStore.open().then(s => s.getCandles({ provider: 'coinbase', symbol: 'BTC-USD', interval: '1d' })).then(cs => {
+      const closes = cs.map(c => c.c), lo = Math.min(...closes, 60000), hi = Math.max(...closes, 60000);
+      const a = v('ma50d'), b = v('ma200d');
+      return { ok: a != null && b != null && a >= lo && a <= hi && b >= lo && b <= hi && a !== b, a, b, lo, hi,
+        interval: document.querySelector('.mkt-chart').dataset.interval, hash: location.hash };
+    });`);
+  check('50D and 200D MAs draw on hourly candles with daily values', fixedCheck?.ok && fixedCheck.interval === '1h'
+    && fixedCheck.hash === '#market?range=1m&interval=1h&scale=log&ma50d=1&ma200d=1&vol=1', JSON.stringify(fixedCheck));
+  await evaluate(`location.hash = '#market?range=1m&sma=20'; return 1;`);
+  await waitFor(`return +(document.querySelector('.mkt-chart').dataset.overlays || 0) === 1;`, 4000);
 
   // Narrow screen: two indicator panes; a third is refused with a reason.
   await evaluate(`location.hash = '#market?range=1y&rsi=14&macd=12,26,9&atr=14'; return 1;`);

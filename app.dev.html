@@ -1218,7 +1218,7 @@ function useThrottledCallback(fn, delay) {
 // Two versions on purpose: APP_VERSION is what the UI shows, BACKUP_SCHEMA_VERSION is a
 // data contract read by importers. Collapsing them guarantees pain at the first real
 // migration. Keep APP_VERSION in sync with the footer in index.html.
-const APP_VERSION = '5.2';
+const APP_VERSION = '5.3';
 const BACKUP_SCHEMA_VERSION = 2;
 const HISTORICAL_PRICE_CACHE_KEY = 'btc-price-history-v1';
 // Earliest daily candle Coinbase Exchange has for BTC-USD (checked against the API).
@@ -3325,38 +3325,42 @@ const Indicators = (() => {
     return out;
   };
 
-  // ── Weekly SMA on any interval (the 200-week moving average) ──
-  // The SMA of weekly closes (weeks start on Candles' week anchor), placed on candles of any
-  // interval. A candle's value averages the closes of the `period - 1` weeks before its own week
-  // with the candle's close standing in for that week's close: what a weekly chart's forming bar
-  // showed at that moment, so nothing after the candle is used. On weekly candles it is exactly
-  // the weekly SMA. A week's close is the close of its last daily candle; a week whose last day
-  // is not held breaks the run, and a candle without `period - 1` unbroken weeks before it, or
-  // a partial candle, gives null. Nothing is forward-filled.
-  const weeklySma = (daily, candles, period = 200) => {
+  // ── Fixed-timeframe SMA on any interval (50-day, 200-day, 200-week moving averages) ──
+  // The SMA of daily or weekly closes (weeks start on Candles' week anchor), placed on candles of
+  // any interval. A candle's value averages the closes of the `period - 1` days (or weeks) before
+  // its own, with the candle's close standing in for its own day's (week's) close: what a daily
+  // (weekly) chart's forming bar showed at that moment, so nothing after the candle is used. On
+  // candles of that timeframe it is exactly the ordinary SMA. A day's close is its daily candle's
+  // close; a week's is the close of its last daily candle. A day or week not held (or a partial
+  // daily candle) breaks the run, and a candle without `period - 1` unbroken buckets before it,
+  // or a partial candle, gives null. Nothing is forward-filled.
+  const TIMEFRAMES = Object.freeze({ '1d': DAY_SEC, '1w': 7 * DAY_SEC });
+  const timeframeSma = (daily, candles, period = 200, timeframe = '1w') => {
     if(!Number.isInteger(period) || period < PERIOD_MIN || period > PERIOD_MAX) fail(`period must be an integer from ${PERIOD_MIN} to ${PERIOD_MAX}`);
-    const WEEK = 7 * DAY_SEC;
+    if(!hasOwn(TIMEFRAMES, timeframe)) fail(`timeframe must be one of ${Object.keys(TIMEFRAMES).join(', ')}`);
+    const STEP = TIMEFRAMES[timeframe];
     const closes = new Map();
     for(const d of list(daily)) {
-      if(!d || !isNum(d.t) || !isNum(d.c)) continue;
-      const w = Candles.bucketStart(d.t, '1w');
-      if(d.t === w + 6 * DAY_SEC) closes.set(w, d.c);
+      if(!d || d.partial || !isNum(d.t) || !isNum(d.c)) continue;
+      const b = Candles.bucketStart(d.t, timeframe);
+      if(d.t === b + STEP - DAY_SEC) closes.set(b, d.c);
     }
-    const weeks = [...closes.keys()].sort((a, b) => a - b);
+    const buckets = [...closes.keys()].sort((a, b) => a - b);
     const at = new Map(), sums = [0], runStart = [];
-    weeks.forEach((w, i) => {
-      at.set(w, i);
-      sums.push(sums[i] + closes.get(w));
-      runStart.push(i > 0 && weeks[i - 1] === w - WEEK ? runStart[i - 1] : i);
+    buckets.forEach((b, i) => {
+      at.set(b, i);
+      sums.push(sums[i] + closes.get(b));
+      runStart.push(i > 0 && buckets[i - 1] === b - STEP ? runStart[i - 1] : i);
     });
     const need = period - 1;
     return list(candles).map(c => {
       if(!c || c.partial || !isNum(c.t) || !isNum(c.c)) return null;
-      const j = at.get(Candles.bucketStart(c.t, '1w') - WEEK);
+      const j = at.get(Candles.bucketStart(c.t, timeframe) - STEP);
       if(j === undefined || j - runStart[j] + 1 < need) return null;
       return (sums[j + 1] - sums[j + 1 - need] + c.c) / period;
     });
   };
+  const weeklySma = (daily, candles, period = 200) => timeframeSma(daily, candles, period, '1w');
 
   // ── Returns (§11) ──
   const simple = (a, b) => b / a - 1;
@@ -3474,7 +3478,7 @@ const Indicators = (() => {
 
   return Object.freeze({
     SOURCES, CATEGORIES, ATH_SEED, ATH_SEED_VERIFIED, PERIOD_MIN, PERIOD_MAX,
-    definitions: DEFINITIONS, ids: IDS, get, resolveSettings, calculateSegmented, annualizationFactor, weeklySma,
+    definitions: DEFINITIONS, ids: IDS, get, resolveSettings, calculateSegmented, annualizationFactor, timeframeSma, weeklySma,
     returns, extremes, drawdown, previousAth, athLabels,
   });
 })();
@@ -3490,8 +3494,9 @@ const Indicators = (() => {
 // Shape: { range, intervals: { [range]: interval chosen for it }, scale: 'linear'|'log',
 //   volume: bool, indicators: { sma: { periods: [n…], source }, ema: { periods, source },
 //   bollinger: { on, period, multiplier }, rsi: { on, period }, macd: { on, fast, slow, signal },
-//   atr: { on, period }, volatility: { on, period }, ma200w: { on } },
-//   (ma200w is the 200-week SMA drawn on any interval; URL ma200w=1, one of the indicator group.)
+//   atr: { on, period }, volatility: { on, period }, ma50d: { on }, ma200d: { on }, ma200w: { on } },
+//   (ma50d / ma200d / ma200w: the 50-day, 200-day and 200-week SMAs drawn on any interval; URL
+//   ma50d=1 etc., part of the indicator group.)
 //   personal: { showTx, purchases, sales, rewards, transfers: bool, wallets: null | [name…],
 //     avgLine: 'off'|'current'|'historical', balancePane: bool } }
 //
@@ -3502,7 +3507,7 @@ const Indicators = (() => {
 // stay on this device like everything else in settings.market.
 //
 // URL rules: each parameter overrides the stored value on its own and an invalid one is ignored.
-// The indicator parameters (sma ema rsi macd bb atr hv ma200w) count as one group: when at least one
+// The indicator parameters (sma ema rsi macd bb atr hv ma50d ma200d ma200w) count as one group: when at least one
 // of them is valid the URL describes the whole indicator set, so an indicator it leaves out is
 // off (its stored settings are kept); with none of them the stored indicator set stands. The
 // SMA/EMA price source is a stored setting only; the URL leaves it as it is.
@@ -3513,6 +3518,8 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
     bollinger: ['period', 'multiplier'], rsi: ['period'], macd: ['fast', 'slow', 'signal'],
     atr: ['period'], volatility: ['period'],
   });
+  // Fixed-timeframe moving averages (Indicators.timeframeSma): on/off only, URL `<id>=1`.
+  const FIXED_MAS = Object.freeze(['ma50d', 'ma200d', 'ma200w']);
   const HASH_KEY = Object.freeze({ sma: 'sma', ema: 'ema', bollinger: 'bb', rsi: 'rsi', macd: 'macd', atr: 'atr', volatility: 'hv' });
   const isObj = v => !!v && typeof v === 'object' && !Array.isArray(v);
   const own = (o, k) => isObj(o) && Object.prototype.hasOwnProperty.call(o, k);
@@ -3536,7 +3543,7 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
   const defaults = () => {
     const indicators = { sma: { periods: [], source: 'close' }, ema: { periods: [], source: 'close' } };
     for(const [id, keys] of Object.entries(SINGLE)) indicators[id] = { on: false, ...pick(Indicators.get(id).defaults, keys) };
-    indicators.ma200w = { on: false };
+    for(const id of FIXED_MAS) indicators[id] = { on: false };
     return { range: '1Y', intervals: {}, scale: 'linear', volume: true, indicators, personal: personalDefaults() };
   };
   const normLines = (id, raw) => {
@@ -3569,7 +3576,7 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
     out.indicators.sma = normLines('sma', ind.sma);
     out.indicators.ema = normLines('ema', ind.ema);
     for(const id of Object.keys(SINGLE)) out.indicators[id] = normSingle(id, ind[id]);
-    out.indicators.ma200w = { on: own(ind.ma200w, 'on') && ind.ma200w.on === true };
+    for(const id of FIXED_MAS) out.indicators[id] = { on: own(ind[id], 'on') && ind[id].on === true };
     out.personal = normPersonal(raw.personal);
     return out;
   };
@@ -3623,14 +3630,14 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
         const p = v === null ? null : parseIndicator(id, v, prefs.indicators);
         if(p) found[id] = p;
       }
-      if(get('ma200w') === '1') found.ma200w = { on: true };
+      for(const id of FIXED_MAS) if(get(id) === '1') found[id] = { on: true };
       if(Object.keys(found).length) {
         for(const id of Object.keys(HASH_KEY)) {
           const cur = prefs.indicators[id];
           if(id === 'sma' || id === 'ema') prefs.indicators[id] = { ...cur, periods: found[id] ? found[id].periods : [] };
           else prefs.indicators[id] = { ...cur, ...(found[id] || { on: false }) };
         }
-        prefs.indicators.ma200w = { on: !!found.ma200w };
+        for(const id of FIXED_MAS) prefs.indicators[id] = { on: !!found[id] };
       }
       return normalizeMarketPrefs(prefs);
     } catch { return normalizeMarketPrefs(basePrefs); }
@@ -3650,7 +3657,7 @@ const { normalizeMarketPrefs, parseMarketHash, formatMarketHash } = (() => {
     if(ind.bollinger.on) parts.push(`bb=${ind.bollinger.period},${ind.bollinger.multiplier}`);
     if(ind.atr.on) parts.push(`atr=${ind.atr.period}`);
     if(ind.volatility.on) parts.push(`hv=${ind.volatility.period}`);
-    if(ind.ma200w.on) parts.push('ma200w=1');
+    for(const id of FIXED_MAS) if(ind[id].on) parts.push(`${id}=1`);
     parts.push(`vol=${p.volume ? 1 : 0}`);
     return `#market?${parts.join('&')}`;
   };
@@ -6581,6 +6588,11 @@ const MKT_COLORS = {
     extra: ['#a3e635', '#fb923c', '#5eead4', '#c4b5fd', '#f0abfc', '#93c5fd'], bb: '#94a3b8', bbMid: '#8b95a7',
     rsi: '#c084fc', macd: '#60a5fa', signal: '#fb923c', histUp: 'rgba(46,189,107,.55)', histDown: 'rgba(240,86,79,.55)', atr: '#2dd4bf', hv: '#fb923c' },
 };
+const MKT_FIXED_MAS = [
+  { id: 'ma50d', period: 50, timeframe: '1d', label: '50D MA', name: '50-Day Moving Average', color: ['#dc2626', '#ef4444'] },
+  { id: 'ma200d', period: 200, timeframe: '1d', label: '200D MA', name: '200-Day Moving Average', color: ['#7e22ce', '#a855f7'] },
+  { id: 'ma200w', period: 200, timeframe: '1w', label: '200W MA', name: '200-Week Moving Average', color: ['#0891b2', '#06b6d4'] },
+];
 const MKT_PANE_ORDER = { rsi: 1, macd: 2, atr: 3, volatility: 4 };
 const MKT_PANE_LABEL = { rsi: 'RSI', macd: 'MACD', atr: 'ATR', volatility: 'Historical Volatility' };
 function marketIndicatorSpecs(prefs, theme) {
@@ -6595,10 +6607,12 @@ function marketIndicatorSpecs(prefs, theme) {
         lines: [{ series: fam, color: lineColor(fam, period), dashed: fam === 'ema' }] });
     }
   }
-  // The 200-week SMA: from daily history on every interval (Indicators.weeklySma), not a period
-  // of the candles on screen. Cyan, as on the Dashboard's moving-average chart.
-  if(ind.ma200w.on) out.push({ key: 'ma200w', id: 'ma200w', weekly: 200, placement: 'overlay', label: '200W MA', format: 'usd',
-    lines: [{ series: 'sma', color: theme === 'dark' ? '#06b6d4' : '#0891b2' }] });
+  // The fixed-timeframe SMAs: from daily history on every interval (Indicators.timeframeSma), not
+  // a period of the candles on screen. Colours as on the Dashboard's moving-average chart.
+  for(const f of MKT_FIXED_MAS) {
+    if(ind[f.id].on) out.push({ key: f.id, id: f.id, timeframe: { period: f.period, unit: f.timeframe }, placement: 'overlay', label: f.label,
+      format: 'usd', lines: [{ series: 'sma', color: f.color[theme === 'dark' ? 1 : 0] }] });
+  }
   const b = ind.bollinger;
   if(b.on) out.push({ key: 'bollinger', id: 'bollinger', settings: { period: b.period, multiplier: b.multiplier }, placement: 'overlay',
     label: `BB ${b.period}, ${b.multiplier}`, format: 'usd',
@@ -6621,7 +6635,7 @@ const mktFormatValue = (v, format) => v == null || !Number.isFinite(v) ? '—'
   : format === 'usd' ? fmtUSD(v) : format === 'percent' ? `${(v * 100).toFixed(1)}%` : v.toFixed(2);
 const mktIndicatorCount = prefs => {
   const i = prefs.indicators;
-  return i.sma.periods.length + i.ema.periods.length + ['ma200w', 'bollinger', 'rsi', 'macd', 'atr', 'volatility'].filter(k => i[k].on).length;
+  return i.sma.periods.length + i.ema.periods.length + ['ma50d', 'ma200d', 'ma200w', 'bollinger', 'rsi', 'macd', 'atr', 'volatility'].filter(k => i[k].on).length;
 };
 // Mirrored on <html data-market-indicator-runs> so a test can prove that inspecting candles
 // does not recompute indicators.
@@ -6804,10 +6818,12 @@ function MarketIndicatorPanel({ prefs, update, maxPanes, narrow, otherPanes = 0 
         <h3 id="mkt-cat-trend">Trend</h3>
         <MarketLineFamily id="sma" name="Simple Moving Average (SMA)" prefs={prefs} update={update} />
         <MarketLineFamily id="ema" name="Exponential Moving Average (EMA)" prefs={prefs} update={update} />
-        <div className="mkt-ind" data-indicator="ma200w">
-          <MktSwitch on={prefs.indicators.ma200w.on} label="200-Week Moving Average" onChange={on => onToggle('ma200w', on)} />
-          <p className="mkt-ind-note">The average of the last 200 weekly closes, drawn on every interval (daily, hourly or weekly candles). Needs about four years of daily history on this device.</p>
-        </div>
+        {MKT_FIXED_MAS.map(f => (
+          <div className="mkt-ind" data-indicator={f.id} key={f.id}>
+            <MktSwitch on={prefs.indicators[f.id].on} label={f.name} onChange={on => onToggle(f.id, on)} />
+          </div>
+        ))}
+        <p className="mkt-ind-note">SMA and EMA periods count the candles on screen: SMA 200 is 200 hours on hourly candles. These three always mean days or weeks, from the daily history on this device, on every interval. The 200-week line needs about four years of it.</p>
       </section>
       <section aria-labelledby="mkt-cat-momentum">
         <h3 id="mkt-cat-momentum">Momentum</h3>
@@ -7557,17 +7573,17 @@ function MarketView({ theme, btcPrice, priceUpdatedAt, storedPrefs = null, onPre
   const specs = useMemo(() => marketIndicatorSpecs(prefs, theme), [prefs.indicators, theme]);
   const calcKey = JSON.stringify(specs.map(s => [s.key, s.id, s.settings]));
   const viewInterval = view?.interval || null;
-  const weeklyOn = specs.some(s => s.weekly);
+  const fixedOn = specs.some(s => s.timeframe);
   const indicatorValues = useMemo(() => {
     const out = {};
     if(!display?.length || !viewInterval) return out;
     for(const s of specs) {
-      out[s.key] = s.weekly ? { sma: Indicators.weeklySma(daily, display, s.weekly) }
+      out[s.key] = s.timeframe ? { sma: Indicators.timeframeSma(daily, display, s.timeframe.period, s.timeframe.unit) }
         : Indicators.calculateSegmented(s.id, display, s.settings, viewInterval);
     }
     document.documentElement.dataset.marketIndicatorRuns = String(++marketIndicatorRuns);
     return out;
-  }, [display, viewInterval, calcKey, weeklyOn ? daily : null]);
+  }, [display, viewInterval, calcKey, fixedOn ? daily : null]);
   const paneSpecs = specs.filter(s => s.placement === 'pane');
   const personal = prefs.personal;
   const txList = Array.isArray(transactions) ? transactions : [];
