@@ -92,28 +92,32 @@ Warm-up: `N-1`.
 Implementation may use a rolling sum. The rolling result must equal the direct sum to within
 `1e-9` relative; the test compares both.
 
-### The 200-week moving average (`Indicators.weeklySma`)
+### Fixed-timeframe moving averages (`Indicators.timeframeSma`)
 
-An SMA period counts the candles on screen, so SMA 200 is a 200-day line on daily candles and a
-200-week line only on weekly ones. The Market tab's **200-Week Moving Average** switch (URL
-`ma200w=1`) draws the 200-week line on every interval, computed from the daily history held on
-the device rather than from the candles on screen:
+An SMA period counts the candles on screen, as on every charting platform: SMA 200 is 200 hours
+on hourly candles, 200 days on daily and 200 weeks on weekly. That stays the rule for the SMA and
+EMA lines. Three famous averages are meant in days or weeks whatever the chart shows, so the
+Market tab also has **50-Day**, **200-Day** and **200-Week Moving Average** switches (URL
+`ma50d=1`, `ma200d=1`, `ma200w=1`), computed from the daily history held on the device rather
+than from the candles on screen:
 
 ```
-W(t)       = the week holding t (weeks start Monday 00:00 UTC, Candles' week anchor)
-WC[w]      = close of week w's last daily candle (Sunday); a week without it is missing
-MA200W[t]  = (WC[W(t)-199] + … + WC[W(t)-1] + C[t]) / 200
-           = null if any of those 199 weeks is missing, or the candle is partial
+B(t)       = the day (or week) holding t (UTC; weeks start Monday 00:00, Candles' week anchor)
+BC[b]      = close of bucket b: its daily candle, or for a week its last daily candle (Sunday);
+             a bucket without it (or with a partial daily candle) is missing
+MA[t]      = (BC[B(t)-N+1] + … + BC[B(t)-1] + C[t]) / N
+           = null if any of those N-1 buckets is missing, or the candle is partial
 ```
 
-The candle's own close stands in for its week's close: the value is what a weekly chart's
-forming bar showed at that candle's close, so nothing after the candle is used (§13). On weekly
-candles it equals SMA 200 of the weekly closes exactly; the test checks both. It needs about
-3.8 years of daily history before a value appears. The summary's **200-week MA** uses the current
+The candle's own close stands in for its day's (week's) close: the value is what a daily
+(weekly) chart's forming bar showed at that candle's close, so nothing after the candle is used
+(§13). On candles of the same timeframe it equals the ordinary SMA exactly; the tests check
+both. The 200-week line needs about 3.8 years of daily history before a value appears.
+`weeklySma(daily, candles, n)` is `timeframeSma(daily, candles, n, '1w')`. The summary's **200-week MA** uses the current
 price as this week's close, and reports the price's distance from it.
 
-The Dashboard's 200-week line is a separate series (a 1,400-day average of daily closes) and is
-untouched; the two are close but not identical.
+The Dashboard's moving-average chart is separate and untouched. Its 200-week line is a 1,400-day
+average of daily closes, so it is close to this one but not identical.
 
 ## 5. EMA — exponential moving average
 

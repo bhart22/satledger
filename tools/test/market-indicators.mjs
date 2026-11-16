@@ -555,6 +555,32 @@ const CASES = [
   eq(I.weeklySma(null, null, 200), [], 'non-arrays are empty');
   for (const bad of [1, 1001, 2.5, '200', null]) throws(() => I.weeklySma(daily, daily, bad), `period ${bad} throws`);
   const before = JSON.stringify(daily); I.weeklySma(daily, daily, 200); eq(JSON.stringify(daily), before, 'input not mutated');
+  seriesNear(I.timeframeSma(daily, daily, 200, '1w'), onDaily, 'timeframeSma(…, 1w) is weeklySma');
+  throws(() => I.timeframeSma(daily, daily, 50, '1h'), 'unknown timeframe throws');
+}
+
+// ── timeframeSma, daily (the 50-day and 200-day moving averages on any interval) ──
+{
+  const t0 = utc(2022, 3, 1);
+  const daily = deepFreeze(randomCandles(500, 23, t0));
+  // On daily candles it is exactly SMA N of the daily closes.
+  for (const n of [50, 200]) seriesNear(I.timeframeSma(daily, daily, n, '1d'), I.calculateSegmented('sma', daily, { period: n }, '1d').sma, `daily candles: equals SMA ${n}`);
+  // On hourly candles: the 49 days before plus the candle's own close.
+  const hourly = [];
+  for (let d = 0; d < 80; d++) for (let h = 0; h < 24; h += 6) hourly.push({ t: t0 + d * D + h * 3600, c: 1000 + d * 10 + h });
+  const oracle = hourly.map(c => {
+    const day = Math.floor((c.t - t0) / D);
+    return day < 49 ? null : (sum(daily.slice(day - 49, day).map(x => x.c)) + c.c) / 50;
+  });
+  seriesNear(I.timeframeSma(daily, hourly, 50, '1d'), oracle, 'hourly candles: 49 earlier daily closes + the candle\'s close');
+  // Hand-computed, period 2: yesterday closed 100, the candle at 06:00 today closes 120 → 110.
+  eq(I.timeframeSma([{ t: t0, o: 100, h: 100, l: 100, c: 100 }], [{ t: t0 + D + 6 * 3600, c: 120 }], 2, '1d'), [110], '(100 + 120) / 2 = 110');
+  eq(I.timeframeSma([{ t: t0, o: 100, h: 100, l: 100, c: 100, partial: true }], [{ t: t0 + D, c: 120 }], 2, '1d'), [null], 'a partial daily candle does not count');
+  // A missing day breaks the run.
+  const gap = daily.filter(c => c.t !== t0 + 100 * D);
+  const g = I.timeframeSma(gap, daily, 50, '1d');
+  eq(g.slice(101, 150).every(v => v === null), true, 'values whose 49 days include the missing day are null');
+  ok(g[150] !== null && near(g[150], I.timeframeSma(daily, daily, 50, '1d')[150]), 'and resume after 49 unbroken days');
 }
 
 console.log(`market-indicators: ${pass} passed, ${fail} failed`);

@@ -25,7 +25,7 @@ const DEFAULTS = {
     sma: { periods: [], source: 'close' }, ema: { periods: [], source: 'close' },
     bollinger: { on: false, period: 20, multiplier: 2 }, rsi: { on: false, period: 14 },
     macd: { on: false, fast: 12, slow: 26, signal: 9 }, atr: { on: false, period: 14 }, volatility: { on: false, period: 30 },
-    ma200w: { on: false },
+    ma50d: { on: false }, ma200d: { on: false }, ma200w: { on: false },
   },
   personal: { showTx: true, purchases: true, sales: true, rewards: true, transfers: false, wallets: null, avgLine: 'off', balancePane: false },
 };
@@ -56,7 +56,7 @@ const DEFAULTS = {
       sma: { periods: [200, 50], source: 'hl2' }, ema: { periods: [21], source: 'close' },
       bollinger: { on: true, period: 10, multiplier: 2.5 }, rsi: { on: true, period: 9 },
       macd: { on: true, fast: 5, slow: 35, signal: 5 }, atr: { on: false, period: 7 }, volatility: { on: true, period: 90 },
-      ma200w: { on: true },
+      ma50d: { on: false }, ma200d: { on: true }, ma200w: { on: true },
     },
     personal: { showTx: false, purchases: true, sales: false, rewards: true, transfers: true, wallets: ['Ledger', 'Kraken'], avgLine: 'historical', balancePane: true },
   };
@@ -107,7 +107,7 @@ const SPEC = '#market?range=1y&interval=1d&scale=log&sma=50,200&ema=21&rsi=14&ma
       sma: { periods: [50, 200], source: 'close' }, ema: { periods: [21], source: 'close' },
       bollinger: { on: true, period: 20, multiplier: 2 }, rsi: { on: true, period: 14 },
       macd: { on: true, fast: 12, slow: 26, signal: 9 }, atr: { on: true, period: 14 }, volatility: { on: true, period: 30 },
-      ma200w: { on: false },
+      ma50d: { on: false }, ma200d: { on: false }, ma200w: { on: false },
     },
   }, 'the documented example parses to every indicator on');
   eq(format(p, '1d'), SPEC, 'and formats back to exactly the documented string');
@@ -170,7 +170,7 @@ const SPEC = '#market?range=1y&interval=1d&scale=log&sma=50,200&ema=21&rsi=14&ma
   const kept = parse('#market?range=1m&rsi=14', norm({ personal: { wallets: ['Kraken'], avgLine: 'current' } }));
   eq([kept.personal.wallets, kept.personal.avgLine], [['Kraken'], 'current'], 'a hash leaves the stored personal preferences as they are');
   eq(format(DEFAULTS, 'bogus'), format(DEFAULTS), 'an unknown interval argument is ignored');
-  ok(/^#market\?range=[a-z0-9]+&interval=\w+&scale=(linear|log)(&(sma|ema|rsi|macd|bb|atr|hv|ma200w)=[\d.,]+)*&vol=[01]$/.test(format(parse(SPEC))), 'hash grammar');
+  ok(/^#market\?range=[a-z0-9]+&interval=\w+&scale=(linear|log)(&(sma|ema|rsi|macd|bb|atr|hv|ma50d|ma200d|ma200w)=[\d.,]+)*&vol=[01]$/.test(format(parse(SPEC))), 'hash grammar');
   // every setting the URL accepts is one Indicators accepts
   const p = parse('#market?sma=2,1000&bb=2,10&macd=2,3,2');
   eq([p.indicators.sma.periods, p.indicators.bollinger.multiplier, p.indicators.macd.slow], [[2, 1000], 10, 3], 'boundary values accepted');
@@ -190,6 +190,19 @@ const SPEC = '#market?range=1y&interval=1d&scale=log&sma=50,200&ema=21&rsi=14&ma
   eq(parse('#market?rsi=14', stored).indicators.ma200w, { on: false }, 'left out of an indicator group → off');
   eq(parse('#market?range=1m', stored).indicators.ma200w, { on: true }, 'no indicator parameters → stored setting stands');
   for (const v of ['0', '2', 'yes', '']) eq(parse(`#market?ma200w=${v}`, stored), stored, `ma200w=${v} is ignored`);
+}
+// ── ma50d / ma200d: the fixed 50-day and 200-day switches ───────────────────
+{
+  for (const id of ['ma50d', 'ma200d']) {
+    eq(norm({ indicators: { [id]: { on: 'yes' } } }).indicators[id], { on: false }, `${id} wrong type → off`);
+    eq(norm({ indicators: { [id]: { on: true } } }).indicators[id], { on: true }, `${id} on is kept`);
+  }
+  const p = parse('#market?range=1m&ma50d=1&ma200d=1&ma200w=1');
+  eq([p.indicators.ma50d.on, p.indicators.ma200d.on, p.indicators.ma200w.on], [true, true, true], 'all three from the URL');
+  eq(format(p), '#market?range=1m&interval=4h&scale=linear&ma50d=1&ma200d=1&ma200w=1&vol=1', 'formatted in a fixed order');
+  eq(parse(format(p)), p, 'round trip');
+  const q = parse('#market?ma200d=1', norm({ indicators: { ma50d: { on: true }, sma: { periods: [20] } } }));
+  eq([q.indicators.ma50d.on, q.indicators.ma200d.on, q.indicators.sma.periods], [false, true, []], 'one fixed MA in the URL describes the whole indicator group');
 }
 
 console.log(`${pass} passed, ${fail} failed`);
